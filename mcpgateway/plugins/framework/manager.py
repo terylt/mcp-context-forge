@@ -17,8 +17,7 @@ from mcpgateway.plugins.framework.base import PluginRef
 from mcpgateway.plugins.framework.loader.config import ConfigLoader
 from mcpgateway.plugins.framework.loader.plugin import PluginLoader
 from mcpgateway.plugins.framework.models import Config, HookType, PluginCondition, PluginMode
-from mcpgateway.plugins.framework.registry import PluginInstanceRegistry
-from mcpgateway.plugins.framework.types import (
+from mcpgateway.plugins.framework.plugin_types import (
     GlobalContext,
     PluginContext,
     PluginContextTable,
@@ -28,6 +27,7 @@ from mcpgateway.plugins.framework.types import (
     PromptPrehookPayload,
     PromptPrehookResult,
 )
+from mcpgateway.plugins.framework.registry import PluginInstanceRegistry
 from mcpgateway.plugins.framework.utils import post_prompt_matches, pre_prompt_matches
 
 logger = logging.getLogger(__name__)

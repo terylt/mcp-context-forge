@@ -21,7 +21,7 @@ import uuid
 
 # First-Party
 from mcpgateway.plugins.framework.models import HookType, PluginCondition, PluginConfig, PluginMode
-from mcpgateway.plugins.framework.types import (
+from mcpgateway.plugins.framework.plugin_types import (
     PluginContext,
     PromptPosthookPayload,
     PromptPosthookResult,

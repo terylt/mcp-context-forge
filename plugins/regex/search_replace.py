@@ -16,7 +16,7 @@ from pydantic import BaseModel
 # First-Party
 from mcpgateway.plugins.framework.base import Plugin
 from mcpgateway.plugins.framework.models import PluginConfig
-from mcpgateway.plugins.framework.types import PluginContext, PromptPosthookPayload, PromptPosthookResult, PromptPrehookPayload, PromptPrehookResult
+from mcpgateway.plugins.framework.plugin_types import PluginContext, PromptPosthookPayload, PromptPosthookResult, PromptPrehookPayload, PromptPrehookResult
 
 
 class SearchReplace(BaseModel):
