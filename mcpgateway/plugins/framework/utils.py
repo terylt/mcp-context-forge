@@ -16,7 +16,7 @@ from types import ModuleType
 
 # First-Party
 from mcpgateway.plugins.framework.models import PluginCondition
-from mcpgateway.plugins.framework.types import GlobalContext, PromptPosthookPayload, PromptPrehookPayload
+from mcpgateway.plugins.framework.plugin_types import GlobalContext, PromptPosthookPayload, PromptPrehookPayload
 
 
 @cache  # noqa
