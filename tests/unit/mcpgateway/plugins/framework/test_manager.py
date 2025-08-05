@@ -1,3 +1,12 @@
+# -*- coding: utf-8 -*-
+"""
+
+Copyright 2025
+SPDX-License-Identifier: Apache-2.0
+Authors: Teryl Taylor
+
+Unit tests for plugin manager.
+"""
 import pytest
 
 from mcpgateway.models import Message, PromptResult, Role, TextContent
@@ -68,7 +77,7 @@ async def test_manager_multiple_transformer_preprompt_plugin():
     assert srconfig.words[0].search == "crap"
     assert srconfig.words[0].replace == "crud"
     assert manager.plugin_count == 2
-    
+
     prompt = PromptPrehookPayload(name="test_prompt", args = {"user": "It's always happy at the crapshow."})
     global_context = GlobalContext(request_id="1", server_id="2")
     result, contexts = await manager.prompt_pre_fetch(prompt, global_context=global_context)
@@ -96,7 +105,3 @@ async def test_manager_no_plugins():
     result, _ = await manager.prompt_pre_fetch(prompt, global_context=global_context)
     assert result.continue_processing
     assert not result.modified_payload
-
-
-
-

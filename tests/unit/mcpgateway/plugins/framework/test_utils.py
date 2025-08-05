@@ -1,4 +1,12 @@
+# -*- coding: utf-8 -*-
+"""
 
+Copyright 2025
+SPDX-License-Identifier: Apache-2.0
+Authors: Teryl Taylor
+
+Unit tests for utilities.
+"""
 from mcpgateway.plugins.framework.utils import pre_prompt_matches, matches, post_prompt_matches
 from mcpgateway.plugins.framework.models import PluginCondition
 from mcpgateway.plugins.framework.plugin_types import GlobalContext, PromptPosthookPayload, PromptPrehookPayload

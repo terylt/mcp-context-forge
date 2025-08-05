@@ -1,3 +1,12 @@
+# -*- coding: utf-8 -*-
+"""
+
+Copyright 2025
+SPDX-License-Identifier: Apache-2.0
+Authors: Teryl Taylor
+
+Unit tests for config and plugin loaders.
+"""
 
 import pytest
 
@@ -65,12 +74,3 @@ async def test_plugin_loader_invalid_plugin_load():
     loader = PluginLoader()
     with pytest.raises(ModuleNotFoundError):
         plugin = await loader.load_and_instantiate_plugin(config.plugins[0])
-
-
-
-
-
-
-
-
-

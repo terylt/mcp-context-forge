@@ -53,5 +53,3 @@ class DenyListPlugin(Plugin):
                     )
                     return PromptPrehookResult(modified_payload=payload, violation=violation, continue_processing=False)
         return PromptPrehookResult(modified_payload=payload)
-
-

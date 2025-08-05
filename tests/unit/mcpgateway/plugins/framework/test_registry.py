@@ -1,3 +1,12 @@
+# -*- coding: utf-8 -*-
+"""
+
+Copyright 2025
+SPDX-License-Identifier: Apache-2.0
+Authors: Teryl Taylor
+
+Unit tests for plugin registry.
+"""
 import pytest
 
 from mcpgateway.plugins.framework.loader.config import ConfigLoader
@@ -22,6 +31,6 @@ async def test_registry_register():
     assert registry.plugin_count == 0
 
     registry.unregister("SomePluginThatDoesntExist")
-    
+
     all_plugins = registry.get_all_plugins()
     assert len(all_plugins) == 0
