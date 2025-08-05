@@ -75,7 +75,7 @@ from mcpgateway.models import (
     ResourceContent,
     Root,
 )
-from mcpgateway.plugins.framework.manager import PluginManager
+from mcpgateway.plugins import PluginManager, PluginViolationError
 from mcpgateway.schemas import (
     GatewayCreate,
     GatewayRead,
@@ -1719,6 +1719,8 @@ async def get_prompt(
         logger.error(f"Could not retrieve prompt {name}: {ex}")
         if isinstance(ex, ValueError) or isinstance(ex, PromptError):
             return JSONResponse(content={"message": "Prompt execution arguments contains HTML tags that may cause security issues"}, status_code=422)
+        if isinstance(ex, PluginViolationError):
+            return JSONResponse(content={"message": "Prompt execution arguments contains HTML tags that may cause security issues", "details": ex.message}, status_code=422)
 
 
 @prompt_router.get("/{name}")

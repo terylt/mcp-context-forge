@@ -175,6 +175,20 @@ class PluginViolation(BaseModel):
     _plugin_name: PrivateAttr = ""
 
 
+class PluginViolationError(Exception):
+    """A plugin violation error.
+
+    Attributes:
+        violation (PluginViolation): the plugin violation.
+        message (str): the plugin violation reason.
+    """
+
+    def __init__(self, message: str, violation: PluginViolation | None = None):
+        self.message = message
+        self.violation = violation
+        super().__init__(self.message)
+
+
 class PluginSettings(BaseModel):
     """Global plugin settings.
 
