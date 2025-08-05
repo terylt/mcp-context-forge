@@ -216,6 +216,6 @@ class Config(BaseModel):
         plugin_settings: global settings for plugins.
     """
 
-    plugins: list[PluginConfig] = []
+    plugins: Optional[list[PluginConfig]] = []
     plugin_dirs: list[str] = []
     plugin_settings: PluginSettings

@@ -73,3 +73,8 @@ class PluginLoader(object):
         if plugin_type:
             return plugin_type(config)
         return None
+
+    async def shutdown(self) -> None:
+        """Shutdown and cleanup plugin loader."""
+        if self._plugin_types:
+            self._plugin_types.clear()

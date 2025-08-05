@@ -181,7 +181,7 @@ class PluginManager:
         if self._initialized:
             return
 
-        plugins = self._config.plugins if self._config else []
+        plugins = self._config.plugins if self._config and self._config.plugins else []
 
         for plugin_config in plugins:
             if plugin_config.mode != PluginMode.DISABLED:
@@ -195,12 +195,7 @@ class PluginManager:
 
     async def shutdown(self) -> None:
         """Shutdown all plugins."""
-        for plugin_ref in self._registry.get_all_plugins():
-            try:
-                await plugin_ref.plugin.shutdown()
-            except Exception as e:
-                logger.error(f"Error shutting down plugin {plugin_ref.plugin.name}: {e}")
-
+        await self._registry.shutdown()
         self._initialized = False
 
     async def prompt_pre_fetch(

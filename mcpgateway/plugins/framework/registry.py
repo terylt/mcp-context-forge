@@ -114,3 +114,14 @@ class PluginInstanceRegistry:
             The number of plugins registered.
         """
         return len(self._plugins)
+
+    async def shutdown(self) -> None:
+        """Shutdown all plugins."""
+        for plugin_ref in self._plugins.values():
+            try:
+                await plugin_ref.plugin.shutdown()
+            except Exception as e:
+                logger.error(f"Error shutting down plugin {plugin_ref.plugin.name}: {e}")
+        self._plugins.clear()
+        self._hooks.clear()
+        self._priority_cache.clear()
