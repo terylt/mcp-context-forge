@@ -105,3 +105,30 @@ async def test_manager_no_plugins():
     result, _ = await manager.prompt_pre_fetch(prompt, global_context=global_context)
     assert result.continue_processing
     assert not result.modified_payload
+    await manager.shutdown()
+
+@pytest.mark.asyncio
+async def test_manager_filter_plugins():
+    manager = PluginManager("./tests/unit/mcpgateway/plugins/fixtures/configs/valid_single_filter_plugin.yaml")
+    await manager.initialize()
+    assert manager.initialized
+    prompt = PromptPrehookPayload(name="test_prompt", args = {"user": "innovative"})
+    global_context = GlobalContext(request_id="1", server_id="2")
+    result, _ = await manager.prompt_pre_fetch(prompt, global_context=global_context)
+    assert not result.continue_processing
+    assert result.violation
+    await manager.shutdown()
+
+@pytest.mark.asyncio
+async def test_manager_multi_filter_plugins():
+    manager = PluginManager("./tests/unit/mcpgateway/plugins/fixtures/configs/valid_multiple_plugins_filter.yaml")
+    await manager.initialize()
+    assert manager.initialized
+    prompt = PromptPrehookPayload(name="test_prompt", args = {"user": "innovative crapshow."})
+    global_context = GlobalContext(request_id="1", server_id="2")
+    result, _ = await manager.prompt_pre_fetch(prompt, global_context=global_context)
+    assert not result.continue_processing
+    assert result.violation
+    await manager.shutdown()
+
+
