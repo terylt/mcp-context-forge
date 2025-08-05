@@ -14,7 +14,7 @@ from enum import Enum
 from typing import Any, Optional
 
 # Third-Party
-from pydantic import BaseModel
+from pydantic import BaseModel, PrivateAttr
 
 
 class HookType(str, Enum):
@@ -158,19 +158,21 @@ class PluginManifest(BaseModel):
 
 
 class PluginViolation(BaseModel):
-    """A plugin filter violation.
+    """A plugin violation, used to denote policy violations.
 
     Attributes:
-        plugin_name (str): The name of the plugin.
-        description (str): the violation in text.
-        violation_code (str): a violation code.
-        details: (dict[str, Any])
+        reason (str): the reason for the violation.
+        description (str): a longer description of the violation.
+        code (str): a violation code.
+        details: (dict[str, Any]): additional violation details.
+        _plugin_name (str): the plugin name, private attribute set by the plugin manager.
     """
 
-    plugin_name: str
+    reason: str
     description: str
-    violation_code: str
+    code: str
     details: dict[str, Any]
+    _plugin_name: PrivateAttr = ""
 
 
 class PluginSettings(BaseModel):

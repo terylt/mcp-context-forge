@@ -105,9 +105,11 @@ class Plugin:
         Raises:
             NotImplementedError: needs to be implemented by sub class.
         """
-        raise NotImplementedError(f"""'prompt_pre_fetch' not implemented for plugin {self._config.name}
+        raise NotImplementedError(
+            f"""'prompt_pre_fetch' not implemented for plugin {self._config.name}
                                     of plugin type {type(self)}
-                                   """)
+                                   """
+        )
 
     async def prompt_post_fetch(self, payload: PromptPosthookPayload, context: PluginContext) -> PromptPosthookResult:
         """Plugin hook run after a prompt is rendered.
@@ -119,9 +121,11 @@ class Plugin:
         Raises:
             NotImplementedError: needs to be implemented by sub class.
         """
-        raise NotImplementedError(f"""'prompt_post_fetch' not implemented for plugin {self._config.name}
+        raise NotImplementedError(
+            f"""'prompt_post_fetch' not implemented for plugin {self._config.name}
                                     of plugin type {type(self)}
-                                   """)
+                                   """
+        )
 
     async def shutdown(self) -> None:
         """Plugin cleanup code."""

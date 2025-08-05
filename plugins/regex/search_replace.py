@@ -29,7 +29,7 @@ class SearchReplaceConfig(BaseModel):
 
 
 class SearchReplacePlugin(Plugin):
-    """Example search replace plugin"""
+    """Example search replace plugin."""
     def __init__(self, config: PluginConfig):
         super().__init__(config)
         self._srconfig = SearchReplaceConfig.model_validate(self._config.config)

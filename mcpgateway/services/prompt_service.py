@@ -405,10 +405,11 @@ class PromptService:
                 if not pre_result.continue_processing:
                     # Plugin blocked the request
                     if pre_result.violation:
+                        plugin_name = pre_result.violation._plugin_name
+                        violation_reason = pre_result.violation.reason
                         violation_desc = pre_result.violation.description
-                        plugin_name = pre_result.violation.plugin_name
-                        violation_code = pre_result.violation.violation_code
-                        raise PromptError(f"Pre prompting fetch blocked by plugin {plugin_name}: {violation_code} {violation_desc}")
+                        violation_code = pre_result.violation.code
+                        raise PromptError(f"Pre prompting fetch blocked by plugin {plugin_name}: {violation_code} - {violation_reason} ({violation_desc})")
                     raise PromptError("Pre prompting fetch blocked by plugin")
 
                 # Use modified payload if provided
@@ -416,6 +417,8 @@ class PromptService:
                     payload = pre_result.modified_payload
                     name = payload.name
                     arguments = payload.args
+            except PromptError:
+                raise
             except Exception as e:
                 logger.error(f"Error in pre-prompt fetch plugin hook: {e}")
                 # Only fail if configured to do so
@@ -457,13 +460,16 @@ class PromptService:
                 if not post_result.continue_processing:
                     # Plugin blocked the request
                     if post_result.violation:
+                        plugin_name = post_result.violation._plugin_name
+                        violation_reason = post_result.violation.reason
                         violation_desc = post_result.violation.description
-                        plugin_name = post_result.violation.plugin_name
-                        violation_code = post_result.violation.violation_code
-                        raise PromptError(f"Post prompting fetch blocked by plugin {plugin_name}: {violation_code} {violation_desc}")
+                        violation_code = post_result.violation.code
+                        raise PromptError(f"Post prompting fetch blocked by plugin {plugin_name}: {violation_code} - {violation_reason} ({violation_desc})")
                     raise PromptError("Post prompting fetch blocked by plugin")
                 # Use modified payload if provided
                 return post_result.modified_payload.result if post_result.modified_payload else result
+            except PromptError:
+                raise
             except Exception as e:
                 logger.error(f"Error in post-prompt fetch plugin hook: {e}")
                 # Only fail if configured to do so

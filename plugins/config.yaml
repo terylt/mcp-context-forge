@@ -22,7 +22,25 @@ plugins:
           replace: crud
         - search: crud
           replace: yikes
-
+  - name: "DenyListPlugin"
+    kind: "plugins.filter.deny.DenyListPlugin"
+    description: "A plugin that implements a deny list filter."
+    version: "0.1"
+    author: "MCP Context Forge Team"
+    hooks: ["prompt_pre_fetch"]
+    tags: ["plugin", "filter", "denylist", "pre-post"]
+    mode: "enforce"  # enforce | permissive | disabled
+    priority: 100
+    conditions:
+      # Apply to specific tools/servers
+      - prompts: ["test_prompt"]
+        server_ids: []  # Apply to all servers
+        tenant_ids: []  # Apply to all tenants
+    config:
+      words:
+        - innovative
+        - groundbreaking
+        - revolutionary
 
 # Plugin directories to scan
 plugin_dirs:
