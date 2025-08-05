@@ -172,21 +172,30 @@ class PluginViolation(BaseModel):
     description: str
     code: str
     details: dict[str, Any]
-    _plugin_name: PrivateAttr = ""
+    _plugin_name: str = PrivateAttr(default="")
 
+    @property
+    def plugin_name(self) -> str:
+        """Getter for the plugin name attribute.
 
-class PluginViolationError(Exception):
-    """A plugin violation error.
+        Returns:
+            The plugin name associated with the violation.
+        """
+        return self._plugin_name
 
-    Attributes:
-        violation (PluginViolation): the plugin violation.
-        message (str): the plugin violation reason.
-    """
+    @plugin_name.setter
+    def plugin_name(self, name: str) -> None:
+        """Setter for the plugin_name attribute.
 
-    def __init__(self, message: str, violation: PluginViolation | None = None):
-        self.message = message
-        self.violation = violation
-        super().__init__(self.message)
+        Args:
+            name: the plugin name.
+
+        Raises:
+            ValueError: if name is empty or not a string.
+        """
+        if not isinstance(name, str) or not name.strip():
+            raise ValueError("Name must be a non-empty string.")
+        self._plugin_name = name
 
 
 class PluginSettings(BaseModel):

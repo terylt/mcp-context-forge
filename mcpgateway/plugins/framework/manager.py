@@ -84,7 +84,7 @@ class PluginExecutor(Generic[T]):
                 current_payload = result.modified_payload
 
             if result.violation:
-                result.violation._plugin_name = pluginref.plugin.name
+                result.violation.plugin_name = pluginref.plugin.name
 
             if not result.continue_processing:
                 # Check execution mode

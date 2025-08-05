@@ -378,6 +378,7 @@ class PromptService:
             Prompt result with rendered messages
 
         Raises:
+            PluginViolationError: If prompt violates a plugin policy
             PromptNotFoundError: If prompt not found
             PromptError: For other prompt errors
 
@@ -404,7 +405,7 @@ class PromptService:
                 if not pre_result.continue_processing:
                     # Plugin blocked the request
                     if pre_result.violation:
-                        plugin_name = pre_result.violation._plugin_name
+                        plugin_name = pre_result.violation.plugin_name
                         violation_reason = pre_result.violation.reason
                         violation_desc = pre_result.violation.description
                         violation_code = pre_result.violation.code
@@ -459,7 +460,7 @@ class PromptService:
                 if not post_result.continue_processing:
                     # Plugin blocked the request
                     if post_result.violation:
-                        plugin_name = post_result.violation._plugin_name
+                        plugin_name = post_result.violation.plugin_name
                         violation_reason = post_result.violation.reason
                         violation_desc = post_result.violation.description
                         violation_code = post_result.violation.code

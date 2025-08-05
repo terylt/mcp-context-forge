@@ -134,3 +134,23 @@ class PluginContext(GlobalContext):
 
 
 PluginContextTable = dict[str, PluginContext]
+
+
+class PluginViolationError(Exception):
+    """A plugin violation error.
+
+    Attributes:
+        violation (PluginViolation): the plugin violation.
+        message (str): the plugin violation reason.
+    """
+
+    def __init__(self, message: str, violation: PluginViolation | None = None):
+        """Initialize a plugin violation error.
+
+        Args:
+            message: the reason for the violation error.
+            violation: the plugin violation object details.
+        """
+        self.message = message
+        self.violation = violation
+        super().__init__(self.message)
