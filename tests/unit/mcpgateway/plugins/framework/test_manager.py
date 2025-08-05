@@ -130,5 +130,3 @@ async def test_manager_multi_filter_plugins():
     assert not result.continue_processing
     assert result.violation
     await manager.shutdown()
-
-
