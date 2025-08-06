@@ -48,7 +48,7 @@ PLUGIN_CONFIG_FILE=plugins/config.yaml
 
 The plugin configuration file is used to configure a set of plugins to run a
 set of hook points throughout the MCP Context Forge.  An example configuration
-is below.  It contains two main sections: `plugins` and `plugin_settings`. 
+is below.  It contains two main sections: `plugins` and `plugin_settings`.
 
 Create or modify `plugins/config.yaml`:
 
@@ -98,7 +98,7 @@ are defined as follows:
 | **tags** | Descriptive keywords that make the configuration searchable. | ["security", "filter"] |
 | **mode** | Mode of operation of the plugin. - enforce (stops during a violation), permissive (audits a violation but doesn't stop), disabled (disabled) | permissive |
 | **priority** | The priority in which the plugin will run - 0 is higher priority | 100 |
-| **conditions** | A list of conditions under which a plugin is run. See section on conditions.|  | 
+| **conditions** | A list of conditions under which a plugin is run. See section on conditions.|  |
 | **config** | Plugin specific configuration.  This is a dictionary and is passed to the plugin on initialization. |   |
 
 The `plugin_settings` are as follows:

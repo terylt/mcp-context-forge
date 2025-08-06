@@ -355,7 +355,7 @@ class TestPIIFilterPlugin:
 
     @pytest.mark.asyncio
     async def test_no_pii_detection(self, plugin_config):
-        """Test that clean text passes through unchanged."""
+        """Test that clean text passes through unmodified."""
         plugin = PIIFilterPlugin(plugin_config)
         context = PluginContext(GlobalContext(request_id="test-4"))
 
