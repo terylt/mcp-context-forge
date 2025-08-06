@@ -58,6 +58,7 @@ recursive-include alembic *.py
 # recursive-include mcp-servers *
 recursive-include plugins *.py
 recursive-include plugins *.yaml
+recursive-include plugins *.md
 
 # 5️⃣  (Optional) include MKDocs-based docs in the sdist
 # graft docs
