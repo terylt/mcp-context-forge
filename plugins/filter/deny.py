@@ -8,7 +8,7 @@ Authors: Fred Araujo
 This module loads configurations for plugins.
 """
 # Standard
-import re
+import logging
 
 # Third-Party
 from pydantic import BaseModel
@@ -17,6 +17,8 @@ from pydantic import BaseModel
 from mcpgateway.plugins.framework.base import Plugin
 from mcpgateway.plugins.framework.models import PluginConfig, PluginViolation
 from mcpgateway.plugins.framework.plugin_types import PluginContext, PromptPrehookPayload, PromptPrehookResult
+
+logger = logging.getLogger(__name__)
 
 
 class DenyListConfig(BaseModel):
@@ -51,5 +53,11 @@ class DenyListPlugin(Plugin):
                         code="deny",
                         details={},
                     )
+                    logger.warning(f"Deny word detected in prompt argument '{key}'")
                     return PromptPrehookResult(modified_payload=payload, violation=violation, continue_processing=False)
         return PromptPrehookResult(modified_payload=payload)
+
+
+    async def shutdown(self) -> None:
+        """Cleanup when plugin shuts down."""
+        logger.info(f"Deny list plugin shutting down")
