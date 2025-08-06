@@ -15,7 +15,7 @@ from mcpgateway.plugins.framework.loader.config import ConfigLoader
 from mcpgateway.plugins.framework.loader.plugin import PluginLoader
 from mcpgateway.plugins.framework.models import PluginMode
 from mcpgateway.plugins.framework.plugin_types import GlobalContext, PluginContext, PromptPosthookPayload, PromptPrehookPayload
-from plugins.regex.search_replace import SearchReplaceConfig, SearchReplacePlugin
+from plugins.regex_filter.search_replace import SearchReplaceConfig, SearchReplacePlugin
 
 
 def test_config_loader_load():
@@ -24,7 +24,7 @@ def test_config_loader_load():
     assert config
     assert len(config.plugins) == 1
     assert config.plugins[0].name == "ReplaceBadWordsPlugin"
-    assert config.plugins[0].kind == "plugins.regex.search_replace.SearchReplacePlugin"
+    assert config.plugins[0].kind == "plugins.regex_filter.search_replace.SearchReplacePlugin"
     assert config.plugins[0].description == "A plugin for finding and replacing words."
     assert config.plugins[0].version == "0.1"
     assert config.plugins[0].author == "MCP Context Forge Team"

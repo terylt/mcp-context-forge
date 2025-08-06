@@ -1,6 +1,7 @@
 # Denylist Filter Plugin for MCP Gateway
 
 > Author: Fred Araujo
+> Version: 0.1.0
 
 A plugin for detecting deny words in MCP Gateway prompts.
 
@@ -17,7 +18,7 @@ Detects any deny word in the prompt. If a match is found, rejects the prompt req
 ```yaml
 plugins:
   - name: "DenyListPlugin"
-    kind: "plugins.filter.deny.DenyListPlugin"
+    kind: "plugins.deny_filter.deny.DenyListPlugin"
     description: "A plugin that implements a deny list filter."
     version: "0.1"
     author: "MCP Context Forge Team"

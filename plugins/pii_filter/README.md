@@ -1,6 +1,7 @@
 # PII Filter Plugin for MCP Gateway
 
 > Author: Mihai Criveti
+> Version: 0.1.0
 
 A plugin for detecting and masking Personally Identifiable Information (PII) in MCP Gateway prompts and responses.
 

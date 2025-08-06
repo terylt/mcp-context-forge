@@ -1,7 +1,7 @@
 plugins:
   # Self-contained Search Replace Plugin
   - name: "ReplaceBadWordsPlugin"
-    kind: "plugins.regex.search_replace.SearchReplacePlugin"
+    kind: "plugins.regex_filter.search_replace.SearchReplacePlugin"
     description: "A plugin for finding and replacing words."
     version: "0.1"
     author: "MCP Context Forge Team"
