@@ -414,7 +414,7 @@ class ResourceService:
         # Call pre-fetch hooks if plugin manager is available
         if self._plugin_manager and PLUGINS_AVAILABLE:
             # Initialize plugin manager if needed
-            if not self._plugin_manager.initialized:
+            if not self._plugin_manager._initialized:
                 await self._plugin_manager.initialize()
 
             # Create plugin context
