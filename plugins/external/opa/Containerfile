@@ -29,6 +29,11 @@ RUN mkdir -p ${APP_HOME} && \
 
 USER 1001
 
+# Install opa in container
+RUN curl -L -o /usr/local/bin/opa https://openpolicyagent.org/downloads/v0.63.0/opa_linux_amd64_static
+RUN chmod +x /usr/local/bin/opa
+RUN opa version
+
 # Install plugin package
 COPY . .
 RUN pip install --no-cache-dir uv && python -m uv pip install .

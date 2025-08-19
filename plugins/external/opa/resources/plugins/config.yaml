@@ -14,6 +14,8 @@ plugins:
         tenant_ids: []  # Apply to all tenants
     config:
       # Plugin config dict passed to the plugin constructor
+      policy: "all path requests must have IBM"
+      server_url: http://127.0.0.1:8181/v1/data/httpapi/authz
 
 # Plugin directories to scan
 plugin_dirs:

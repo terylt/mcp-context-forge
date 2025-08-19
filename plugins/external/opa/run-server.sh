@@ -31,6 +31,14 @@ else
 fi
 
 #────────────────────────────────────────────────────────────────────────────────
+# SECTION 1.1: Run OPA server
+# Run OPA server with a policy rego file
+#────────────────────────────────────────────────────────────────────────────────
+
+echo "Running OPA server"
+opa run --server opaserver/rego/example.rego &
+
+#────────────────────────────────────────────────────────────────────────────────
 # SECTION 2: Run the API server
 # Run the API server from configuration
 #────────────────────────────────────────────────────────────────────────────────
