@@ -7,7 +7,7 @@ plugins:
       proto: STREAMABLEHTTP
       url: http://127.0.0.1:3000/mcp
   
-  - name: "opa_policy_filter"
+  - name: "OPAPluginFilter"
     kind: "external"
     priority: 10 # adjust the priority
     mcp:

@@ -15,7 +15,8 @@ plugins:
     config:
       # Plugin config dict passed to the plugin constructor
       policy: "all path requests must have IBM"
-      server_url: http://127.0.0.1:8181/v1/data/httpapi/authz
+      server_url: "http://127.0.0.1:8181/v1/data/example"
+      
 
 # Plugin directories to scan
 plugin_dirs:
