@@ -12,6 +12,7 @@ from typing import Any
 
 # Third-Party
 import requests
+from pydantic import BaseModel
 
 # First-Party
 from mcpgateway.plugins.framework import (
@@ -69,6 +70,31 @@ class OPAPluginFilter(Plugin):
         else:
             logger.debug(f"OPA error: {rsp}")
 
+    def _pre_process_input(self, tool_tag : str ="sre", context: dict = {}) -> dict:
+        class BaseInputSRE(BaseModel):
+            command : str = ""
+            resource_type : str = ""
+            name : str = ""
+            exec_command : str = ""
+            full_command : str = ""
+            timeout : str = ""
+            ops: str = ""
+            replicas : int = 0
+            cpu : int = 0
+            memory : int = 0
+            legal : bool = False
+            image : str = ""
+        
+        class InputSRE(BaseInputSRE):
+            original_command : str = ""
+            input: list = []
+
+
+        result = []
+        for command in context:
+            result.append(BaseInputSRE(**command).model_dump())
+        return InputSRE(original_command=context.get("original_command",""),input=result).model_dump()
+
     async def prompt_pre_fetch(self, payload: PromptPrehookPayload, context: PluginContext) -> PromptPrehookResult:
         """The plugin hook run before a prompt is retrieved and rendered.
 
@@ -92,6 +118,7 @@ class OPAPluginFilter(Plugin):
             The result of the plugin's analysis, including whether the prompt can proceed.
         """
         return PromptPosthookResult(continue_processing=True)
+    
 
     async def tool_pre_invoke(self, payload: ToolPreInvokePayload, context: PluginContext) -> ToolPreInvokeResult:
         """OPA Plugin hook run before a tool is invoked. This hook takes in payload and context and further evaluates rego
@@ -109,8 +136,14 @@ class OPAPluginFilter(Plugin):
         
         if not payload.args:
             return ToolPreInvokeResult()
-
-        opa_input = BaseOPAInputKeys(kind="tools/call", user = "none", tool = {"name" : payload.name, "args" : payload.args}, request_ip = "none", headers = {}, response = {})
+        tool_tag = "sre"
+        if tool_tag == "sre":
+            #TODO: convert context to dict and pass to pre_process_input
+            context_config = {}
+            payload_args = self._pre_process_input(tool_tag="sre",context=context_config)
+            opa_input = BaseOPAInputKeys(kind="tools/call", user = "none", tool = {"name" : payload.name, "args" : payload_args}, request_ip = "none", headers = {}, response = {})
+        else:
+            opa_input = BaseOPAInputKeys(kind="tools/call", user = "none", tool = {"name" : payload.name, "args" : payload.args}, request_ip = "none", headers = {}, response = {})
         opa_server_url = self.opa_config.server_url
         policy_url = opa_server_url + "/allow_pre_tool"
         decision, decision_context = self._evaluate_opa_policy(policy_url,input_dict=OPAInput(input=opa_input))

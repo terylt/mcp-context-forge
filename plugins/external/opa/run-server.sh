@@ -36,7 +36,7 @@ fi
 #────────────────────────────────────────────────────────────────────────────────
 
 echo "Running OPA server"
-opa run --server opaserver/rego/example.rego &
+opa run --server opaserver/rego/sre-protection.rego &
 
 #────────────────────────────────────────────────────────────────────────────────
 # SECTION 2: Run the API server
