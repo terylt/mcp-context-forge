@@ -85,15 +85,15 @@ class OPAPluginFilter(Plugin):
             legal : bool = False
             image : str = ""
         
-        class InputSRE(BaseInputSRE):
+        class InputSRE(BaseModel):
             original_command : str = ""
-            input: list = []
+            commands: list[BaseInputSRE] = None
 
-
+        
         result = []
-        for command in context:
+        for command in context.get("commands",[]):
             result.append(BaseInputSRE(**command).model_dump())
-        return InputSRE(original_command=context.get("original_command",""),input=result).model_dump()
+        return InputSRE(original_command=context.get("original command",""),commands=result).model_dump()
 
     async def prompt_pre_fetch(self, payload: PromptPrehookPayload, context: PluginContext) -> PromptPrehookResult:
         """The plugin hook run before a prompt is retrieved and rendered.
@@ -139,7 +139,7 @@ class OPAPluginFilter(Plugin):
         tool_tag = "sre"
         if tool_tag == "sre":
             #TODO: convert context to dict and pass to pre_process_input
-            context_config = {}
+            context_config = payload.args
             payload_args = self._pre_process_input(tool_tag="sre",context=context_config)
             opa_input = BaseOPAInputKeys(kind="tools/call", user = "none", tool = {"name" : payload.name, "args" : payload_args}, request_ip = "none", headers = {}, response = {})
         else:
