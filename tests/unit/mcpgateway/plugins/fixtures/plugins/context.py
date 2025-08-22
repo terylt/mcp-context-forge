@@ -1,7 +1,4 @@
-<<<<<<< HEAD
 # -*- coding: utf-8 -*-
-=======
->>>>>>> a810e799 (rebase: rebased with main, fixing merge conflicts)
 
 """
 Context plugin.
@@ -55,11 +52,6 @@ class ContextPlugin(Plugin):
         if "key1" not in context.state or context.state["key1"] != "value1":
             raise ValueError("key1 not in context!! It should be!!")
         return PromptPosthookResult(continue_processing=True)
-<<<<<<< HEAD
-
-=======
-        
->>>>>>> a810e799 (rebase: rebased with main, fixing merge conflicts)
 
     async def tool_pre_invoke(self, payload: ToolPreInvokePayload, context: PluginContext) -> ToolPreInvokeResult:
         """Plugin hook run before a tool is invoked.
@@ -117,10 +109,14 @@ class ContextPlugin(Plugin):
         """
         return ResourcePreFetchResult(continue_processing=True)
 <<<<<<< HEAD
+<<<<<<< HEAD
 
 =======
     
 >>>>>>> a810e799 (rebase: rebased with main, fixing merge conflicts)
+=======
+
+>>>>>>> 322ac576 (fix(lint): fixed linting issues)
 class ContextPlugin2(Plugin):
     """A simple Context plugin."""
 
@@ -150,11 +146,6 @@ class ContextPlugin2(Plugin):
         if "key1" not in context.state or context.state["key1"] != "value1":
             raise ValueError("key1 not in context!! It should be!!")
         return PromptPosthookResult(continue_processing=True)
-<<<<<<< HEAD
-
-=======
-        
->>>>>>> a810e799 (rebase: rebased with main, fixing merge conflicts)
 
     async def tool_pre_invoke(self, payload: ToolPreInvokePayload, context: PluginContext) -> ToolPreInvokeResult:
         """Plugin hook run before a tool is invoked.
@@ -214,8 +205,4 @@ class ContextPlugin2(Plugin):
         Returns:
             The result of the plugin's analysis, including whether the resource result should proceed.
         """
-<<<<<<< HEAD
         return ResourcePreFetchResult(continue_processing=True)
-=======
-        return ResourcePreFetchResult(continue_processing=True)
->>>>>>> a810e799 (rebase: rebased with main, fixing merge conflicts)

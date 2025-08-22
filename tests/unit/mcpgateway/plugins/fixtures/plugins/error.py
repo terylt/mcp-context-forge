@@ -1,7 +1,4 @@
-<<<<<<< HEAD
 # -*- coding: utf-8 -*-
-=======
->>>>>>> a810e799 (rebase: rebased with main, fixing merge conflicts)
 
 """
 Error plugin.
@@ -99,8 +96,4 @@ class ErrorPlugin(Plugin):
         Returns:
             The result of the plugin's analysis, including whether the resource result should proceed.
         """
-<<<<<<< HEAD
         return ResourcePreFetchResult(continue_processing=True)
-=======
-        return ResourcePreFetchResult(continue_processing=True)
->>>>>>> a810e799 (rebase: rebased with main, fixing merge conflicts)
