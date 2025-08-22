@@ -25,7 +25,7 @@ from pydantic import BaseModel
 # First-Party
 from mcpgateway.plugins.framework.base import Plugin
 from mcpgateway.plugins.framework.constants import CONTEXT, ERROR, GET_PLUGIN_CONFIG, IGNORE_CONFIG_EXTERNAL, NAME, PAYLOAD, PLUGIN_NAME, PYTHON, PYTHON_SUFFIX, RESULT
-from mcpgateway.plugins.framework.errors import PluginError
+from mcpgateway.plugins.framework.errors import convert_exception_to_error, PluginError
 from mcpgateway.plugins.framework.models import (
     HookType,
     PluginConfig,
@@ -72,28 +72,35 @@ class ExternalPlugin(Plugin):
         """Initialize the plugin's connection to the MCP server.
 
         Raises:
-            ValueError: if unable to retrieve plugin configuration of external plugin.
+            PluginError: if unable to retrieve plugin configuration of external plugin.
         """
 
         if not self._config.mcp:
-            raise ValueError(f"The mcp section must be defined for external plugin {self.name}")
+            raise PluginError(error=PluginErrorModel(message="The mcp section must be defined for external plugin", plugin_name=self.name))
         if self._config.mcp.proto == TransportType.STDIO:
             await self.__connect_to_stdio_server(self._config.mcp.script)
         elif self._config.mcp.proto == TransportType.STREAMABLEHTTP:
             await self.__connect_to_http_server(self._config.mcp.url)
 
-        config = await self.__get_plugin_config()
+        try:
+            config = await self.__get_plugin_config()
 
-        if not config:
-            raise ValueError(f"Unable to retrieve configuration for external plugin {self.name}")
+            if not config:
+                raise PluginError(error=PluginErrorModel(message="Unable to retrieve configuration for external plugin", plugin_name=self.name))
 
-        current_config = self._config.model_dump(exclude_unset=True)
-        remote_config = config.model_dump(exclude_unset=True)
-        remote_config.update(current_config)
+            current_config = self._config.model_dump(exclude_unset=True)
+            remote_config = config.model_dump(exclude_unset=True)
+            remote_config.update(current_config)
 
-        context = {IGNORE_CONFIG_EXTERNAL: True}
+            context = {IGNORE_CONFIG_EXTERNAL: True}
 
-        self._config = PluginConfig.model_validate(remote_config, context=context)
+            self._config = PluginConfig.model_validate(remote_config, context=context)
+        except PluginError as pe:
+            logger.exception(pe)
+            raise
+        except Exception as e:
+            logger.exception(e)
+            raise PluginError(error=convert_exception_to_error(e, plugin_name=self.name))
 
     async def __connect_to_stdio_server(self, server_script_path: str) -> None:
         """Connect to an MCP plugin server via stdio.
@@ -102,44 +109,55 @@ class ExternalPlugin(Plugin):
             server_script_path: Path to the server script (.py).
 
         Raises:
-            ValueError: if stdio script is not a python script.
+            PluginError: if stdio script is not a python script or if there is a connection error.
         """
         is_python = server_script_path.endswith(PYTHON_SUFFIX) if server_script_path else False
         if not is_python:
-            raise ValueError("Server script must be a .py file")
+            raise PluginError(error=PluginErrorModel(message="Server script must be a .py file", plugin_name=self.name))
 
         current_env = os.environ.copy()
 
-        server_params = StdioServerParameters(command=PYTHON, args=[server_script_path], env=current_env)
+        try:
+            server_params = StdioServerParameters(command=PYTHON, args=[server_script_path], env=current_env)
 
-        stdio_transport = await self._exit_stack.enter_async_context(stdio_client(server_params))
-        self._stdio, self._write = stdio_transport
-        self._session = await self._exit_stack.enter_async_context(ClientSession(self._stdio, self._write))
+            stdio_transport = await self._exit_stack.enter_async_context(stdio_client(server_params))
+            self._stdio, self._write = stdio_transport
+            self._session = await self._exit_stack.enter_async_context(ClientSession(self._stdio, self._write))
 
-        await self._session.initialize()
+            await self._session.initialize()
 
-        # List available tools
-        response = await self._session.list_tools()
-        tools = response.tools
-        logger.info("\nConnected to plugin MCP server (stdio) with tools: %s", " ".join([tool.name for tool in tools]))
+            # List available tools
+            response = await self._session.list_tools()
+            tools = response.tools
+            logger.info("\nConnected to plugin MCP server (stdio) with tools: %s", " ".join([tool.name for tool in tools]))
+        except Exception as e:
+            logger.exception(e)
+            raise PluginError(error=convert_exception_to_error(e, plugin_name=self.name))
 
-    async def __connect_to_http_server(self, uri: str):
+    async def __connect_to_http_server(self, uri: str) -> None:
         """Connect to an MCP plugin server via streamable http.
 
         Args:
             uri: the URI of the mcp plugin server.
+
+        Raises:
+            PluginError: if there is an external connection error.
         """
 
-        http_transport = await self._exit_stack.enter_async_context(streamablehttp_client(uri))
-        self._http, self._write, _ = http_transport
-        self._session = await self._exit_stack.enter_async_context(ClientSession(self._http, self._write))
+        try:
+            http_transport = await self._exit_stack.enter_async_context(streamablehttp_client(uri))
+            self._http, self._write, _ = http_transport
+            self._session = await self._exit_stack.enter_async_context(ClientSession(self._http, self._write))
 
-        await self._session.initialize()
+            await self._session.initialize()
 
-        # List available tools
-        response = await self._session.list_tools()
-        tools = response.tools
-        logger.info("\nConnected to plugin MCP (http) server with tools: %s", " ".join([tool.name for tool in tools]))
+            # List available tools
+            response = await self._session.list_tools()
+            tools = response.tools
+            logger.info("\nConnected to plugin MCP (http) server with tools: %s", " ".join([tool.name for tool in tools]))
+        except Exception as e:
+            logger.exception(e)
+            raise PluginError(error=convert_exception_to_error(e, plugin_name=self.name))
 
     async def __invoke_hook(self, payload_result_model: Type[P], hook_type: HookType, payload: BaseModel, context: PluginContext) -> P:
         """Invoke an external plugin hook using the MCP protocol.
@@ -150,12 +168,15 @@ class ExternalPlugin(Plugin):
             payload: The payload to be passed to the hook.
             context: The plugin context passed to the run.
 
+        Raises:
+            PluginError: error passed from external plugin server.
+
         Returns:
             The resulting payload from the plugin.
         """
 
-        result = await self._session.call_tool(hook_type, {PLUGIN_NAME: self.name, PAYLOAD: payload, CONTEXT: context})
         try:
+            result = await self._session.call_tool(hook_type, {PLUGIN_NAME: self.name, PAYLOAD: payload, CONTEXT: context})
             for content in result.content:
                 res = json.loads(content.text)
                 if CONTEXT in res:
@@ -168,9 +189,12 @@ class ExternalPlugin(Plugin):
                 if ERROR in res:
                     error = PluginErrorModel.model_validate(res[ERROR])
                     raise PluginError(error)
-        except Exception as ex:
-            logger.exception(ex)
+        except PluginError as pe:
+            logger.exception(pe)
             raise
+        except Exception as e:
+            logger.exception(e)
+            raise PluginError(error=convert_exception_to_error(e, plugin_name=self.name))
         raise PluginError(error=PluginErrorModel(message=f"Received invalid response. Result = {result}", plugin_name=self.name))
 
     async def prompt_pre_fetch(self, payload: PromptPrehookPayload, context: PluginContext) -> PromptPrehookResult:
@@ -253,13 +277,21 @@ class ExternalPlugin(Plugin):
     async def __get_plugin_config(self) -> PluginConfig | None:
         """Retrieve plugin configuration for the current plugin on the remote MCP server.
 
+        Raises:
+            PluginError: if there is a connection issue or validation issue.
+
         Returns:
             A plugin configuration for the current plugin from a remote MCP server.
         """
-        configs = await self._session.call_tool(GET_PLUGIN_CONFIG, {NAME: self.name})
-        for content in configs.content:
-            conf = json.loads(content.text)
-            return PluginConfig.model_validate(conf)
+        try:
+            configs = await self._session.call_tool(GET_PLUGIN_CONFIG, {NAME: self.name})
+            for content in configs.content:
+                conf = json.loads(content.text)
+                return PluginConfig.model_validate(conf)
+        except Exception as e:
+            logger.exception(e)
+            raise PluginError(error=convert_exception_to_error(e, plugin_name=self.name))
+
         return None
 
     async def shutdown(self) -> None:

@@ -420,12 +420,12 @@ class TestResourceHookIntegration:
 
                 payload = ResourcePreFetchPayload(uri="test://resource", metadata={})
                 global_context = GlobalContext(request_id="test-123")
-                # Should handle error gracefully when fail_on_plugin_error = False 
+                # Should handle error gracefully when fail_on_plugin_error = False
                 result, contexts = await manager.resource_pre_fetch(payload, global_context)
                 assert result.continue_processing is True  # Continues despite error
 
                 mock_config.plugin_settings.fail_on_plugin_error = True
-                # Should throw a plugin error since fail_on_plugin_error = True 
+                # Should throw a plugin error since fail_on_plugin_error = True
                 with pytest.raises(PluginError):
                     result, contexts = await manager.resource_pre_fetch(payload, global_context)
 
