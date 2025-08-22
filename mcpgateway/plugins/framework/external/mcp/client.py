@@ -25,7 +25,7 @@ from pydantic import BaseModel
 # First-Party
 from mcpgateway.plugins.framework.base import Plugin
 from mcpgateway.plugins.framework.constants import CONTEXT, ERROR, GET_PLUGIN_CONFIG, IGNORE_CONFIG_EXTERNAL, NAME, PAYLOAD, PLUGIN_NAME, PYTHON, PYTHON_SUFFIX, RESULT
-from mcpgateway.plugins.framework.errors import PluginError
+from mcpgateway.plugins.framework.errors import convert_exception_to_error, PluginError
 from mcpgateway.plugins.framework.models import (
     HookType,
     PluginConfig,
@@ -135,54 +135,29 @@ class ExternalPlugin(Plugin):
             raise PluginError(error=convert_exception_to_error(e, plugin_name=self.name))
 
     async def __connect_to_http_server(self, uri: str) -> None:
-        """Connect to an MCP plugin server via streamable http with retry logic.
+        """Connect to an MCP plugin server via streamable http.
 
         Args:
             uri: the URI of the mcp plugin server.
 
         Raises:
-            PluginError: if there is an external connection error after all retries.
+            PluginError: if there is an external connection error.
         """
-        max_retries = 3
-        base_delay = 1.0
 
-        for attempt in range(max_retries):
-            logger.info(f"Connecting to external plugin server: {uri} (attempt {attempt + 1}/{max_retries})")
+        try:
+            http_transport = await self._exit_stack.enter_async_context(streamablehttp_client(uri))
+            self._http, self._write, _ = http_transport
+            self._session = await self._exit_stack.enter_async_context(ClientSession(self._http, self._write))
 
-            try:
-                # Create a fresh exit stack for each attempt
-                async with AsyncExitStack() as temp_stack:
-                    http_transport = await temp_stack.enter_async_context(streamablehttp_client(uri))
-                    http_client, write_func, _ = http_transport
-                    session = await temp_stack.enter_async_context(ClientSession(http_client, write_func))
+            await self._session.initialize()
 
-                    await session.initialize()
-
-                    # List available tools
-                    response = await session.list_tools()
-                    tools = response.tools
-                    logger.info("Successfully connected to plugin MCP server with tools: %s", " ".join([tool.name for tool in tools]))
-
-                    # Success! Now move to the main exit stack
-                    self._http = await self._exit_stack.enter_async_context(streamablehttp_client(uri))
-                    self._http, self._write, _ = self._http
-                    self._session = await self._exit_stack.enter_async_context(ClientSession(self._http, self._write))
-                    await self._session.initialize()
-                    return
-
-            except Exception as e:
-                logger.warning(f"Connection attempt {attempt + 1}/{max_retries} failed: {e}")
-
-                if attempt == max_retries - 1:
-                    # Final attempt failed
-                    error_msg = f"External plugin '{self.name}' connection failed after {max_retries} attempts: {uri} is not reachable. Please ensure the MCP server is running."
-                    logger.error(error_msg)
-                    raise PluginError(error=PluginErrorModel(message=error_msg, plugin_name=self.name))
-
-                # Wait before retry
-                delay = base_delay * (2**attempt)
-                logger.info(f"Retrying in {delay}s...")
-                await asyncio.sleep(delay)
+            # List available tools
+            response = await self._session.list_tools()
+            tools = response.tools
+            logger.info("\nConnected to plugin MCP (http) server with tools: %s", " ".join([tool.name for tool in tools]))
+        except Exception as e:
+            logger.exception(e)
+            raise PluginError(error=convert_exception_to_error(e, plugin_name=self.name))
 
     async def __invoke_hook(self, payload_result_model: Type[P], hook_type: HookType, payload: BaseModel, context: PluginContext) -> P:
         """Invoke an external plugin hook using the MCP protocol.
@@ -220,38 +195,6 @@ class ExternalPlugin(Plugin):
         except Exception as e:
             logger.exception(e)
             raise PluginError(error=convert_exception_to_error(e, plugin_name=self.name))
-        raise PluginError(error=PluginErrorModel(message=f"Received invalid response. Result = {result}", plugin_name=self.name))
-
-    async def __invoke_hook(self, payload_result_model: Type[P], hook_type: HookType, payload: BaseModel, context: PluginContext) -> P:
-        """Invoke an external plugin hook using the MCP protocol.
-
-        Args:
-            payload_result_model: The type of result payload for the hook.
-            hook_type:  The type of hook invoked (i.e., prompt_pre_hook)
-            payload: The payload to be passed to the hook.
-            context: The plugin context passed to the run.
-
-        Returns:
-            The resulting payload from the plugin.
-        """
-
-        result = await self._session.call_tool(hook_type, {PLUGIN_NAME: self.name, PAYLOAD: payload, CONTEXT: context})
-        try:
-            for content in result.content:
-                res = json.loads(content.text)
-                if CONTEXT in res:
-                    cxt = PluginContext.model_validate(res[CONTEXT])
-                    context.state = cxt.state
-                    context.metadata = cxt.metadata
-                    context.global_context.state = cxt.global_context.state
-                if RESULT in res:
-                    return payload_result_model.model_validate(res[RESULT])
-                if ERROR in res:
-                    error = PluginErrorModel.model_validate(res[ERROR])
-                    raise PluginError(error)
-        except Exception as ex:
-            logger.exception(ex)
-            raise
         raise PluginError(error=PluginErrorModel(message=f"Received invalid response. Result = {result}", plugin_name=self.name))
 
     async def prompt_pre_fetch(self, payload: PromptPrehookPayload, context: PluginContext) -> PromptPrehookResult:
