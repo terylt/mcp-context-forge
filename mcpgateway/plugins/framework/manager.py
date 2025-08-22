@@ -149,6 +149,7 @@ class PluginExecutor(Generic[T]):
 
         Raises:
             PayloadSizeError: If the payload exceeds MAX_PAYLOAD_SIZE.
+            PluginError: If there is an error inside a plugin.
 
         Examples:
             >>> # Execute plugins with timeout protection
