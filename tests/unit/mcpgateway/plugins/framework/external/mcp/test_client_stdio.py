@@ -224,7 +224,6 @@ async def test_errors():
     await plugin_manager.shutdown()
 
 
-@pytest.mark.skip(reason="Fails on await manager.shutdown().")
 @pytest.mark.asyncio
 async def test_shared_context_across_pre_post_hooks_multi_plugins():
     os.environ["PLUGINS_CONFIG_PATH"] = "tests/unit/mcpgateway/plugins/fixtures/configs/context_multiplugins.yaml"
