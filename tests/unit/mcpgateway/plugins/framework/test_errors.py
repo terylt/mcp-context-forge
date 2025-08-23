@@ -14,6 +14,7 @@ from mcpgateway.plugins.framework.errors import convert_exception_to_error
 from mcpgateway.plugins.framework import (
     GlobalContext,
     PluginError,
+    PluginMode,
     PluginManager,
     PromptPrehookPayload,
 )
@@ -47,8 +48,16 @@ async def test_error_plugin_raise_error_false():
     await plugin_manager.initialize()
     payload = PromptPrehookPayload(name="test_prompt", args={"arg0": "This is a crap argument"})
     global_context = GlobalContext(request_id="1")
+    with pytest.raises(PluginError):
+        result, _ = await plugin_manager.prompt_pre_fetch(payload, global_context)
+    #assert result.continue_processing
+    #assert not result.modified_payload
+
+    await plugin_manager.shutdown()
+    plugin_manager.config.plugins[0].mode = PluginMode.ENFORCE_IGNORE_ERROR
+    await plugin_manager.initialize()
     result, _ = await plugin_manager.prompt_pre_fetch(payload, global_context)
     assert result.continue_processing
     assert not result.modified_payload
-
     await plugin_manager.shutdown()
+

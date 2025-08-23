@@ -226,37 +226,20 @@ class PluginExecutor(Generic[T]):
 
             except asyncio.TimeoutError:
                 logger.error(f"Plugin {pluginref.name} timed out after {self.timeout}s")
-                if self.config.plugin_settings.fail_on_plugin_error:
+                if self.config.plugin_settings.fail_on_plugin_error or pluginref.plugin.mode == PluginMode.ENFORCE:
                     raise PluginError(error=PluginErrorModel(message=f"Plugin {pluginref.name} exceeded {self.timeout}s timeout", plugin_name=pluginref.name))
-                """
-                if pluginref.plugin.mode == PluginMode.ENFORCE:
-                    violation = PluginViolation(
-                        reason="Plugin timeout",
-                        description=f"Plugin {pluginref.name} exceeded {self._timeout}s timeout",
-                        code="PLUGIN_TIMEOUT",
-                        details={"timeout": self._timeout, "plugin": pluginref.name},
-                    )
-                    return (PluginResult[T](continue_processing=False, violation=violation, modified_payload=current_payload, metadata=combined_metadata), res_local_contexts)
-                # In permissive mode, continue with next plugin
-                """
+                # In permissive or enforce_ignore_error mode, continue with next plugin
                 continue
 
             except PluginError as pe:
                 logger.error(f"Plugin {pluginref.name} failed with error: {str(pe)}", exc_info=True)
-                if self.config.plugin_settings.fail_on_plugin_error:
+                if self.config.plugin_settings.fail_on_plugin_error or pluginref.plugin.mode == PluginMode.ENFORCE:
                     raise
             except Exception as e:
                 logger.error(f"Plugin {pluginref.name} failed with error: {str(e)}", exc_info=True)
-                if self.config.plugin_settings.fail_on_plugin_error:
+                if self.config.plugin_settings.fail_on_plugin_error or pluginref.plugin.mode == PluginMode.ENFORCE:
                     raise PluginError(error=convert_exception_to_error(e, pluginref.name))
-                """
-                if pluginref.plugin.mode == PluginMode.ENFORCE:
-                    violation = PluginViolation(
-                        reason="Plugin error", description=f"Plugin {pluginref.name} encountered an error: {str(e)}", code="PLUGIN_ERROR", details={"error": str(e), "plugin": pluginref.name}
-                    )
-                    return (PluginResult[T](continue_processing=False, violation=violation, modified_payload=current_payload, metadata=combined_metadata), res_local_contexts)
-                # In permissive mode, continue with next plugin
-                """
+                # In permissive or enforce_ignore_error mode, continue with next plugin
                 continue
 
         return (PluginResult[T](continue_processing=True, modified_payload=current_payload, violation=None, metadata=combined_metadata), res_local_contexts)

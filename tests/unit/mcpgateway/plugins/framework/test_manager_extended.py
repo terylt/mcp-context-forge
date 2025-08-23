@@ -9,6 +9,7 @@ Extended tests for plugin manager to achieve 100% coverage.
 # Standard
 import asyncio
 from unittest.mock import AsyncMock, MagicMock, patch
+import re
 
 # Third-Party
 import pytest
@@ -16,14 +17,15 @@ import pytest
 # First-Party
 from mcpgateway.models import Message, PromptResult, Role, TextContent
 from mcpgateway.plugins.framework.base import Plugin
-from mcpgateway.plugins.framework.manager import PluginManager
-from mcpgateway.plugins.framework.models import (
-    Config,
+from mcpgateway.plugins.framework.models import Config
+from mcpgateway.plugins.framework import (
     GlobalContext,
     HookType,
     PluginCondition,
     PluginConfig,
     PluginContext,
+    PluginError,
+    PluginManager,
     PluginMode,
     PluginResult,
     PluginViolation,
@@ -71,10 +73,12 @@ async def test_manager_timeout_handling():
         prompt = PromptPrehookPayload(name="test", args={})
         global_context = GlobalContext(request_id="1")
 
-        result, _ = await manager.prompt_pre_fetch(prompt, global_context=global_context)
+        escaped_regex = re.escape("Plugin TimeoutPlugin exceeded 0.01s timeout")
+        with pytest.raises(PluginError, match=escaped_regex):
+            result, _ = await manager.prompt_pre_fetch(prompt, global_context=global_context)
 
         # Should pass since fail_on_plugin_error: false
-        assert result.continue_processing
+        # assert result.continue_processing
         #assert result.violation is not None
         #assert result.violation.code == "PLUGIN_TIMEOUT"
         #assert "timeout" in result.violation.description.lower()
@@ -127,10 +131,12 @@ async def test_manager_exception_handling():
         prompt = PromptPrehookPayload(name="test", args={})
         global_context = GlobalContext(request_id="1")
 
-        result, _ = await manager.prompt_pre_fetch(prompt, global_context=global_context)
+        escaped_regex = re.escape("RuntimeError('Plugin error!')")
+        with pytest.raises(PluginError, match=escaped_regex):
+            result, _ = await manager.prompt_pre_fetch(prompt, global_context=global_context)
 
         # Should block in enforce mode
-        assert result.continue_processing
+        #assert result.continue_processing
         #assert result.violation is not None
         #assert result.violation.code == "PLUGIN_ERROR"
         #assert "error" in result.violation.description.lower()
@@ -144,6 +150,17 @@ async def test_manager_exception_handling():
         result, _ = await manager.prompt_pre_fetch(prompt, global_context=global_context)
 
         # Should continue in permissive mode
+        assert result.continue_processing
+        assert result.violation is None
+    
+    plugin_config.mode = PluginMode.ENFORCE_IGNORE_ERROR
+    with patch.object(manager._registry, 'get_plugins_for_hook') as mock_get:
+        plugin_ref = PluginRef(error_plugin)
+        mock_get.return_value = [plugin_ref]
+
+        result, _ = await manager.prompt_pre_fetch(prompt, global_context=global_context)
+
+        # Should continue in enforce_ignore_error mode
         assert result.continue_processing
         assert result.violation is None
 
