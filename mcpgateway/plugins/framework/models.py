@@ -60,13 +60,16 @@ class PluginMode(str, Enum):
     """Plugin modes of operation.
 
     Attributes:
-       enforce: enforces the plugin result.
+       enforce: enforces the plugin result, and blocks execution when there is an error.
+       enforce_ignore_error: enforces the plugin result, but allows execution when there is an error.
        permissive: audits the result.
        disabled: plugin disabled.
 
     Examples:
         >>> PluginMode.ENFORCE
         <PluginMode.ENFORCE: 'enforce'>
+        >>> PluginMode.ENFORCE_IGNORE_ERROR
+        <PluginMode.ENFORCE_IGNORE_ERROR: 'enforce_ignore_error'>
         >>> PluginMode.PERMISSIVE.value
         'permissive'
         >>> PluginMode('disabled')
@@ -76,6 +79,7 @@ class PluginMode(str, Enum):
     """
 
     ENFORCE = "enforce"
+    ENFORCE_IGNORE_ERROR = "enforce_ignore_error"
     PERMISSIVE = "permissive"
     DISABLED = "disabled"
 
