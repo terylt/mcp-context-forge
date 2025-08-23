@@ -60,3 +60,4 @@ async def test_error_plugin_raise_error_false():
     assert result.continue_processing
     assert not result.modified_payload
     await plugin_manager.shutdown()
+
