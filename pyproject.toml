@@ -404,7 +404,7 @@ plugins = ["pydantic.mypy"]              # Enable mypy plugin for Pydantic model
 
 [tool.pytest.ini_options]
 minversion = "6.0"
-addopts = "-ra -q --cov=mcpgateway --ignore=tests/playwright"
+addopts = "-ra -q --cov=mcpgateway --ignore=tests/playwright --ignore=tests/migration"
 testpaths = [ "tests",]
 asyncio_mode = "auto"
 filterwarnings = [
@@ -414,7 +414,9 @@ filterwarnings = [
 # Set environment variables for all tests
 env = [
     "MCPGATEWAY_ADMIN_API_ENABLED=true",
-    "MCPGATEWAY_UI_ENABLED=true"
+    "MCPGATEWAY_UI_ENABLED=true",
+    "DATABASE_URL=sqlite:///:memory:",
+    "TEST_DATABASE_URL=sqlite:///:memory:"
 ]
 
 # ===== PLAYWRIGHT-SPECIFIC CONFIGURATIONS =====
@@ -426,6 +428,7 @@ markers = [
     "smoke: marks tests as smoke tests for quick validation",
     "e2e: marks tests as end-to-end tests",
     "fuzz: marks tests as fuzz tests (excluded from main test suite)",
+    "benchmark: marks tests as performance benchmarks (migration testing)",
 ]
 
 # Playwright-specific test discovery patterns

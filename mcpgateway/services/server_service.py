@@ -15,6 +15,7 @@ It also publishes event notifications for server changes.
 import asyncio
 from datetime import datetime, timezone
 from typing import Any, AsyncGenerator, Dict, List, Optional
+import uuid as uuid_module
 
 # Third-Party
 import httpx
@@ -293,6 +294,7 @@ class ServerService:
             >>> service = ServerService()
             >>> db = MagicMock()
             >>> server_in = MagicMock()
+            >>> server_in.id = None  # No custom UUID for this test
             >>> db.execute.return_value.scalar_one_or_none.return_value = None
             >>> db.add = MagicMock()
             >>> db.commit = MagicMock()
@@ -313,6 +315,12 @@ class ServerService:
                 is_active=True,
                 tags=server_in.tags or [],
             )
+
+            # Set custom UUID if provided
+            if server_in.id:
+                # Normalize UUID to hex format (no dashes) to match database storage
+                normalized_uuid = str(uuid_module.UUID(server_in.id)).replace("-", "")
+                db_server.id = normalized_uuid
             db.add(db_server)
 
             # Associate tools, verifying each exists.
@@ -497,14 +505,17 @@ class ServerService:
             >>> service = ServerService()
             >>> db = MagicMock()
             >>> server = MagicMock()
+            >>> server.id = 'server_id'
             >>> db.get.return_value = server
             >>> db.commit = MagicMock()
             >>> db.refresh = MagicMock()
             >>> db.execute.return_value.scalar_one_or_none.return_value = None
             >>> service._convert_server_to_read = MagicMock(return_value='server_read')
             >>> ServerRead.model_validate = MagicMock(return_value='server_read')
+            >>> server_update = MagicMock()
+            >>> server_update.id = None  # No UUID change
             >>> import asyncio
-            >>> asyncio.run(service.update_server(db, 'server_id', MagicMock()))
+            >>> asyncio.run(service.update_server(db, 'server_id', server_update))
             'server_read'
         """
         try:
@@ -523,6 +534,12 @@ class ServerService:
                     )
 
             # Update simple fields
+            if server_update.id is not None and server_update.id != server.id:
+                # Check if the new UUID is already in use
+                existing = db.get(DbServer, server_update.id)
+                if existing:
+                    raise ServerError(f"Server with ID {server_update.id} already exists")
+                server.id = server_update.id
             if server_update.name is not None:
                 server.name = server_update.name
             if server_update.description is not None:
