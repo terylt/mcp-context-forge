@@ -70,7 +70,7 @@ class OPAPluginFilter(Plugin):
         else:
             logger.debug(f"OPA error: {rsp}")
 
-    def _pre_process_input(self, tool_tag : str ="sre", context: dict = {}) -> dict:
+    def _pre_process_input(self, context: dict = {}) -> dict:
         class BaseInputSRE(BaseModel):
             command : str = ""
             resource_type : str = ""
@@ -132,20 +132,67 @@ class OPAPluginFilter(Plugin):
             The result of the plugin's analysis, including whether the tool can proceed.
         """
 
-        logger.debug(f"Processing tool pre-invoke for tool '{payload.name}' with {len(payload.args) if payload.args else 0} arguments")
+        logger.info(f"Shriti Processing tool pre-invoke for tool '{payload.name}' with {len(payload.args) if payload.args else 0} arguments")
+        logger.info(f"Shriti Processing tool {payload.args}")
+        logger.info(f"Shriti Processing tool {context}")
         
         if not payload.args:
             return ToolPreInvokeResult()
-        tool_tag = "sre"
-        if tool_tag == "sre":
-            #TODO: convert context to dict and pass to pre_process_input
-            context_config = payload.args
-            payload_args = self._pre_process_input(tool_tag="sre",context=context_config)
+        
+        policy_context = context.global_context.state.get("policy_context",None)
+        if policy_context:
+            payload_args = self._pre_process_input(context=policy_context)
             opa_input = BaseOPAInputKeys(kind="tools/call", user = "none", tool = {"name" : payload.name, "args" : payload_args}, request_ip = "none", headers = {}, response = {})
         else:
-            opa_input = BaseOPAInputKeys(kind="tools/call", user = "none", tool = {"name" : payload.name, "args" : payload.args}, request_ip = "none", headers = {}, response = {})
+            logger.debug(f"No context injected for policy")
+                        # dummy pass
+            # dummy_pass = {
+                # "commands": 
+                # [
+                #     {
+                #         "command": "kubectl apply",
+                #         "resource_type": "",
+                #         "name": "",
+                #         "exec_command": "",
+                #         "full_command": "kubectl apply -f https://raw.githubusercontent.com/jaegertracing/jaeger-openshift/main/all-in-one/jaeger-all-in-one-openshift.yaml",
+                #         "timeout": "",
+                #         "ops": "",
+                #         "replicas": 1,
+                #         "cpu": 1,
+                #         "memory": 1,
+                #         "legal": True,
+                #         "image": "",
+                #         "apply_file": "https://raw.githubusercontent.com/jaegertracing/jaeger-openshift/main/all-in-one/jaeger-all-in-one-openshift.yaml"
+                #         }
+                #         ],
+                #         "original command": "kubectl apply -f https://raw.githubusercontent.com/jaegertracing/jaeger-openshift/main/all-in-one/jaeger-all-in-one-openshift.yaml\n"
+                #         }
+            
+            dummy_pass = {
+                "commands": [
+                    {
+                        "command": "kubectl describe",
+                        "resource_type": "",
+                        "name": "",
+                        "exec_command": "",
+                        "full_command": "kubectl describe pod checkout-6985f55d55-b5rtm -n otel-demo",
+                        "timeout": "",
+                        "ops": "",
+                        "replicas": 1,
+                        "cpu": 1,
+                        "memory": 1,
+                        "legal": True,
+                        "image": ""
+                        }
+                        ],
+                        "original command": "kubectl describe pod checkout-6985f55d55-b5rtm -n otel-demo\n"
+                        }
+
+            opa_input = BaseOPAInputKeys(kind="tools/call", user = "none", tool = {"name" : payload.name, "args" : dummy_pass}, request_ip = "none", headers = {}, response = {})
+        
+        
         opa_server_url = self.opa_config.server_url
-        policy_url = opa_server_url + "/allow_pre_tool"
+        policy_url = opa_server_url + "/allow"
         decision, decision_context = self._evaluate_opa_policy(policy_url,input_dict=OPAInput(input=opa_input))
         if not decision:
             violation = PluginViolation(
@@ -154,6 +201,7 @@ class OPAPluginFilter(Plugin):
                 code="deny",
                 details=decision_context,)
             return ToolPreInvokeResult(modified_payload=payload, violation=violation, continue_processing=False)
+        logger.info(f"Shriti Processing tool policy decision {decision}")
         return ToolPreInvokeResult(continue_processing=True)
 
     async def tool_post_invoke(self, payload: ToolPostInvokePayload, context: PluginContext) -> ToolPostInvokeResult:
@@ -167,19 +215,19 @@ class OPAPluginFilter(Plugin):
         Returns:
             The result of the plugin's analysis, including whether the tool result should proceed.
         """
-        logger.info(f"OPA tool post request {payload} , {context}")
-        result = payload.result
-        opa_server_url = self.opa_config.server_url
-        policy_url = opa_server_url + "/allow_post_tool"
-        for content in result.content:
-            opa_input = BaseOPAInputKeys(kind="tools/call", user = "none", tool = {"name" : payload.name, "args" : content}, request_ip = "none", headers = {}, response = {})
-            decision, decision_context = self._evaluate_opa_policy(policy_url,input_dict=OPAInput(input=opa_input))
-            if not decision:
-                violation = PluginViolation(
-                    reason="tool invocation not allowed",
-                    description="OPA policy failed on tool postinvocation",
-                    code="deny",
-                    details=decision_context,)
-                return ToolPreInvokeResult(modified_payload=payload, violation=violation, continue_processing=False)
+        logger.info(f"Shriti OPA tool post request {payload} , {context}")
+        # result = payload.result
+        # opa_server_url = self.opa_config.server_url
+        # policy_url = opa_server_url + "/allow_post_tool"
+        # for content in result.content:
+        #     opa_input = BaseOPAInputKeys(kind="tools/call", user = "none", tool = {"name" : payload.name, "args" : content}, request_ip = "none", headers = {}, response = {})
+        #     decision, decision_context = self._evaluate_opa_policy(policy_url,input_dict=OPAInput(input=opa_input))
+        #     if not decision:
+        #         violation = PluginViolation(
+        #             reason="tool invocation not allowed",
+        #             description="OPA policy failed on tool postinvocation",
+        #             code="deny",
+        #             details=decision_context,)
+        #         return ToolPreInvokeResult(modified_payload=payload, violation=violation, continue_processing=False)
         
         return ToolPostInvokeResult(continue_processing=True)
