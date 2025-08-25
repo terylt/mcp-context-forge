@@ -1,10 +1,10 @@
 # -*- coding: utf-8 -*-
-"""MCP Gateway Configuration.
-
+"""Location: ./mcpgateway/config.py
 Copyright 2025
 SPDX-License-Identifier: Apache-2.0
 Authors: Mihai Criveti, Manav Gupta
 
+MCP Gateway Configuration.
 This module defines configuration settings for the MCP Gateway using Pydantic.
 It loads configuration from environment variables with sensible defaults.
 
@@ -156,6 +156,13 @@ class Settings(BaseSettings):
     mcpgateway_bulk_import_enabled: bool = True
     mcpgateway_bulk_import_max_tools: int = 200
     mcpgateway_bulk_import_rate_limit: int = 10
+
+    # A2A (Agent-to-Agent) Feature Flags
+    mcpgateway_a2a_enabled: bool = True
+    mcpgateway_a2a_max_agents: int = 100
+    mcpgateway_a2a_default_timeout: int = 30
+    mcpgateway_a2a_max_retries: int = 3
+    mcpgateway_a2a_metrics_enabled: bool = True
 
     # Security
     skip_ssl_verify: bool = False
@@ -433,7 +440,6 @@ Disallow: /
 
     # Cache control for well-known files (seconds)
     well_known_cache_max_age: int = 3600  # 1 hour default
-
     model_config = SettingsConfigDict(env_file=".env", env_file_encoding="utf-8", case_sensitive=False, extra="ignore")
 
     gateway_tool_name_separator: str = "-"

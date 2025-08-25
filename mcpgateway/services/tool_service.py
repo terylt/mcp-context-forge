@@ -1,10 +1,10 @@
 # -*- coding: utf-8 -*-
-"""Tool Service Implementation.
-
+"""Location: ./mcpgateway/services/tool_service.py
 Copyright 2025
 SPDX-License-Identifier: Apache-2.0
 Authors: Mihai Criveti
 
+Tool Service Implementation.
 This module implements tool management and invocation according to the MCP specification.
 It handles:
 - Tool registration and validation
@@ -26,6 +26,7 @@ from urllib.parse import parse_qs, urlparse
 import uuid
 
 # Third-Party
+import httpx
 from mcp import ClientSession
 from mcp.client.sse import sse_client
 from mcp.client.streamable_http import streamablehttp_client
@@ -35,6 +36,7 @@ from sqlalchemy.orm import Session
 
 # First-Party
 from mcpgateway.config import settings
+from mcpgateway.db import A2AAgent as DbA2AAgent
 from mcpgateway.db import Gateway as DbGateway
 from mcpgateway.db import server_tool_association
 from mcpgateway.db import Tool as DbTool
@@ -46,6 +48,7 @@ from mcpgateway.schemas import ToolCreate, ToolRead, ToolUpdate, TopPerformer
 from mcpgateway.services.logging_service import LoggingService
 from mcpgateway.services.oauth_manager import OAuthManager
 from mcpgateway.utils.create_slug import slugify
+from mcpgateway.utils.display_name import generate_display_name
 from mcpgateway.utils.metrics_common import build_top_performers
 from mcpgateway.utils.passthrough_headers import get_passthrough_headers
 from mcpgateway.utils.retry_manager import ResilientHttpClient
@@ -281,9 +284,14 @@ class ToolService:
             tool_dict["auth"] = None
 
         tool_dict["name"] = tool.name
-        tool_dict["gateway_slug"] = tool.gateway_slug if tool.gateway_slug else ""
-        tool_dict["original_name_slug"] = tool.original_name_slug
-        tool_dict["tags"] = tool.tags or []
+        # Handle displayName with fallback and None checks
+        display_name = getattr(tool, "display_name", None)
+        custom_name = getattr(tool, "custom_name", tool.original_name)
+        tool_dict["displayName"] = display_name or custom_name
+        tool_dict["custom_name"] = custom_name
+        tool_dict["gateway_slug"] = getattr(tool, "gateway_slug", "") or ""
+        tool_dict["custom_name_slug"] = getattr(tool, "custom_name_slug", "") or ""
+        tool_dict["tags"] = getattr(tool, "tags", []) or []
 
         return ToolRead.model_validate(tool_dict)
 
@@ -376,7 +384,9 @@ class ToolService:
 
             db_tool = DbTool(
                 original_name=tool.name,
-                original_name_slug=slugify(tool.name),
+                custom_name=tool.name,
+                custom_name_slug=slugify(tool.name),
+                display_name=tool.displayName or tool.name,
                 url=str(tool.url),
                 description=tool.description,
                 integration_type=tool.integration_type,
@@ -679,6 +689,10 @@ class ToolService:
 
         if not is_reachable:
             raise ToolNotFoundError(f"Tool '{name}' exists but is currently offline. Please verify if it is running.")
+
+        # Check if this is an A2A tool and route to A2A service
+        if tool.integration_type == "A2A" and tool.annotations and "a2a_agent_id" in tool.annotations:
+            return await self._invoke_a2a_tool(db, tool, arguments)
 
         # Plugin hook: tool pre-invoke
         context_table = None
@@ -997,8 +1011,10 @@ class ToolService:
             tool = db.get(DbTool, tool_id)
             if not tool:
                 raise ToolNotFoundError(f"Tool not found: {tool_id}")
-            if tool_update.name is not None:
-                tool.name = tool_update.name
+            if tool_update.custom_name is not None:
+                tool.custom_name = tool_update.custom_name
+            if tool_update.displayName is not None:
+                tool.display_name = tool_update.displayName
             if tool_update.url is not None:
                 tool.url = str(tool_update.url)
             if tool_update.description is not None:
@@ -1287,3 +1303,183 @@ class ToolService:
         else:
             db.execute(delete(ToolMetric))
         db.commit()
+
+    async def create_tool_from_a2a_agent(
+        self,
+        db: Session,
+        agent: DbA2AAgent,
+        created_by: Optional[str] = None,
+        created_from_ip: Optional[str] = None,
+        created_via: Optional[str] = None,
+        created_user_agent: Optional[str] = None,
+    ) -> ToolRead:
+        """Create a tool entry from an A2A agent for virtual server integration.
+
+        Args:
+            db: Database session.
+            agent: A2A agent to create tool from.
+            created_by: Username who created this tool.
+            created_from_ip: IP address of creator.
+            created_via: Creation method.
+            created_user_agent: User agent of creation request.
+
+        Returns:
+            The created tool.
+
+        Raises:
+            ToolNameConflictError: If a tool with the same name already exists.
+        """
+        # Check if tool already exists for this agent
+        tool_name = f"a2a_{agent.slug}"
+        existing_query = select(DbTool).where(DbTool.original_name == tool_name)
+        existing_tool = db.execute(existing_query).scalar_one_or_none()
+
+        if existing_tool:
+            # Tool already exists, return it
+            return self._convert_tool_to_read(existing_tool)
+
+        # Create tool entry for the A2A agent
+        tool_data = ToolCreate(
+            name=tool_name,
+            displayName=generate_display_name(agent.name),
+            url=agent.endpoint_url,
+            description=f"A2A Agent: {agent.description or agent.name}",
+            integration_type="A2A",  # Special integration type for A2A agents
+            request_type="POST",
+            input_schema={
+                "type": "object",
+                "properties": {
+                    "parameters": {"type": "object", "description": "Parameters to pass to the A2A agent"},
+                    "interaction_type": {"type": "string", "description": "Type of interaction", "default": "query"},
+                },
+                "required": ["parameters"],
+            },
+            annotations={
+                "title": f"A2A Agent: {agent.name}",
+                "a2a_agent_id": agent.id,
+                "a2a_agent_type": agent.agent_type,
+            },
+            auth_type=agent.auth_type,
+            auth_value=agent.auth_value,
+            tags=agent.tags + ["a2a", "agent"],
+        )
+
+        return await self.register_tool(
+            db,
+            tool_data,
+            created_by=created_by,
+            created_from_ip=created_from_ip,
+            created_via=created_via or "a2a_integration",
+            created_user_agent=created_user_agent,
+        )
+
+    async def _invoke_a2a_tool(self, db: Session, tool: DbTool, arguments: Dict[str, Any]) -> ToolResult:
+        """Invoke an A2A agent through its corresponding tool.
+
+        Args:
+            db: Database session.
+            tool: The tool record that represents the A2A agent.
+            arguments: Tool arguments.
+
+        Returns:
+            Tool result from A2A agent invocation.
+
+        Raises:
+            ToolNotFoundError: If the A2A agent is not found.
+        """
+        # Extract A2A agent ID from tool annotations
+        agent_id = tool.annotations.get("a2a_agent_id")
+        if not agent_id:
+            raise ToolNotFoundError(f"A2A tool '{tool.name}' missing agent ID in annotations")
+
+        # Get the A2A agent
+        agent_query = select(DbA2AAgent).where(DbA2AAgent.id == agent_id)
+        agent = db.execute(agent_query).scalar_one_or_none()
+
+        if not agent:
+            raise ToolNotFoundError(f"A2A agent not found for tool '{tool.name}' (agent ID: {agent_id})")
+
+        if not agent.enabled:
+            raise ToolNotFoundError(f"A2A agent '{agent.name}' is disabled")
+
+        # Prepare parameters for A2A invocation
+        parameters = arguments.get("parameters", arguments)
+        interaction_type = arguments.get("interaction_type", "query")
+
+        start_time = time.time()
+        success = False
+        error_message = None
+
+        try:
+            # Make the A2A agent call
+            response_data = await self._call_a2a_agent(agent, parameters, interaction_type)
+            success = True
+
+            # Convert A2A response to MCP ToolResult format
+            if isinstance(response_data, dict) and "response" in response_data:
+                content = [TextContent(type="text", text=str(response_data["response"]))]
+            else:
+                content = [TextContent(type="text", text=str(response_data))]
+
+            result = ToolResult(content=content, is_error=False)
+
+        except Exception as e:
+            error_message = str(e)
+            success = False
+            content = [TextContent(type="text", text=f"A2A agent error: {error_message}")]
+            result = ToolResult(content=content, is_error=True)
+
+        finally:
+            # Record metrics for the tool
+            end_time = time.time()
+            response_time = end_time - start_time
+
+            metric = ToolMetric(
+                tool_id=tool.id,
+                response_time=response_time,
+                is_success=success,
+                error_message=error_message,
+            )
+            db.add(metric)
+            db.commit()
+
+        return result
+
+    async def _call_a2a_agent(self, agent: DbA2AAgent, parameters: Dict[str, Any], interaction_type: str = "query") -> Dict[str, Any]:
+        """Call an A2A agent directly.
+
+        Args:
+            agent: The A2A agent to call.
+            parameters: Parameters for the interaction.
+            interaction_type: Type of interaction.
+
+        Returns:
+            Response from the A2A agent.
+
+        Raises:
+            Exception: If the call fails.
+        """
+        # Format request based on agent type and endpoint
+        if agent.agent_type in ["generic", "jsonrpc"] or agent.endpoint_url.endswith("/"):
+            # Use JSONRPC format for agents that expect it
+            request_data = {"jsonrpc": "2.0", "method": parameters.get("method", "message/send"), "params": parameters.get("params", parameters), "id": 1}
+        else:
+            # Use custom A2A format
+            request_data = {"interaction_type": interaction_type, "parameters": parameters, "protocol_version": agent.protocol_version}
+
+        # Make HTTP request to the agent endpoint
+        async with httpx.AsyncClient(timeout=30.0) as client:
+            headers = {"Content-Type": "application/json"}
+
+            # Add authentication if configured
+            if agent.auth_type == "api_key" and agent.auth_value:
+                headers["Authorization"] = f"Bearer {agent.auth_value}"
+            elif agent.auth_type == "bearer" and agent.auth_value:
+                headers["Authorization"] = f"Bearer {agent.auth_value}"
+
+            http_response = await client.post(agent.endpoint_url, json=request_data, headers=headers)
+
+            if http_response.status_code == 200:
+                return http_response.json()
+
+            raise Exception(f"HTTP {http_response.status_code}: {http_response.text}")

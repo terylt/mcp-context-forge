@@ -101,8 +101,8 @@ python3 -m mcpgateway.translate \
 ### **Testing with Wrapper**
 ```bash
 # Test through mcpgateway.wrapper
-export MCP_AUTH_TOKEN=$MCPGATEWAY_BEARER_TOKEN
-export MCP_SERVER_CATALOG_URLS='http://localhost:4444/servers/UUID_OF_SERVER_1'
+export MCP_AUTH=$MCPGATEWAY_BEARER_TOKEN
+export MCP_SERVER_URL='http://localhost:4444/servers/UUID_OF_SERVER_1'
 python3 -m mcpgateway.wrapper
 ```
 
@@ -196,7 +196,7 @@ We're particularly interested in:
 - [JSON-RPC 2.0 Specification](https://www.jsonrpc.org/specification)
 
 ### **Gateway Documentation**
-- [MCP Context Forge Gateway](../README.md)
+- [MCP Context Forge Gateway](../../index.md)
 - [mcpgateway.wrapper Usage](../mcpgateway-wrapper.md)
 - [mcpgateway.translate Bridge](../mcpgateway-translate.md)
 

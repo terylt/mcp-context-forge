@@ -1,3 +1,25 @@
+// Make URL field read-only for integration type MCP
+function updateEditToolUrl() {
+    const editTypeField = document.getElementById("edit-tool-type");
+    const editurlField = document.getElementById("edit-tool-url");
+    if (editTypeField && editurlField) {
+        if (editTypeField.value === "MCP") {
+            editurlField.readOnly = true;
+        } else {
+            editurlField.readOnly = false;
+        }
+    }
+}
+
+// Attach event listener after DOM is loaded or when modal opens
+document.addEventListener("DOMContentLoaded", function () {
+    const TypeField = document.getElementById("edit-tool-type");
+    if (TypeField) {
+        TypeField.addEventListener("change", updateEditToolUrl);
+        // Set initial state
+        updateEditToolUrl();
+    }
+});
 /**
  * ====================================================================
  * SECURE ADMIN.JS - COMPLETE VERSION WITH XSS PROTECTION
@@ -513,6 +535,17 @@ function openModal(modalId) {
         console.error(`Error opening modal ${modalId}:`, error);
     }
 }
+
+// Global event handler for Escape key
+document.addEventListener("keydown", (event) => {
+    if (event.key === "Escape") {
+        // Find any active modal
+        const activeModal = Array.from(AppState.activeModals)[0];
+        if (activeModal) {
+            closeModal(activeModal);
+        }
+    }
+});
 
 function closeModal(modalId, clearId = null) {
     try {
@@ -1885,14 +1918,12 @@ async function editTool(toolId) {
         const response = await fetchWithTimeout(
             `${window.ROOT_PATH}/admin/tools/${toolId}`,
         );
-
         if (!response.ok) {
             // If the response is not OK, throw an error
             throw new Error(`HTTP ${response.status}: ${response.statusText}`);
         }
 
         const tool = await response.json();
-
         const isInactiveCheckedBool = isInactiveChecked("tools");
         let hiddenField = safeGetElement("edit-show-inactive");
         if (!hiddenField) {
@@ -1915,15 +1946,26 @@ async function editTool(toolId) {
 
         // Validate and set fields
         const nameValidation = validateInputName(tool.name, "tool");
+        const customNameValidation = validateInputName(tool.customName, "tool");
+
         const urlValidation = validateUrl(tool.url);
 
         const nameField = safeGetElement("edit-tool-name");
+        const customNameField = safeGetElement("edit-tool-custom-name");
         const urlField = safeGetElement("edit-tool-url");
         const descField = safeGetElement("edit-tool-description");
         const typeField = safeGetElement("edit-tool-type");
 
         if (nameField && nameValidation.valid) {
             nameField.value = nameValidation.value;
+        }
+        if (customNameField && customNameValidation.valid) {
+            customNameField.value = customNameValidation.value;
+        }
+
+        const displayNameField = safeGetElement("edit-tool-display-name");
+        if (displayNameField) {
+            displayNameField.value = tool.displayName || "";
         }
         if (urlField && urlValidation.valid) {
             urlField.value = urlValidation.value;
@@ -2001,6 +2043,7 @@ async function editTool(toolId) {
                 typeField.disabled = false;
             }
             updateEditToolRequestTypes(tool.requestType || null); // preselect from DB
+            updateEditToolUrl(tool.url || null);
         }
 
         // Request Type field handling (disable for MCP)
@@ -2019,6 +2062,84 @@ async function editTool(toolId) {
         const authTypeField = safeGetElement("edit-auth-type");
         if (authTypeField) {
             authTypeField.value = tool.auth?.authType || "";
+        }
+        const editAuthTokenField = safeGetElement("edit-auth-token");
+        // Prefill integration type from DB and set request types accordingly
+        if (typeField) {
+            // Always set value from DB, never from previous UI state
+            typeField.value = tool.integrationType;
+            // Remove any previous hidden field for type
+            const prevHiddenType = document.getElementById(
+                "hidden-edit-tool-type",
+            );
+            if (prevHiddenType) {
+                prevHiddenType.remove();
+            }
+            // Remove any previous hidden field for authType
+            const prevHiddenAuthType = document.getElementById(
+                "hidden-edit-auth-type",
+            );
+            if (prevHiddenAuthType) {
+                prevHiddenAuthType.remove();
+            }
+            // Disable integration type field for MCP tools (cannot be changed)
+            if (tool.integrationType === "MCP") {
+                typeField.disabled = true;
+                if (authTypeField) {
+                    authTypeField.disabled = true;
+                    // Add hidden field for authType
+                    const hiddenAuthTypeField = document.createElement("input");
+                    hiddenAuthTypeField.type = "hidden";
+                    hiddenAuthTypeField.name = authTypeField.name;
+                    hiddenAuthTypeField.value = authTypeField.value;
+                    hiddenAuthTypeField.id = "hidden-edit-auth-type";
+                    authTypeField.form.appendChild(hiddenAuthTypeField);
+                }
+                if (urlField) {
+                    urlField.readOnly = true;
+                }
+                if (headersField) {
+                    headersField.setAttribute("readonly", "readonly");
+                }
+                if (schemaField) {
+                    schemaField.setAttribute("readonly", "readonly");
+                }
+                if (editAuthTokenField) {
+                    editAuthTokenField.setAttribute("readonly", "readonly");
+                }
+                if (window.editToolHeadersEditor) {
+                    window.editToolHeadersEditor.setOption("readOnly", true);
+                }
+                if (window.editToolSchemaEditor) {
+                    window.editToolSchemaEditor.setOption("readOnly", true);
+                }
+            } else {
+                typeField.disabled = false;
+                if (authTypeField) {
+                    authTypeField.disabled = false;
+                }
+                if (urlField) {
+                    urlField.readOnly = false;
+                }
+                if (headersField) {
+                    headersField.removeAttribute("readonly");
+                }
+                if (schemaField) {
+                    schemaField.removeAttribute("readonly");
+                }
+                if (editAuthTokenField) {
+                    editAuthTokenField.removeAttribute("readonly");
+                }
+                if (window.editToolHeadersEditor) {
+                    window.editToolHeadersEditor.setOption("readOnly", false);
+                }
+                if (window.editToolSchemaEditor) {
+                    window.editToolSchemaEditor.setOption("readOnly", false);
+                }
+            }
+            // Update request types and URL field
+            updateEditToolRequestTypes(tool.requestType || null);
+            updateEditToolUrl(tool.url || null);
         }
 
         // Auth containers
@@ -3078,6 +3199,7 @@ async function editGateway(gatewayId) {
         const authHeadersSection = safeGetElement(
             "auth-headers-fields-gw-edit",
         );
+        const authOAuthSection = safeGetElement("auth-oauth-fields-gw-edit");
 
         // Individual fields
         const authUsernameField = safeGetElement(
@@ -3098,6 +3220,24 @@ async function editGateway(gatewayId) {
             "auth-headers-fields-gw-edit",
         )?.querySelector("input[name='auth_header_value']");
 
+        // OAuth fields
+        const oauthGrantTypeField = safeGetElement("oauth-grant-type-gw-edit");
+        const oauthClientIdField = safeGetElement("oauth-client-id-gw-edit");
+        const oauthClientSecretField = safeGetElement(
+            "oauth-client-secret-gw-edit",
+        );
+        const oauthTokenUrlField = safeGetElement("oauth-token-url-gw-edit");
+        const oauthAuthUrlField = safeGetElement(
+            "oauth-authorization-url-gw-edit",
+        );
+        const oauthRedirectUriField = safeGetElement(
+            "oauth-redirect-uri-gw-edit",
+        );
+        const oauthScopesField = safeGetElement("oauth-scopes-gw-edit");
+        const oauthAuthCodeFields = safeGetElement(
+            "oauth-auth-code-fields-gw-edit",
+        );
+
         // Hide all auth sections first
         if (authBasicSection) {
             authBasicSection.style.display = "none";
@@ -3107,6 +3247,9 @@ async function editGateway(gatewayId) {
         }
         if (authHeadersSection) {
             authHeadersSection.style.display = "none";
+        }
+        if (authOAuthSection) {
+            authOAuthSection.style.display = "none";
         }
 
         switch (gateway.authType) {
@@ -3137,6 +3280,47 @@ async function editGateway(gatewayId) {
                     }
                     if (authHeaderValueField) {
                         authHeaderValueField.value = "*****"; // mask header value
+                    }
+                }
+                break;
+            case "oauth":
+                if (authOAuthSection) {
+                    authOAuthSection.style.display = "block";
+                }
+                // Populate OAuth fields if available
+                if (gateway.oauthConfig) {
+                    const config = gateway.oauthConfig;
+                    if (oauthGrantTypeField && config.grant_type) {
+                        oauthGrantTypeField.value = config.grant_type;
+                        // Show/hide authorization code fields based on grant type
+                        if (oauthAuthCodeFields) {
+                            oauthAuthCodeFields.style.display =
+                                config.grant_type === "authorization_code"
+                                    ? "block"
+                                    : "none";
+                        }
+                    }
+                    if (oauthClientIdField && config.client_id) {
+                        oauthClientIdField.value = config.client_id;
+                    }
+                    if (oauthClientSecretField) {
+                        oauthClientSecretField.value = ""; // Don't populate secret for security
+                    }
+                    if (oauthTokenUrlField && config.token_url) {
+                        oauthTokenUrlField.value = config.token_url;
+                    }
+                    if (oauthAuthUrlField && config.authorization_url) {
+                        oauthAuthUrlField.value = config.authorization_url;
+                    }
+                    if (oauthRedirectUriField && config.redirect_uri) {
+                        oauthRedirectUriField.value = config.redirect_uri;
+                    }
+                    if (
+                        oauthScopesField &&
+                        config.scopes &&
+                        Array.isArray(config.scopes)
+                    ) {
+                        oauthScopesField.value = config.scopes.join(" ");
                     }
                 }
                 break;
@@ -3375,6 +3559,11 @@ async function editServer(serverId) {
             descField.value = server.description || "";
         }
 
+        const idField = safeGetElement("edit-server-id");
+        if (idField) {
+            idField.value = server.id || "";
+        }
+
         // Set tags field
         const tagsField = safeGetElement("edit-server-tags");
         if (tagsField) {
@@ -3462,6 +3651,15 @@ function showTab(tabName) {
                     }
                 }
 
+                if (tabName === "a2a-agents") {
+                    // Load A2A agents list if not already loaded
+                    const agentsList = safeGetElement("a2a-agents-list");
+                    if (agentsList && agentsList.innerHTML.trim() === "") {
+                        // Trigger HTMX load manually
+                        window.htmx.trigger(agentsList, "load");
+                    }
+                }
+
                 if (tabName === "version-info") {
                     const versionPanel = safeGetElement("version-info-panel");
                     if (versionPanel && versionPanel.innerHTML.trim() === "") {
@@ -3544,6 +3742,7 @@ function handleAuthTypeSelection(
     basicFields,
     bearerFields,
     headersFields,
+    oauthFields,
 ) {
     if (!basicFields || !bearerFields || !headersFields) {
         console.warn("Auth field elements not found");
@@ -3552,30 +3751,48 @@ function handleAuthTypeSelection(
 
     // Hide all fields first
     [basicFields, bearerFields, headersFields].forEach((field) => {
-        field.style.display = "none";
+        if (field) {
+            field.style.display = "none";
+        }
     });
+
+    // Hide OAuth fields if they exist
+    if (oauthFields) {
+        oauthFields.style.display = "none";
+    }
 
     // Show relevant field based on selection
     switch (value) {
         case "basic":
-            basicFields.style.display = "block";
+            if (basicFields) {
+                basicFields.style.display = "block";
+            }
             break;
         case "bearer":
-            bearerFields.style.display = "block";
+            if (bearerFields) {
+                bearerFields.style.display = "block";
+            }
             break;
         case "authheaders": {
-            headersFields.style.display = "block";
-            // Ensure at least one header row is present
-            const containerId =
-                headersFields.querySelector('[id$="-container"]')?.id;
-            if (containerId) {
-                const container = document.getElementById(containerId);
-                if (container && container.children.length === 0) {
-                    addAuthHeader(containerId);
+            if (headersFields) {
+                headersFields.style.display = "block";
+                // Ensure at least one header row is present
+                const containerId =
+                    headersFields.querySelector('[id$="-container"]')?.id;
+                if (containerId) {
+                    const container = document.getElementById(containerId);
+                    if (container && container.children.length === 0) {
+                        addAuthHeader(containerId);
+                    }
                 }
             }
             break;
         }
+        case "oauth":
+            if (oauthFields) {
+                oauthFields.style.display = "block";
+            }
+            break;
         default:
             // All fields already hidden
             break;
@@ -3890,6 +4107,12 @@ function updateEditToolRequestTypes(selectedMethod = null) {
         return;
     }
 
+    // Track previous value using a data attribute
+    if (!editToolTypeSelect.dataset.prevValue) {
+        editToolTypeSelect.dataset.prevValue = editToolTypeSelect.value;
+    }
+
+    // const prevType = editToolTypeSelect.dataset.prevValue;
     const selectedType = editToolTypeSelect.value;
     const allowedMethods = integrationRequestMap[selectedType] || [];
 
@@ -3920,6 +4143,27 @@ function updateEditToolRequestTypes(selectedMethod = null) {
 // TOOL SELECT FUNCTIONALITY
 // ===================================================================
 
+// Prevent manual REST→MCP changes in edit-tool-form
+document.addEventListener("DOMContentLoaded", function () {
+    const editToolTypeSelect = document.getElementById("edit-tool-type");
+    if (editToolTypeSelect) {
+        // Store the initial value for comparison
+        editToolTypeSelect.dataset.prevValue = editToolTypeSelect.value;
+
+        editToolTypeSelect.addEventListener("change", function (e) {
+            const prevType = this.dataset.prevValue;
+            const selectedType = this.value;
+            if (prevType === "REST" && selectedType === "MCP") {
+                alert("You cannot change integration type from REST to MCP.");
+                this.value = prevType;
+                // Optionally, reset any dependent fields here
+            } else {
+                this.dataset.prevValue = selectedType;
+            }
+        });
+    }
+});
+//= ==================================================================
 function initToolSelect(
     selectId,
     pillsId,
@@ -4143,6 +4387,7 @@ async function testTool(toolId) {
         }
 
         const tool = await response.json();
+        console.log(`Tool ${toolId} fetched successfully`, tool);
         toolInputSchemaRegistry = tool;
 
         // 7. CLEAN STATE before proceeding
@@ -5047,27 +5292,39 @@ async function viewTool(toolId) {
 
         const tool = await response.json();
 
-        // Build auth HTML safely
+        // Build auth HTML safely with new styling
         let authHTML = "";
         if (tool.auth?.username && tool.auth?.password) {
             authHTML = `
-        <p><strong>Authentication Type:</strong> Basic</p>
-        <p><strong>Username:</strong> <span class="auth-username"></span></p>
-        <p><strong>Password:</strong> ********</p>
+        <span class="font-medium text-gray-700 dark:text-gray-300">Authentication Type:</span>
+        <div class="mt-1 text-sm">
+          <div class="text-gray-600 dark:text-gray-400">Basic Authentication</div>
+          <div class="mt-1">Username: <span class="auth-username font-medium"></span></div>
+          <div>Password: <span class="font-medium">********</span></div>
+        </div>
       `;
         } else if (tool.auth?.token) {
             authHTML = `
-        <p><strong>Authentication Type:</strong> Token</p>
-        <p><strong>Token:</strong> ********</p>
+        <span class="font-medium text-gray-700 dark:text-gray-300">Authentication Type:</span>
+        <div class="mt-1 text-sm">
+          <div class="text-gray-600 dark:text-gray-400">Bearer Token</div>
+          <div class="mt-1">Token: <span class="font-medium">********</span></div>
+        </div>
       `;
         } else if (tool.auth?.authHeaderKey && tool.auth?.authHeaderValue) {
             authHTML = `
-        <p><strong>Authentication Type:</strong> Custom Headers</p>
-        <p><strong>Header Key:</strong> <span class="auth-header-key"></span></p>
-        <p><strong>Header Value:</strong> ********</p>
+        <span class="font-medium text-gray-700 dark:text-gray-300">Authentication Type:</span>
+        <div class="mt-1 text-sm">
+          <div class="text-gray-600 dark:text-gray-400">Custom Headers</div>
+          <div class="mt-1">Header: <span class="auth-header-key font-medium"></span></div>
+          <div>Value: <span class="font-medium">********</span></div>
+        </div>
       `;
         } else {
-            authHTML = "<p><strong>Authentication Type:</strong> None</p>";
+            authHTML = `
+        <span class="font-medium text-gray-700 dark:text-gray-300">Authentication Type:</span>
+        <div class="mt-1 text-sm text-gray-600 dark:text-gray-400">None</div>
+      `;
         }
 
         // Create annotation badges safely - NO ESCAPING since we're using textContent
@@ -5142,35 +5399,106 @@ async function viewTool(toolId) {
         if (toolDetailsDiv) {
             // Create structure safely without double-escaping
             const safeHTML = `
-        <div class="space-y-2 dark:bg-gray-800 dark:text-gray-300">
-          <p><strong>Name:</strong> <span class="tool-name"></span></p>
-          <p><strong>URL:</strong> <span class="tool-url"></span></p>
-          <p><strong>Type:</strong> <span class="tool-type"></span></p>
-          <p><strong>Description:</strong> <span class="tool-description"></span></p>
-          <p><strong>Tags:</strong> <span class="tool-tags"></span></p>
-          <p><strong>Request Type:</strong> <span class="tool-request-type"></span></p>
-          ${authHTML}
-          ${renderAnnotations(tool.annotations)}
-          <div>
-            <strong>Headers:</strong>
-            <pre class="mt-1 bg-gray-100 p-2 rounded dark:bg-gray-800 dark:text-gray-200 tool-headers"></pre>
+        <div class="dark:bg-gray-800 dark:text-gray-300">
+          <!-- Two Column Layout for Main Info -->
+          <div class="grid grid-cols-2 gap-6 mb-6">
+            <!-- Left Column -->
+            <div class="space-y-3">
+              <div>
+                <span class="font-medium text-gray-700 dark:text-gray-300">Display Name:</span>
+                <div class="mt-1 tool-display-name font-medium"></div>
+              </div>
+              <div>
+                <span class="font-medium text-gray-700 dark:text-gray-300">Technical Name:</span>
+                <div class="mt-1 tool-name text-sm text-gray-600 dark:text-gray-400"></div>
+              </div>
+              <div>
+                <span class="font-medium text-gray-700 dark:text-gray-300">URL:</span>
+                <div class="mt-1 tool-url text-sm text-gray-600 dark:text-gray-400 break-all"></div>
+              </div>
+              <div>
+                <span class="font-medium text-gray-700 dark:text-gray-300">Type:</span>
+                <div class="mt-1 tool-type text-sm"></div>
+              </div>
+            </div>
+            <!-- Right Column -->
+            <div class="space-y-3">
+              <div>
+                <span class="font-medium text-gray-700 dark:text-gray-300">Description:</span>
+                <div class="mt-1 tool-description text-sm text-gray-600 dark:text-gray-400"></div>
+              </div>
+              <div>
+                <span class="font-medium text-gray-700 dark:text-gray-300">Tags:</span>
+                <div class="mt-1 tool-tags text-sm"></div>
+              </div>
+              <div>
+                <span class="font-medium text-gray-700 dark:text-gray-300">Request Type:</span>
+                <div class="mt-1 tool-request-type text-sm"></div>
+              </div>
+              <div class="auth-info">
+                ${authHTML}
+              </div>
+            </div>
           </div>
-          <div>
-            <strong>Input Schema:</strong>
-            <pre class="mt-1 bg-gray-100 p-2 rounded dark:bg-gray-800 dark:text-gray-200 tool-schema"></pre>
+
+          <!-- Annotations Section -->
+          <div class="mb-6">
+            ${renderAnnotations(tool.annotations)}
           </div>
-          <div>
-            <strong>Metrics:</strong>
-            <ul class="list-disc list-inside ml-4">
-              <li>Total Executions: <span class="metric-total"></span></li>
-              <li>Successful Executions: <span class="metric-success"></span></li>
-              <li>Failed Executions: <span class="metric-failed"></span></li>
-              <li>Failure Rate: <span class="metric-failure-rate"></span></li>
-              <li>Min Response Time: <span class="metric-min-time"></span></li>
-              <li>Max Response Time: <span class="metric-max-time"></span></li>
-              <li>Average Response Time: <span class="metric-avg-time"></span></li>
-              <li>Last Execution Time: <span class="metric-last-time"></span></li>
-            </ul>
+
+          <!-- Technical Details Section -->
+          <div class="space-y-4">
+            <div>
+              <strong class="text-gray-700 dark:text-gray-300">Headers:</strong>
+              <pre class="mt-1 bg-gray-100 p-3 rounded text-xs dark:bg-gray-800 dark:text-gray-200 tool-headers overflow-x-auto"></pre>
+            </div>
+            <div>
+              <strong class="text-gray-700 dark:text-gray-300">Input Schema:</strong>
+              <pre class="mt-1 bg-gray-100 p-3 rounded text-xs dark:bg-gray-800 dark:text-gray-200 tool-schema overflow-x-auto"></pre>
+            </div>
+          </div>
+
+          <!-- Metrics Section -->
+          <div class="mt-6 pt-4 border-t border-gray-200 dark:border-gray-600">
+            <strong class="text-gray-700 dark:text-gray-300">Metrics:</strong>
+            <div class="grid grid-cols-2 gap-4 mt-3 text-sm">
+              <div class="space-y-2">
+                <div class="flex justify-between">
+                  <span class="text-gray-600 dark:text-gray-400">Total Executions:</span>
+                  <span class="metric-total font-medium"></span>
+                </div>
+                <div class="flex justify-between">
+                  <span class="text-gray-600 dark:text-gray-400">Successful Executions:</span>
+                  <span class="metric-success font-medium text-green-600"></span>
+                </div>
+                <div class="flex justify-between">
+                  <span class="text-gray-600 dark:text-gray-400">Failed Executions:</span>
+                  <span class="metric-failed font-medium text-red-600"></span>
+                </div>
+                <div class="flex justify-between">
+                  <span class="text-gray-600 dark:text-gray-400">Failure Rate:</span>
+                  <span class="metric-failure-rate font-medium"></span>
+                </div>
+              </div>
+              <div class="space-y-2">
+                <div class="flex justify-between">
+                  <span class="text-gray-600 dark:text-gray-400">Min Response Time:</span>
+                  <span class="metric-min-time font-medium"></span>
+                </div>
+                <div class="flex justify-between">
+                  <span class="text-gray-600 dark:text-gray-400">Max Response Time:</span>
+                  <span class="metric-max-time font-medium"></span>
+                </div>
+                <div class="flex justify-between">
+                  <span class="text-gray-600 dark:text-gray-400">Average Response Time:</span>
+                  <span class="metric-avg-time font-medium"></span>
+                </div>
+                <div class="flex justify-between">
+                  <span class="text-gray-600 dark:text-gray-400">Last Execution Time:</span>
+                  <span class="metric-last-time font-medium"></span>
+                </div>
+              </div>
+            </div>
           </div>
           <div class="mt-6 border-t pt-4">
             <strong>Metadata:</strong>
@@ -5223,6 +5551,10 @@ async function viewTool(toolId) {
                 }
             };
 
+            setTextSafely(
+                ".tool-display-name",
+                tool.displayName || tool.customName || tool.name,
+            );
             setTextSafely(".tool-name", tool.name);
             setTextSafely(".tool-url", tool.url);
             setTextSafely(".tool-type", tool.integrationType);
@@ -5938,6 +6270,42 @@ async function handleEditGatewayFormSubmit(e) {
             JSON.stringify(passthroughHeaders),
         );
 
+        // Handle OAuth configuration
+        const authType = formData.get("auth_type");
+        if (authType === "oauth") {
+            const oauthConfig = {
+                grant_type: formData.get("oauth_grant_type"),
+                client_id: formData.get("oauth_client_id"),
+                client_secret: formData.get("oauth_client_secret"),
+                token_url: formData.get("oauth_token_url"),
+                scopes: formData.get("oauth_scopes")
+                    ? formData
+                          .get("oauth_scopes")
+                          .split(" ")
+                          .filter((s) => s.trim())
+                    : [],
+            };
+
+            // Add authorization code specific fields
+            if (oauthConfig.grant_type === "authorization_code") {
+                oauthConfig.authorization_url = formData.get(
+                    "oauth_authorization_url",
+                );
+                oauthConfig.redirect_uri = formData.get("oauth_redirect_uri");
+            }
+
+            // Remove individual OAuth fields and add as oauth_config
+            formData.delete("oauth_grant_type");
+            formData.delete("oauth_client_id");
+            formData.delete("oauth_client_secret");
+            formData.delete("oauth_token_url");
+            formData.delete("oauth_scopes");
+            formData.delete("oauth_authorization_url");
+            formData.delete("oauth_redirect_uri");
+
+            formData.append("oauth_config", JSON.stringify(oauthConfig));
+        }
+
         const isInactiveCheckedBool = isInactiveChecked("gateways");
         formData.append("is_inactive_checked", isInactiveCheckedBool);
         // Submit via fetch
@@ -6506,6 +6874,7 @@ function setupTabNavigation() {
         "resources",
         "prompts",
         "gateways",
+        "a2a-agents",
         "roots",
         "metrics",
         "logs",
@@ -6554,6 +6923,7 @@ function setupAuthenticationToggles() {
             basicId: "auth-basic-fields-gw-edit",
             bearerId: "auth-bearer-fields-gw-edit",
             headersId: "auth-headers-fields-gw-edit",
+            oauthId: "auth-oauth-fields-gw-edit",
         },
         {
             id: "edit-auth-type",
@@ -6620,6 +6990,15 @@ function setupFormHandlers() {
                 refreshEditors();
             }
         });
+    }
+
+    // Add OAuth grant type change handler for Edit Gateway modal
+    const editOAuthGrantTypeField = safeGetElement("oauth-grant-type-gw-edit");
+    if (editOAuthGrantTypeField) {
+        editOAuthGrantTypeField.addEventListener(
+            "change",
+            handleEditOAuthGrantTypeChange,
+        );
     }
 
     const toolForm = safeGetElement("add-tool-form");
@@ -6764,6 +7143,38 @@ function handleOAuthGrantTypeChange() {
     }
 }
 
+function handleEditOAuthGrantTypeChange() {
+    const grantType = this.value;
+    const authCodeFields = safeGetElement("oauth-auth-code-fields-gw-edit");
+
+    if (authCodeFields) {
+        if (grantType === "authorization_code") {
+            authCodeFields.style.display = "block";
+
+            // Make authorization code specific fields required
+            const requiredFields =
+                authCodeFields.querySelectorAll('input[type="url"]');
+            requiredFields.forEach((field) => {
+                field.required = true;
+            });
+
+            // Show additional validation for required fields
+            console.log(
+                "Authorization Code flow selected - additional fields are now required",
+            );
+        } else {
+            authCodeFields.style.display = "none";
+
+            // Remove required validation for hidden fields
+            const requiredFields =
+                authCodeFields.querySelectorAll('input[type="url"]');
+            requiredFields.forEach((field) => {
+                field.required = false;
+            });
+        }
+    }
+}
+
 function setupSchemaModeHandlers() {
     const schemaModeRadios = document.getElementsByName("schema_input_mode");
     const uiBuilderDiv = safeGetElement("ui-builder");
@@ -6817,8 +7228,10 @@ function setupIntegrationTypeHandlers() {
 
     const editToolTypeSelect = safeGetElement("edit-tool-type");
     if (editToolTypeSelect) {
-        editToolTypeSelect.addEventListener("change", () =>
-            updateEditToolRequestTypes(),
+        editToolTypeSelect.addEventListener(
+            "change",
+            () => updateEditToolRequestTypes(),
+            // updateEditToolUrl(),
         );
     }
 }
@@ -7034,7 +7447,7 @@ function generateConfig(server, configType) {
         case "stdio":
             return {
                 mcpServers: {
-                    [cleanServerName]: {
+                    "mcpgateway-wrapper": {
                         command: "python",
                         args: ["-m", "mcpgateway.wrapper"],
                         env: {
@@ -7048,7 +7461,7 @@ function generateConfig(server, configType) {
 
         case "sse":
             return {
-                mcpServers: {
+                servers: {
                     [cleanServerName]: {
                         type: "sse",
                         url: `${baseUrl}/servers/${server.id}/sse`,
@@ -7061,10 +7474,10 @@ function generateConfig(server, configType) {
 
         case "http":
             return {
-                mcpServers: {
+                servers: {
                     [cleanServerName]: {
                         type: "http",
-                        url: `${baseUrl}/servers/${server.id}`,
+                        url: `${baseUrl}/servers/${server.id}/mcp`,
                         headers: {
                             Authorization: "Bearer your-token-here",
                         },
@@ -8618,3 +9031,129 @@ function getCookie(name) {
 
 // Expose functions used in dynamically generated HTML
 window.resetImportFile = resetImportFile;
+
+// ===================================================================
+// A2A AGENT TESTING FUNCTIONALITY
+// ===================================================================
+
+/**
+ * Test an A2A agent by making a direct invocation call
+ * @param {string} agentId - ID of the agent to test
+ * @param {string} agentName - Name of the agent for display
+ * @param {string} endpointUrl - Endpoint URL of the agent
+ */
+async function testA2AAgent(agentId, agentName, endpointUrl) {
+    try {
+        // Show loading state
+        const testResult = document.getElementById(`test-result-${agentId}`);
+        testResult.innerHTML =
+            '<div class="text-blue-600">🔄 Testing agent...</div>';
+        testResult.classList.remove("hidden");
+
+        // Get auth token from cookie or local storage
+        let token = getCookie("jwt_token");
+
+        // Try alternative cookie names if primary not found
+        if (!token) {
+            token = getCookie("access_token") || getCookie("auth_token");
+        }
+
+        // Try to get from localStorage as fallback
+        if (!token) {
+            token =
+                localStorage.getItem("jwt_token") ||
+                localStorage.getItem("auth_token");
+        }
+
+        // Debug logging
+        console.log("Available cookies:", document.cookie);
+        console.log(
+            "Found token:",
+            token ? "Yes (length: " + token.length + ")" : "No",
+        );
+
+        // Prepare headers
+        const headers = {
+            "Content-Type": "application/json",
+        };
+
+        if (token) {
+            headers.Authorization = `Bearer ${token}`;
+        } else {
+            // Fallback to basic auth if JWT not available
+            console.warn("JWT token not found, attempting basic auth fallback");
+            headers.Authorization = "Basic " + btoa("admin:changeme"); // Default admin credentials
+        }
+
+        // Test payload is now determined server-side based on agent configuration
+        const testPayload = {};
+
+        // Make test request to A2A agent via admin endpoint
+        const response = await fetchWithTimeout(
+            `${window.ROOT_PATH}/admin/a2a/${agentId}/test`,
+            {
+                method: "POST",
+                headers,
+                body: JSON.stringify(testPayload),
+            },
+            10000, // 10 second timeout
+        );
+
+        if (!response.ok) {
+            throw new Error(`HTTP ${response.status}: ${response.statusText}`);
+        }
+
+        const result = await response.json();
+
+        // Display result
+        let resultHtml;
+        if (!result.success || result.error) {
+            resultHtml = `
+                <div class="text-red-600">
+                    <div>❌ Test Failed</div>
+                    <div class="text-xs mt-1">Error: ${escapeHtml(result.error || "Unknown error")}</div>
+                </div>`;
+        } else {
+            // Check if the agent result contains an error (agent-level error)
+            const agentResult = result.result;
+            if (agentResult && agentResult.error) {
+                resultHtml = `
+                    <div class="text-yellow-600">
+                        <div>⚠️ Agent Error</div>
+                        <div class="text-xs mt-1">Agent Response: ${escapeHtml(JSON.stringify(agentResult).substring(0, 150))}...</div>
+                    </div>`;
+            } else {
+                resultHtml = `
+                    <div class="text-green-600">
+                        <div>✅ Test Successful</div>
+                        <div class="text-xs mt-1">Response: ${escapeHtml(JSON.stringify(agentResult).substring(0, 150))}...</div>
+                    </div>`;
+            }
+        }
+
+        testResult.innerHTML = resultHtml;
+
+        // Auto-hide after 10 seconds
+        setTimeout(() => {
+            testResult.classList.add("hidden");
+        }, 10000);
+    } catch (error) {
+        console.error("A2A agent test failed:", error);
+
+        const testResult = document.getElementById(`test-result-${agentId}`);
+        testResult.innerHTML = `
+            <div class="text-red-600">
+                <div>❌ Test Failed</div>
+                <div class="text-xs mt-1">Error: ${escapeHtml(error.message)}</div>
+            </div>`;
+        testResult.classList.remove("hidden");
+
+        // Auto-hide after 10 seconds
+        setTimeout(() => {
+            testResult.classList.add("hidden");
+        }, 10000);
+    }
+}
+
+// Expose A2A test function to global scope
+window.testA2AAgent = testA2AAgent;

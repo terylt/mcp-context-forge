@@ -1,10 +1,10 @@
 # -*- coding: utf-8 -*-
-"""Admin UI Routes for MCP Gateway.
-
+"""Location: ./mcpgateway/admin.py
 Copyright 2025
 SPDX-License-Identifier: Apache-2.0
 Authors: Mihai Criveti
 
+Admin UI Routes for MCP Gateway.
 This module contains all the administrative UI endpoints for the MCP Gateway.
 It provides a comprehensive interface for managing servers, tools, resources,
 prompts, gateways, and roots through RESTful API endpoints. The module handles
@@ -44,6 +44,7 @@ from mcpgateway.db import get_db, GlobalConfig
 from mcpgateway.db import Tool as DbTool
 from mcpgateway.models import LogLevel
 from mcpgateway.schemas import (
+    A2AAgentCreate,
     GatewayCreate,
     GatewayRead,
     GatewayTestRequest,
@@ -68,6 +69,7 @@ from mcpgateway.schemas import (
     ToolRead,
     ToolUpdate,
 )
+from mcpgateway.services.a2a_service import A2AAgentError, A2AAgentNameConflictError, A2AAgentNotFoundError, A2AAgentService
 from mcpgateway.services.export_service import ExportError, ExportService
 from mcpgateway.services.gateway_service import GatewayConnectionError, GatewayNotFoundError, GatewayService
 from mcpgateway.services.import_service import ConflictStrategy
@@ -122,6 +124,8 @@ resource_service: ResourceService = ResourceService()
 root_service: RootService = RootService()
 export_service: ExportService = ExportService()
 import_service: ImportService = ImportService()
+# Initialize A2A service only if A2A features are enabled
+a2a_service: Optional[A2AAgentService] = A2AAgentService() if settings.mcpgateway_a2a_enabled else None
 
 # Set up basic authentication
 
@@ -618,6 +622,7 @@ async def admin_add_server(request: Request, db: Session = Depends(get_db), user
     try:
         LOGGER.debug(f"User {user} is adding a new server with name: {form['name']}")
         server = ServerCreate(
+            id=form.get("id") or None,
             name=form.get("name"),
             description=form.get("description"),
             icon=form.get("icon"),
@@ -666,6 +671,7 @@ async def admin_edit_server(
     update operation.
 
     Expects form fields:
+      - id (optional): Updated UUID for the server
       - name (optional): The updated name of the server
       - description (optional): An updated description of the server's purpose
       - icon (optional): Updated URL or path to the server's icon
@@ -774,6 +780,7 @@ async def admin_edit_server(
     try:
         LOGGER.debug(f"User {user} is editing server ID {server_id} with name: {form.get('name')}")
         server = ServerUpdate(
+            id=form.get("id"),
             name=form.get("name"),
             description=form.get("description"),
             icon=form.get("icon"),
@@ -1508,7 +1515,7 @@ async def admin_ui(
         >>> mock_tool = ToolRead(
         ...     id="t1", name="T1", original_name="T1", url="http://t1.com", description="d",
         ...     created_at=datetime.now(timezone.utc), updated_at=datetime.now(timezone.utc),
-        ...     enabled=True, reachable=True, gateway_slug="default", original_name_slug="t1",
+        ...     enabled=True, reachable=True, gateway_slug="default", custom_name_slug="t1",
         ...     request_type="GET", integration_type="MCP", headers={}, input_schema={},
         ...     annotations={}, jsonpath_filter=None, auth=None, execution_count=0,
         ...     metrics=ToolMetrics(
@@ -1517,6 +1524,7 @@ async def admin_ui(
         ...         avg_response_time=0.0, last_execution_time=None
         ...     ),
         ...     gateway_id=None,
+        ...     customName="T1",
         ...     tags=[]
         ... )
         >>> server_service.list_servers = AsyncMock(return_value=[mock_server])
@@ -1563,6 +1571,13 @@ async def admin_ui(
     gateways = [gateway.model_dump(by_alias=True) for gateway in gateways_raw]
 
     roots = [root.model_dump(by_alias=True) for root in await root_service.list_roots()]
+
+    # Load A2A agents if enabled
+    a2a_agents = []
+    if a2a_service and settings.mcpgateway_a2a_enabled:
+        a2a_agents_raw = await a2a_service.list_agents(db, include_inactive=include_inactive)
+        a2a_agents = [agent.model_dump(by_alias=True) for agent in a2a_agents_raw]
+
     root_path = settings.app_root_path
     max_name_length = settings.validation_max_name_length
     response = request.app.state.templates.TemplateResponse(
@@ -1575,12 +1590,14 @@ async def admin_ui(
             "resources": resources,
             "prompts": prompts,
             "gateways": gateways,
+            "a2a_agents": a2a_agents,
             "roots": roots,
             "include_inactive": include_inactive,
             "root_path": root_path,
             "max_name_length": max_name_length,
             "gateway_tool_name_separator": settings.gateway_tool_name_separator,
             "bulk_import_max_tools": settings.mcpgateway_bulk_import_max_tools,
+            "a2a_enabled": settings.mcpgateway_a2a_enabled,
         },
     )
 
@@ -1620,34 +1637,35 @@ async def admin_list_tools(
         >>> mock_user = "test_user"
         >>>
         >>> # Mock tool data
-        >>> mock_tool = ToolRead(
-        ...     id="tool-1",
-        ...     name="Test Tool",
-        ...     original_name="TestTool",
-        ...     url="http://test.com/tool",
-        ...     description="A test tool",
-        ...     request_type="HTTP",
-        ...     integration_type="MCP",
-        ...     headers={},
-        ...     input_schema={},
-        ...     annotations={},
-        ...     jsonpath_filter=None,
-        ...     auth=None,
-        ...     created_at=datetime.now(timezone.utc),
-        ...     updated_at=datetime.now(timezone.utc),
-        ...     enabled=True,
-        ...     reachable=True,
-        ...     gateway_id=None,
-        ...     execution_count=0,
-        ...     metrics=ToolMetrics(
-        ...         total_executions=5, successful_executions=5, failed_executions=0,
-        ...         failure_rate=0.0, min_response_time=0.1, max_response_time=0.5,
-        ...         avg_response_time=0.3, last_execution_time=datetime.now(timezone.utc)
-        ...     ),
-        ...     gateway_slug="default",
-        ...     original_name_slug="test-tool",
-        ...     tags=[]
-        ... )  #  Added gateway_id=None
+    >>> mock_tool = ToolRead(
+    ...     id="tool-1",
+    ...     name="Test Tool",
+    ...     original_name="TestTool",
+    ...     url="http://test.com/tool",
+    ...     description="A test tool",
+    ...     request_type="HTTP",
+    ...     integration_type="MCP",
+    ...     headers={},
+    ...     input_schema={},
+    ...     annotations={},
+    ...     jsonpath_filter=None,
+    ...     auth=None,
+    ...     created_at=datetime.now(timezone.utc),
+    ...     updated_at=datetime.now(timezone.utc),
+    ...     enabled=True,
+    ...     reachable=True,
+    ...     gateway_id=None,
+    ...     execution_count=0,
+    ...     metrics=ToolMetrics(
+    ...         total_executions=5, successful_executions=5, failed_executions=0,
+    ...         failure_rate=0.0, min_response_time=0.1, max_response_time=0.5,
+    ...         avg_response_time=0.3, last_execution_time=datetime.now(timezone.utc)
+    ...     ),
+    ...     gateway_slug="default",
+    ...     custom_name_slug="test-tool",
+    ...     customName="Test Tool",
+    ...     tags=[]
+    ... )  #  Added gateway_id=None
         >>>
         >>> # Mock the tool_service.list_tools method
         >>> original_list_tools = tool_service.list_tools
@@ -1673,7 +1691,8 @@ async def admin_list_tools(
         ...         failure_rate=0.0, min_response_time=0.0, max_response_time=0.0,
         ...         avg_response_time=0.0, last_execution_time=None
         ...     ),
-        ...     gateway_slug="default", original_name_slug="inactive-tool",
+        ...     gateway_slug="default", custom_name_slug="inactive-tool",
+        ...     customName="Inactive Tool",
         ...     tags=[]
         ... )
         >>> tool_service.list_tools = AsyncMock(return_value=[mock_tool, mock_inactive_tool])
@@ -1759,7 +1778,8 @@ async def admin_get_tool(tool_id: str, db: Session = Depends(get_db), user: str 
         ...         failure_rate=0.0, min_response_time=0.0, max_response_time=0.0, avg_response_time=0.0,
         ...         last_execution_time=None
         ...     ),
-        ...     gateway_slug="default", original_name_slug="get-tool",
+        ...     gateway_slug="default", custom_name_slug="get-tool",
+        ...     customName="Get Tool",
         ...     tags=[]
         ... )
         >>>
@@ -1962,6 +1982,7 @@ async def admin_add_tool(
 
     tool_data: dict[str, Any] = {
         "name": form.get("name"),
+        "displayName": form.get("displayName"),
         "url": form.get("url"),
         "description": form.get("description"),
         "request_type": request_type,
@@ -2027,6 +2048,7 @@ async def admin_edit_tool(
 
     Expects form fields:
       - name
+      - displayName (optional)
       - url
       - description (optional)
       - requestType (to be mapped to request_type)
@@ -2075,6 +2097,7 @@ async def admin_edit_tool(
         >>> # Happy path: Edit tool successfully
         >>> form_data_success = FormData([
         ...     ("name", "Updated_Tool"),
+        ...     ("customName", "ValidToolName"),
         ...     ("url", "http://updated.com"),
         ...     ("requestType", "GET"),
         ...     ("integrationType", "REST"),
@@ -2097,6 +2120,7 @@ async def admin_edit_tool(
         >>> # Edge case: Edit tool with inactive checkbox checked
         >>> form_data_inactive = FormData([
         ...     ("name", "Inactive_Edit"),
+        ...     ("customName", "ValidToolName"),
         ...     ("url", "http://inactive.com"),
         ...     ("is_inactive_checked", "true"),
         ...     ("requestType", "GET"),
@@ -2115,6 +2139,7 @@ async def admin_edit_tool(
         >>> # Error path: Tool name conflict (simulated with IntegrityError)
         >>> form_data_conflict = FormData([
         ...     ("name", "Conflicting_Name"),
+        ...     ("customName", "Conflicting_Name"),
         ...     ("url", "http://conflict.com"),
         ...     ("requestType", "GET"),
         ...     ("integrationType", "REST")
@@ -2133,6 +2158,7 @@ async def admin_edit_tool(
         >>> # Error path: ToolError raised
         >>> form_data_tool_error = FormData([
         ...     ("name", "Tool_Error"),
+        ...     ("customName", "Tool_Error"),
         ...     ("url", "http://toolerror.com"),
         ...     ("requestType", "GET"),
         ...     ("integrationType", "REST")
@@ -2151,6 +2177,7 @@ async def admin_edit_tool(
         >>> # Error path: Pydantic Validation Error
         >>> form_data_validation_error = FormData([
         ...     ("name", "Bad_URL"),
+        ...     ("customName","Bad_Custom_Name"),
         ...     ("url", "not-a-valid-url"),
         ...     ("requestType", "GET"),
         ...     ("integrationType", "REST")
@@ -2168,6 +2195,7 @@ async def admin_edit_tool(
         >>> # Error path: Unexpected exception
         >>> form_data_unexpected = FormData([
         ...     ("name", "Crash_Tool"),
+        ...     ("customName", "Crash_Tool"),
         ...     ("url", "http://crash.com"),
         ...     ("requestType", "GET"),
         ...     ("integrationType", "REST")
@@ -2189,13 +2217,14 @@ async def admin_edit_tool(
     """
     LOGGER.debug(f"User {user} is editing tool ID {tool_id}")
     form = await request.form()
-
     # Parse tags from comma-separated string
     tags_str = str(form.get("tags", ""))
     tags: list[str] = [tag.strip() for tag in tags_str.split(",") if tag.strip()] if tags_str else []
 
     tool_data: dict[str, Any] = {
         "name": form.get("name"),
+        "displayName": form.get("displayName"),
+        "custom_name": form.get("customName"),
         "url": form.get("url"),
         "description": form.get("description"),
         "headers": json.loads(form.get("headers") or "{}"),
@@ -2891,6 +2920,20 @@ async def admin_edit_gateway(
         else:
             passthrough_headers = None
 
+        # Parse OAuth configuration if present
+        oauth_config_json = str(form.get("oauth_config"))
+        oauth_config: Optional[dict[str, Any]] = None
+        if oauth_config_json and oauth_config_json != "None":
+            try:
+                oauth_config = json.loads(oauth_config_json)
+                # Encrypt the client secret if present and not empty
+                if oauth_config and "client_secret" in oauth_config and oauth_config["client_secret"]:
+                    encryption = get_oauth_encryption(settings.auth_encryption_secret)
+                    oauth_config["client_secret"] = encryption.encrypt_secret(oauth_config["client_secret"])
+            except (json.JSONDecodeError, ValueError) as e:
+                LOGGER.error(f"Failed to parse OAuth config: {e}")
+                oauth_config = None
+
         gateway = GatewayUpdate(  # Pydantic validation happens here
             name=str(form.get("name")),
             url=str(form["url"]),
@@ -2906,6 +2949,7 @@ async def admin_edit_gateway(
             auth_value=str(form.get("auth_value", "")),
             auth_headers=auth_headers if auth_headers else None,
             passthrough_headers=passthrough_headers,
+            oauth_config=oauth_config,
         )
         await gateway_service.update_gateway(db, gateway_id, gateway)
         return JSONResponse(
@@ -4567,7 +4611,6 @@ async def admin_import_tools(
 
         # Extract base metadata for bulk import
         base_metadata = MetadataCapture.extract_creation_metadata(request, user, import_batch_id=import_batch_id)
-
         for i, item in enumerate(payload):
             name = (item or {}).get("name")
             try:
@@ -5062,7 +5105,6 @@ async def admin_export_logs(
     )
 
 
-# Configuration Export/Import Endpoints
 @admin_router.get("/export/configuration")
 async def admin_export_configuration(
     types: Optional[str] = None,
@@ -5296,3 +5338,355 @@ async def admin_list_import_statuses(user: str = Depends(require_auth)):
 
     statuses = import_service.list_import_statuses()
     return JSONResponse(content=[status.to_dict() for status in statuses])
+
+
+# ============================================================================ #
+#                             A2A AGENT ADMIN ROUTES                          #
+# ============================================================================ #
+
+
+@admin_router.get("/a2a")
+async def admin_list_a2a_agents(
+    include_inactive: bool = False,
+    tags: Optional[str] = None,
+    db: Session = Depends(get_db),
+    user: str = Depends(require_auth),
+) -> HTMLResponse:
+    """List A2A agents for admin UI.
+
+    Args:
+        include_inactive: Whether to include inactive agents
+        tags: Comma-separated list of tags to filter by
+        db: Database session
+        user: Authenticated user
+
+    Returns:
+        HTML response with agents list
+
+    Raises:
+        HTTPException: If A2A features are disabled
+    """
+    if not a2a_service or not settings.mcpgateway_a2a_enabled:
+        return HTMLResponse(content='<div class="text-center py-8"><p class="text-gray-500">A2A features are disabled. Set MCPGATEWAY_A2A_ENABLED=true to enable.</p></div>', status_code=200)
+    # Parse tags parameter if provided
+    tags_list = None
+    if tags:
+        tags_list = [tag.strip() for tag in tags.split(",") if tag.strip()]
+
+    LOGGER.debug(f"Admin user {user} requested A2A agent list with tags={tags_list}")
+    agents = await a2a_service.list_agents(db, include_inactive=include_inactive, tags=tags_list)
+
+    # Convert to template format
+    agent_items = []
+    for agent in agents:
+        agent_items.append(
+            {
+                "id": agent.id,
+                "name": agent.name,
+                "description": agent.description or "",
+                "endpoint_url": agent.endpoint_url,
+                "agent_type": agent.agent_type,
+                "protocol_version": agent.protocol_version,
+                "auth_type": agent.auth_type or "None",
+                "enabled": agent.enabled,
+                "reachable": agent.reachable,
+                "tags": agent.tags,
+                "created_at": agent.created_at.isoformat(),
+                "last_interaction": agent.last_interaction.isoformat() if agent.last_interaction else None,
+                "execution_count": agent.metrics.total_executions,
+                "success_rate": f"{100 - agent.metrics.failure_rate:.1f}%" if agent.metrics.total_executions > 0 else "N/A",
+            }
+        )
+
+    # Generate HTML for agents list
+    html_content = ""
+    for agent in agent_items:
+        status_class = "bg-green-100 text-green-800" if agent["enabled"] else "bg-red-100 text-red-800"
+        reachable_class = "bg-green-100 text-green-800" if agent["reachable"] else "bg-yellow-100 text-yellow-800"
+        active_text = "Active" if agent["enabled"] else "Inactive"
+        reachable_text = "Reachable" if agent["reachable"] else "Unreachable"
+
+        # Generate tags HTML separately
+        tags_html = ""
+        if agent["tags"]:
+            tag_spans = []
+            for tag in agent["tags"]:
+                tag_spans.append(f'<span class="inline-flex items-center px-2 py-1 rounded text-xs bg-gray-100 text-gray-700 dark:bg-gray-700 dark:text-gray-300">{tag}</span>')
+            tags_html = f'<div class="mt-2 flex flex-wrap gap-1">{" ".join(tag_spans)}</div>'
+
+        # Generate last interaction HTML
+        last_interaction_html = ""
+        if agent["last_interaction"]:
+            last_interaction_html = f"<div>Last Interaction: {agent['last_interaction'][:19]}</div>"
+
+        # Generate button classes
+        toggle_class = "text-green-700 bg-green-100 hover:bg-green-200" if not agent["enabled"] else "text-red-700 bg-red-100 hover:bg-red-200"
+        toggle_text = "Activate" if not agent["enabled"] else "Deactivate"
+        toggle_action = "true" if not agent["enabled"] else "false"
+
+        html_content += f"""
+        <div class="border border-gray-200 dark:border-gray-600 rounded-lg p-4 space-y-3">
+          <div class="flex items-start justify-between">
+            <div class="flex-1">
+              <h4 class="text-lg font-medium text-gray-900 dark:text-gray-200">{agent["name"]}</h4>
+              <p class="text-sm text-gray-600 dark:text-gray-400">{agent["description"]}</p>
+              <div class="mt-2 flex flex-wrap gap-2">
+                <span class="inline-flex items-center px-2.5 py-0.5 rounded-full text-xs font-medium {status_class}">
+                  {active_text}
+                </span>
+                <span class="inline-flex items-center px-2.5 py-0.5 rounded-full text-xs font-medium {reachable_class}">
+                  {reachable_text}
+                </span>
+                <span class="inline-flex items-center px-2.5 py-0.5 rounded-full text-xs font-medium bg-blue-100 text-blue-800">
+                  {agent["agent_type"]}
+                </span>
+                <span class="inline-flex items-center px-2.5 py-0.5 rounded-full text-xs font-medium bg-gray-100 text-gray-800">
+                  Auth: {agent["auth_type"]}
+                </span>
+              </div>
+              <div class="mt-2 text-xs text-gray-500 dark:text-gray-400">
+                <div>Endpoint: {agent["endpoint_url"]}</div>
+                <div>Executions: {agent["execution_count"]} | Success Rate: {agent["success_rate"]}</div>
+                <div>Created: {agent["created_at"][:19]}</div>
+                {last_interaction_html}
+              </div>
+              {tags_html}
+            </div>
+            <div class="flex space-x-2">
+              <button
+                hx-post="{{ root_path }}/admin/a2a/{agent["id"]}/toggle"
+                hx-vals='{{"activate": "{toggle_action}"}}'
+                hx-target="#a2a-agents-list"
+                hx-trigger="click"
+                class="px-3 py-1 text-sm font-medium {toggle_class} rounded-md focus:outline-none focus:ring-2 focus:ring-offset-2 focus:ring-indigo-500"
+              >
+                {toggle_text}
+              </button>
+              <button
+                hx-post="{{ root_path }}/admin/a2a/{agent["id"]}/delete"
+                hx-target="#a2a-agents-list"
+                hx-trigger="click"
+                hx-confirm="Are you sure you want to delete this A2A agent?"
+                class="px-3 py-1 text-sm font-medium text-red-700 bg-red-100 hover:bg-red-200 rounded-md focus:outline-none focus:ring-2 focus:ring-offset-2 focus:ring-red-500"
+              >
+                Delete
+              </button>
+            </div>
+          </div>
+        </div>
+        """
+
+    return HTMLResponse(content=html_content)
+
+
+@admin_router.post("/a2a")
+async def admin_add_a2a_agent(
+    request: Request,
+    db: Session = Depends(get_db),
+    user: str = Depends(require_auth),
+) -> RedirectResponse:
+    """Add a new A2A agent via admin UI.
+
+    Args:
+        request: FastAPI request object
+        db: Database session
+        user: Authenticated user
+
+    Returns:
+        HTML response with success/error status
+
+    Raises:
+        HTTPException: If A2A features are disabled
+    """
+    LOGGER.info(f"A2A agent creation request from user {user}")
+
+    if not a2a_service or not settings.mcpgateway_a2a_enabled:
+        LOGGER.warning("A2A agent creation attempted but A2A features are disabled")
+        return HTMLResponse(content='<div class="text-red-500">A2A features are disabled</div>', status_code=403)
+
+    try:
+        form = await request.form()
+        LOGGER.info(f"A2A agent creation form data: {dict(form)}")
+
+        # Process tags
+        tags_str = form.get("tags", "")
+        tags = [tag.strip() for tag in tags_str.split(",") if tag.strip()] if tags_str else []
+
+        agent_data = A2AAgentCreate(
+            name=form["name"],
+            description=form.get("description"),
+            endpoint_url=form["endpoint_url"],
+            agent_type=form.get("agent_type", "generic"),
+            auth_type=form.get("auth_type") if form.get("auth_type") else None,
+            auth_value=form.get("auth_value") if form.get("auth_value") else None,
+            tags=tags,
+        )
+
+        LOGGER.info(f"Creating A2A agent: {agent_data.name} at {agent_data.endpoint_url}")
+
+        # Extract metadata from request
+        metadata = MetadataCapture.extract_creation_metadata(request, user)
+
+        await a2a_service.register_agent(
+            db,
+            agent_data,
+            created_by=metadata["created_by"],
+            created_from_ip=metadata["created_from_ip"],
+            created_via=metadata["created_via"],
+            created_user_agent=metadata["created_user_agent"],
+            import_batch_id=metadata["import_batch_id"],
+            federation_source=metadata["federation_source"],
+        )
+
+        # Return redirect to admin page with A2A tab
+        root_path = request.scope.get("root_path", "")
+        return RedirectResponse(f"{root_path}/admin#a2a-agents", status_code=303)
+
+    except A2AAgentNameConflictError as e:
+        LOGGER.error(f"A2A agent name conflict: {e}")
+        root_path = request.scope.get("root_path", "")
+        return RedirectResponse(f"{root_path}/admin#a2a-agents", status_code=303)
+    except A2AAgentError as e:
+        LOGGER.error(f"A2A agent error: {e}")
+        root_path = request.scope.get("root_path", "")
+        return RedirectResponse(f"{root_path}/admin#a2a-agents", status_code=303)
+    except ValidationError as e:
+        LOGGER.error(f"Validation error while creating A2A agent: {e}")
+        root_path = request.scope.get("root_path", "")
+        return RedirectResponse(f"{root_path}/admin#a2a-agents", status_code=303)
+    except Exception as e:
+        LOGGER.error(f"Error creating A2A agent: {e}")
+        root_path = request.scope.get("root_path", "")
+        return RedirectResponse(f"{root_path}/admin#a2a-agents", status_code=303)
+
+
+@admin_router.post("/a2a/{agent_id}/toggle")
+async def admin_toggle_a2a_agent(
+    agent_id: str,
+    request: Request,
+    db: Session = Depends(get_db),
+    user: str = Depends(require_auth),  # pylint: disable=unused-argument
+) -> RedirectResponse:
+    """Toggle A2A agent status via admin UI.
+
+    Args:
+        agent_id: Agent ID
+        request: FastAPI request object
+        db: Database session
+        user: Authenticated user
+
+    Returns:
+        Redirect response to admin page with A2A tab
+
+    Raises:
+        HTTPException: If A2A features are disabled
+    """
+    if not a2a_service or not settings.mcpgateway_a2a_enabled:
+        root_path = request.scope.get("root_path", "")
+        return RedirectResponse(f"{root_path}/admin#a2a-agents", status_code=303)
+
+    try:
+        form = await request.form()
+        activate = form.get("activate", "false").lower() == "true"
+
+        await a2a_service.toggle_agent_status(db, agent_id, activate)
+        root_path = request.scope.get("root_path", "")
+        return RedirectResponse(f"{root_path}/admin#a2a-agents", status_code=303)
+
+    except A2AAgentNotFoundError as e:
+        LOGGER.error(f"A2A agent toggle failed - not found: {e}")
+        root_path = request.scope.get("root_path", "")
+        return RedirectResponse(f"{root_path}/admin#a2a-agents", status_code=303)
+    except Exception as e:
+        LOGGER.error(f"Error toggling A2A agent: {e}")
+        root_path = request.scope.get("root_path", "")
+        return RedirectResponse(f"{root_path}/admin#a2a-agents", status_code=303)
+
+
+@admin_router.post("/a2a/{agent_id}/delete")
+async def admin_delete_a2a_agent(
+    agent_id: str,
+    request: Request,  # pylint: disable=unused-argument
+    db: Session = Depends(get_db),
+    user: str = Depends(require_auth),  # pylint: disable=unused-argument
+) -> RedirectResponse:
+    """Delete A2A agent via admin UI.
+
+    Args:
+        agent_id: Agent ID
+        request: FastAPI request object
+        db: Database session
+        user: Authenticated user
+
+    Returns:
+        Redirect response to admin page with A2A tab
+
+    Raises:
+        HTTPException: If A2A features are disabled
+    """
+    if not a2a_service or not settings.mcpgateway_a2a_enabled:
+        root_path = request.scope.get("root_path", "")
+        return RedirectResponse(f"{root_path}/admin#a2a-agents", status_code=303)
+
+    try:
+        await a2a_service.delete_agent(db, agent_id)
+        root_path = request.scope.get("root_path", "")
+        return RedirectResponse(f"{root_path}/admin#a2a-agents", status_code=303)
+
+    except A2AAgentNotFoundError as e:
+        LOGGER.error(f"A2A agent delete failed - not found: {e}")
+        root_path = request.scope.get("root_path", "")
+        return RedirectResponse(f"{root_path}/admin#a2a-agents", status_code=303)
+    except Exception as e:
+        LOGGER.error(f"Error deleting A2A agent: {e}")
+        root_path = request.scope.get("root_path", "")
+        return RedirectResponse(f"{root_path}/admin#a2a-agents", status_code=303)
+
+
+@admin_router.post("/a2a/{agent_id}/test")
+async def admin_test_a2a_agent(
+    agent_id: str,
+    request: Request,  # pylint: disable=unused-argument
+    db: Session = Depends(get_db),
+    user: str = Depends(require_auth),  # pylint: disable=unused-argument
+) -> JSONResponse:
+    """Test A2A agent via admin UI.
+
+    Args:
+        agent_id: Agent ID
+        request: FastAPI request object
+        db: Database session
+        user: Authenticated user
+
+    Returns:
+        JSON response with test results
+
+    Raises:
+        HTTPException: If A2A features are disabled
+    """
+    if not a2a_service or not settings.mcpgateway_a2a_enabled:
+        return JSONResponse(content={"success": False, "error": "A2A features are disabled"}, status_code=403)
+
+    try:
+        # Get the agent by ID
+        agent = await a2a_service.get_agent(db, agent_id)
+
+        # Prepare test parameters based on agent type and endpoint
+        if agent.agent_type in ["generic", "jsonrpc"] or agent.endpoint_url.endswith("/"):
+            # JSONRPC format for agents that expect it
+            test_params = {
+                "method": "message/send",
+                "params": {"message": {"messageId": f"admin-test-{int(time.time())}", "role": "user", "parts": [{"type": "text", "text": "Hello from MCP Gateway Admin UI test!"}]}},
+            }
+        else:
+            # Generic test format
+            test_params = {"message": "Hello from MCP Gateway Admin UI test!", "test": True, "timestamp": int(time.time())}
+
+        # Invoke the agent
+        result = await a2a_service.invoke_agent(db, agent.name, test_params, "admin_test")
+
+        return JSONResponse(content={"success": True, "result": result, "agent_name": agent.name, "test_timestamp": time.time()})
+
+    except Exception as e:
+        LOGGER.error(f"Error testing A2A agent {agent_id}: {e}")
+        return JSONResponse(content={"success": False, "error": str(e), "agent_id": agent_id}, status_code=500)

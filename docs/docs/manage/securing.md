@@ -4,7 +4,7 @@ This guide provides essential security configurations and best practices for dep
 
 ## ⚠️ Critical Security Notice
 
-**MCP Gateway is currently in early beta (v0.5.0)** and requires careful security configuration for production use:
+**MCP Gateway is currently in early beta (v0.6.0)** and requires careful security configuration for production use:
 
 - The **Admin UI is development-only** and must be disabled in production
 - MCP Gateway is **not a standalone product** - it's an open source component to integrate into your solution
@@ -242,7 +242,7 @@ MCPGATEWAY_LOG_SENSITIVE_DATA=false     # Never log sensitive data
 
 - [Security Policy](https://github.com/IBM/mcp-context-forge/blob/main/SECURITY.md) - Full security documentation
 - [Deployment Options](index.md) - Various deployment methods
-- [Environment Variables](../configuration/environment-variables.md) - Complete configuration reference
+- [Environment Variables](../index.md#configuration-env-or-env-vars) - Complete configuration reference
 
 ## ⚡ Quick Start Security Commands
 
