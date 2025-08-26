@@ -1,0 +1,14 @@
+curl -s -X POST -H "Authorization: Bearer $MCPGATEWAY_BEARER_TOKEN" \
+     -H "Content-Type: application/json" \
+     -d '{"name":"test-sre","url":"http://127.0.0.1:8200/sse"}' \
+     http://localhost:4444/gateways
+
+
+curl -s -X POST -H "Authorization: Bearer $MCPGATEWAY_BEARER_TOKEN" \
+     -H "Content-Type: application/json" \
+     -d '{"name":"test-sre-http","url":"http://localhost:8400"}' \
+     http://localhost:4444/gateways
+
+MCPGATEWAY_UI_ENABLED=true
+MCPGATEWAY_ADMIN_API_ENABLED=true
+export MCPGATEWAY_BEARER_TOKEN=eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9.eyJ1c2VybmFtZSI6ImFkbWluIiwiZXhwIjoxNzU2NzU2MjIxfQ.lMKIMiEKAP-33tBhLzkpJ9Up_w2rikXQfx2UaowKksY

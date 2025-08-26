@@ -1,0 +1,9 @@
+description: "A linux command preprocessing plugin for OPA policies."
+author: "Teryl Taylor"
+version: "0.1.0"
+available_hooks:
+  - "prompt_pre_hook"
+  - "prompt_post_hook"
+  - "tool_pre_hook"
+  - "tool_post_hook"
+default_configs:

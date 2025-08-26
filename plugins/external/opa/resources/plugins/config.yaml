@@ -15,7 +15,7 @@ plugins:
     config:
       # Plugin config dict passed to the plugin constructor
       policy: "all path requests must have IBM"
-      server_url: "http://127.0.0.1:8181/v1/data/example"
+      server_url: "http://127.0.0.1:8181/v1/data/srepolicies"
       
 
 # Plugin directories to scan
