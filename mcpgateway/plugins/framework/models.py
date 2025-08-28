@@ -667,7 +667,7 @@ class GlobalContext(BaseModel):
             user (str): user ID associated with the request.
             tenant_id (str): tenant ID.
             server_id (str): server ID.
-            metadata (Optional[dict[str,Any]]): a global shared metadata across plugins.
+            metadata (Optional[dict[str,Any]]): a global shared metadata across plugins (Read-only from plugin's perspective).
             state (Optional[dict[str,Any]]): a global shared state across plugins.
 
     Examples:
@@ -692,8 +692,8 @@ class GlobalContext(BaseModel):
     user: Optional[str] = None
     tenant_id: Optional[str] = None
     server_id: Optional[str] = None
-    state: dict[str, Any] = {}
-    metadata: dict[str, Any] = {}
+    state: dict[str, Any] = Field(default_factory=dict)
+    metadata: dict[str, Any] = Field(default_factory=dict)
 
 
 class PluginContext(BaseModel):
@@ -716,9 +716,9 @@ class PluginContext(BaseModel):
         'some value'
     """
 
-    state: dict[str, Any] = {}
+    state: dict[str, Any] = Field(default_factory=dict)
     global_context: GlobalContext
-    metadata: dict[str, Any] = {}
+    metadata: dict[str, Any] = Field(default_factory=dict)
 
     def get_state(self, key: str, default: Any = None) -> Any:
         """Get value from shared state.
@@ -747,11 +747,7 @@ class PluginContext(BaseModel):
         self.metadata.clear()
 
     def is_empty(self) -> bool:
-        """Check whether the state and metadata objects are empty.
-
-        Returns:
-            True if the context state and metadata are empty.
-        """
+        """Check whether the state and metadata objects are empty."""
         return not (self.state or self.metadata or self.global_context.state)
 
 

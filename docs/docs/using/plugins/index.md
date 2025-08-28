@@ -243,7 +243,7 @@ Each plugin can operate in one of four modes:
 | Mode | Description | Use Case |
 |------|-------------|----------|
 | **enforce** | Blocks requests on policy violations and plugin errors | Production guardrails |
-| **enforce_ignore_errors** | Blocks requests on policy violations; logs errors and continues | Guardrails with fault tolerance |
+| **enforce_ignore_errors** | Blocks requests on policy violations but only logs errors | Production guardrails |
 | **permissive** | Logs violations but allows requests | Testing and monitoring |
 | **disabled** | Plugin loaded but not executed | Temporary deactivation |
 
