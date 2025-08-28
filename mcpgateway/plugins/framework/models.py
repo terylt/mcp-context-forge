@@ -747,7 +747,11 @@ class PluginContext(BaseModel):
         self.metadata.clear()
 
     def is_empty(self) -> bool:
-        """Check whether the state and metadata objects are empty."""
+        """Check whether the state and metadata objects are empty.
+
+        Returns:
+            True if the context state and metadata are empty.
+        """
         return not (self.state or self.metadata or self.global_context.state)
 
 
