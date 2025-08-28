@@ -21,7 +21,7 @@ from pydantic import BaseModel
 
 # First-Party
 from mcpgateway.plugins.framework.base import Plugin
-from mcpgateway.plugins.framework.constants import CONTEXT, ERROR, RESULT
+from mcpgateway.plugins.framework.constants import CONTEXT, ERROR, PLUGIN_NAME, RESULT
 from mcpgateway.plugins.framework.errors import convert_exception_to_error
 from mcpgateway.plugins.framework.loader.config import ConfigLoader
 from mcpgateway.plugins.framework.manager import DEFAULT_PLUGIN_TIMEOUT, PluginManager
@@ -136,14 +136,14 @@ class ExternalPluginServer:
         global_plugin_manager = PluginManager()
         plugin_timeout = global_plugin_manager.config.plugin_settings.plugin_timeout if global_plugin_manager.config else DEFAULT_PLUGIN_TIMEOUT
         plugin = global_plugin_manager.get_plugin(plugin_name)
-        result_payload: dict[str, Any] = {}
+        result_payload: dict[str, Any] = {PLUGIN_NAME: plugin_name}
         try:
             if plugin:
                 _payload = payload_model.model_validate(payload)
                 _context = PluginContext.model_validate(context)
                 result = await asyncio.wait_for(hook_function(plugin, _payload, _context), plugin_timeout)
                 result_payload[RESULT] = result.model_dump()
-                if _context.state or _context.metadata or _context.global_context.state:
+                if not _context.is_empty():
                     result_payload[CONTEXT] = _context.model_dump()
                 return result_payload
             raise ValueError(f"Unable to retrieve plugin {plugin_name} to execute.")
