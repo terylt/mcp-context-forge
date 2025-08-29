@@ -794,11 +794,19 @@ class HttpHeaderPayload(RootModel[dict[str, str]]):
     """An HTTP dictionary of headers used in the pre/post HTTP forwarding hooks."""
 
     def __iter__(self):
-        """Custom iterator function to override root attribute."""
+        """Custom iterator function to override root attribute.
+
+        Returns:
+            A custom iterator for header dictionary.
+        """
         return iter(self.root)
 
     def __getitem__(self, item: str) -> str:
-        """Custom getitem function to override root attribute."""
+        """Custom getitem function to override root attribute.
+
+        Returns:
+            A custom accesser for the header dictionary.
+        """
         return self.root[item]
 
 
