@@ -828,6 +828,9 @@ class HttpHeaderPayload(RootModel[dict[str, str]]):
     def __getitem__(self, item: str) -> str:
         """Custom getitem function to override root attribute.
 
+        Args:
+            item: The http header key.
+
         Returns:
             A custom accesser for the header dictionary.
         """
