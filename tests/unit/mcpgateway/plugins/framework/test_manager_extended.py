@@ -78,7 +78,7 @@ async def test_manager_timeout_handling():
             result, _ = await manager.prompt_pre_fetch(prompt, global_context=global_context)
 
         # Should pass since fail_on_plugin_error: false
-        # assert result.continue_processing
+        assert result.continue_processing
         #assert result.violation is not None
         #assert result.violation.code == "PLUGIN_TIMEOUT"
         #assert "timeout" in result.violation.description.lower()
@@ -136,7 +136,7 @@ async def test_manager_exception_handling():
             result, _ = await manager.prompt_pre_fetch(prompt, global_context=global_context)
 
         # Should block in enforce mode
-        #assert result.continue_processing
+        assert result.continue_processing
         #assert result.violation is not None
         #assert result.violation.code == "PLUGIN_ERROR"
         #assert "error" in result.violation.description.lower()

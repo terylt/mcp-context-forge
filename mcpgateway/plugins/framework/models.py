@@ -667,7 +667,7 @@ class GlobalContext(BaseModel):
             user (str): user ID associated with the request.
             tenant_id (str): tenant ID.
             server_id (str): server ID.
-            metadata (Optional[dict[str,Any]]): a global shared metadata across plugins (Read-only from plugin's perspective).
+            metadata (Optional[dict[str,Any]]): a global shared metadata across plugins.
             state (Optional[dict[str,Any]]): a global shared state across plugins.
 
     Examples:
@@ -692,8 +692,8 @@ class GlobalContext(BaseModel):
     user: Optional[str] = None
     tenant_id: Optional[str] = None
     server_id: Optional[str] = None
-    state: dict[str, Any] = Field(default_factory=dict)
-    metadata: dict[str, Any] = Field(default_factory=dict)
+    state: dict[str, Any] = {}
+    metadata: dict[str, Any] = {}
 
 
 class PluginContext(BaseModel):
@@ -716,9 +716,9 @@ class PluginContext(BaseModel):
         'some value'
     """
 
-    state: dict[str, Any] = Field(default_factory=dict)
+    state: dict[str, Any] = {}
     global_context: GlobalContext
-    metadata: dict[str, Any] = Field(default_factory=dict)
+    metadata: dict[str, Any] = {}
 
     def get_state(self, key: str, default: Any = None) -> Any:
         """Get value from shared state.
