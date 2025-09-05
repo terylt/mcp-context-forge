@@ -17,6 +17,10 @@ plugin_dirs:
 plugin_settings:
   parallel_execution_within_band: true
   plugin_timeout: 30
+<<<<<<< HEAD
   fail_on_plugin_error: true
+=======
+  fail_on_plugin_error: true 
+>>>>>>> a810e799 (rebase: rebased with main, fixing merge conflicts)
   enable_plugin_api: true
   plugin_health_check_interval: 60

@@ -222,6 +222,38 @@ class ExternalPlugin(Plugin):
             raise PluginError(error=convert_exception_to_error(e, plugin_name=self.name))
         raise PluginError(error=PluginErrorModel(message=f"Received invalid response. Result = {result}", plugin_name=self.name))
 
+    async def __invoke_hook(self, payload_result_model: Type[P], hook_type: HookType, payload: BaseModel, context: PluginContext) -> P:
+        """Invoke an external plugin hook using the MCP protocol.
+
+        Args:
+            payload_result_model: The type of result payload for the hook.
+            hook_type:  The type of hook invoked (i.e., prompt_pre_hook)
+            payload: The payload to be passed to the hook.
+            context: The plugin context passed to the run.
+
+        Returns:
+            The resulting payload from the plugin.
+        """
+
+        result = await self._session.call_tool(hook_type, {PLUGIN_NAME: self.name, PAYLOAD: payload, CONTEXT: context})
+        try:
+            for content in result.content:
+                res = json.loads(content.text)
+                if CONTEXT in res:
+                    cxt = PluginContext.model_validate(res[CONTEXT])
+                    context.state = cxt.state
+                    context.metadata = cxt.metadata
+                    context.global_context.state = cxt.global_context.state
+                if RESULT in res:
+                    return payload_result_model.model_validate(res[RESULT])
+                if ERROR in res:
+                    error = PluginErrorModel.model_validate(res[ERROR])
+                    raise PluginError(error)
+        except Exception as ex:
+            logger.exception(ex)
+            raise
+        raise PluginError(error=PluginErrorModel(message=f"Received invalid response. Result = {result}", plugin_name=self.name))
+
     async def prompt_pre_fetch(self, payload: PromptPrehookPayload, context: PluginContext) -> PromptPrehookResult:
         """Plugin hook run before a prompt is retrieved and rendered.
 
