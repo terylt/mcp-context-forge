@@ -152,7 +152,7 @@ async def test_manager_exception_handling():
         # Should continue in permissive mode
         assert result.continue_processing
         assert result.violation is None
-    
+
     plugin_config.mode = PluginMode.ENFORCE_IGNORE_ERROR
     with patch.object(manager._registry, 'get_plugins_for_hook') as mock_get:
         plugin_ref = PluginRef(error_plugin)
