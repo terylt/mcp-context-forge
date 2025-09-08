@@ -77,6 +77,20 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/) 
   DB_POOL_TIMEOUT=30           # Seconds to wait for connection before timeout (default: 30)
   DB_POOL_RECYCLE=3600         # Seconds before recreating connection (default: 3600)
   ```
+* **Complete MariaDB & MySQL Database Support** (#925) - Full production support for MariaDB and MySQL backends:
+  ```bash
+  # MariaDB (recommended MySQL-compatible option):
+  DATABASE_URL=mysql+pymysql://mysql:changeme@localhost:3306/mcp
+
+  # Docker deployment with MariaDB 12.0.2-ubi10:
+  DATABASE_URL=mysql+pymysql://mysql:changeme@mariadb:3306/mcp
+  ```
+  - **36+ database tables** fully compatible with MariaDB 12.0+ and MySQL 8.4+
+  - All **VARCHAR length issues** resolved for MySQL compatibility
+  - **Container support**: MariaDB and MySQL drivers included in all container images
+  - **Complete feature parity** with SQLite and PostgreSQL backends
+  - **Production ready**: Supports all MCP Gateway features including federation, caching, and A2A agents
+
 * **Enhanced JWT Configuration** - Audience, issuer claims, and improved token validation:
   ```bash
   # New JWT configuration options:
@@ -220,8 +234,12 @@ SSO_IBM_VERIFY_ENABLED=false
 #### **Database Migration**
 Database migrations run automatically on startup:
 ```bash
-# Backup your database first
-cp mcp.db mcp.db.backup
+# Backup your database AND .env file first
+cp mcp.db mcp.db.backup.$(date +%Y%m%d_%H%M%S)
+cp .env .env.bak
+
+# Update .env with new multi-tenancy settings
+cp .env.example .env  # then configure PLATFORM_ADMIN_EMAIL and other settings
 
 # Migrations run automatically when you start the server
 make dev  # Migrations execute automatically, then server starts
