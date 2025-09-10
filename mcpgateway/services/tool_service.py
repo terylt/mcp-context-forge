@@ -56,6 +56,7 @@ from mcpgateway.utils.metrics_common import build_top_performers
 from mcpgateway.utils.passthrough_headers import get_passthrough_headers
 from mcpgateway.utils.retry_manager import ResilientHttpClient
 from mcpgateway.utils.services_auth import decode_auth
+from mcpgateway.utils.sqlalchemy_modifier import json_contains_expr
 
 # Local
 from ..config import extract_using_jq
@@ -350,7 +351,7 @@ class ToolService:
         federation_source: Optional[str] = None,
         team_id: Optional[str] = None,
         owner_email: Optional[str] = None,
-        visibility: str = "private",
+        visibility: str = None,
     ) -> ToolRead:
         """Register a new tool with team support.
 
@@ -404,6 +405,15 @@ class ToolService:
             else:
                 auth_type = tool.auth.auth_type
                 auth_value = tool.auth.auth_value
+
+            if team_id is None:
+                team_id = tool.team_id
+
+            if owner_email is None:
+                owner_email = tool.owner_email
+
+            if visibility is None:
+                visibility = tool.visibility or "private"
 
             db_tool = DbTool(
                 original_name=tool.name,
@@ -489,12 +499,7 @@ class ToolService:
 
         # Add tag filtering if tags are provided
         if tags:
-            # Filter tools that have any of the specified tags
-            tag_conditions = []
-            for tag in tags:
-                tag_conditions.append(func.json_contains(DbTool.tags, f'"{tag}"'))
-            if tag_conditions:
-                query = query.where(*tag_conditions)
+            query = query.where(json_contains_expr(db, DbTool.tags, tags, match_any=True))
 
         tools = db.execute(query).scalars().all()
         return [self._convert_tool_to_read(t) for t in tools]
@@ -599,6 +604,9 @@ class ToolService:
         # Apply visibility filter if specified
         if visibility:
             query = query.where(DbTool.visibility == visibility)
+
+        # Filter out private tools not owned by the user and are private
+        query = query.where(~((DbTool.owner_email != user_email) & (DbTool.visibility == "private")))
 
         # Apply pagination following existing patterns
         query = query.offset(skip).limit(limit)
@@ -1120,6 +1128,8 @@ class ToolService:
                 tool.annotations = tool_update.annotations
             if tool_update.jsonpath_filter is not None:
                 tool.jsonpath_filter = tool_update.jsonpath_filter
+            if tool_update.visibility is not None:
+                tool.visibility = tool_update.visibility
 
             if tool_update.auth is not None:
                 if tool_update.auth.auth_type is not None:
