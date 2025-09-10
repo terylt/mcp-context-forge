@@ -203,6 +203,7 @@ class PluginExecutor(Generic[T]):
                 tenant_id=global_context.tenant_id,
                 server_id=global_context.server_id,
                 state={} if not global_context.state else deepcopy(global_context.state),
+                metadata={} if not global_context.metadata else deepcopy(global_context.metadata),
             )
             # Get or create local context for this plugin
             local_context_key = global_context.request_id + pluginref.uuid
