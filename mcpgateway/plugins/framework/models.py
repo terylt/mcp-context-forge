@@ -606,6 +606,14 @@ class HttpHeaderPayload(RootModel[dict[str, str]]):
         """
         return self.root[item]
 
+    def __len__(self):
+        """Custom len function to override root attribute.
+
+        Returns:
+            The len of the header dictionary.
+        """
+        return len(self.root)
+
 
 HttpHeaderPayloadResult = PluginResult[HttpHeaderPayload]
 
@@ -880,6 +888,7 @@ class ToolMetaData(BaseModel):
 class GatewayMetaData(BaseModel):
     """Meta data about the gateway on which the pre/post hooks are being called."""
 
+    model_config = ConfigDict(from_attributes=True)
     id: str
     name: str
     slug: str
