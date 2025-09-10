@@ -44,7 +44,8 @@ from mcpgateway.db import Tool as DbTool
 from mcpgateway.db import ToolMetric
 from mcpgateway.models import TextContent, ToolResult
 from mcpgateway.observability import create_span
-from mcpgateway.plugins.framework import GlobalContext, PluginManager, PluginViolationError, ToolPostInvokePayload, ToolPreInvokePayload
+from mcpgateway.plugins.framework import GatewayMetaData, GlobalContext, HttpHeaderPayload, PluginError, PluginManager, PluginViolationError, ToolMetaData, ToolPostInvokePayload, ToolPreInvokePayload
+from mcpgateway.plugins.framework.constants import GATEWAY_METADATA, TOOL_METADATA
 from mcpgateway.schemas import ToolCreate, ToolRead, ToolUpdate, TopPerformer
 from mcpgateway.services.logging_service import LoggingService
 from mcpgateway.services.oauth_manager import OAuthManager
@@ -797,33 +798,6 @@ class ToolService:
         server_id = gateway_id if isinstance(gateway_id, str) else "unknown"
         global_context = GlobalContext(request_id=request_id, server_id=server_id, tenant_id=None)
 
-        if self._plugin_manager:
-            try:
-                pre_result, context_table = await self._plugin_manager.tool_pre_invoke(payload=ToolPreInvokePayload(name=name, args=arguments), global_context=global_context, local_contexts=None)
-
-                if not pre_result.continue_processing:
-                    # Plugin blocked the request
-                    if pre_result.violation:
-                        plugin_name = pre_result.violation.plugin_name
-                        violation_reason = pre_result.violation.reason
-                        violation_desc = pre_result.violation.description
-                        violation_code = pre_result.violation.code
-                        raise PluginViolationError(f"Tool invocation blocked by plugin {plugin_name}: {violation_code} - {violation_reason} ({violation_desc})", pre_result.violation)
-                    raise PluginViolationError("Tool invocation blocked by plugin")
-
-                # Use modified payload if provided
-                if pre_result.modified_payload:
-                    payload = pre_result.modified_payload
-                    name = payload.name
-                    arguments = payload.args
-            except PluginViolationError:
-                raise
-            except Exception as e:
-                logger.error(f"Error in pre-tool invoke plugin hook: {e}")
-                # Only fail if configured to do so
-                if self._plugin_manager.config and self._plugin_manager.config.plugin_settings.fail_on_plugin_error:
-                    raise
-
         start_time = time.monotonic()
         success = False
         error_message = None
@@ -862,6 +836,22 @@ class ToolService:
                     # Only call get_passthrough_headers if we actually have request headers to pass through
                     if request_headers:
                         headers = get_passthrough_headers(request_headers, headers, db)
+
+                    if self._plugin_manager:
+                        tool_metadata = ToolMetaData.model_validate(tool)
+                        global_context.metadata[TOOL_METADATA] = tool_metadata
+                        pre_result, context_table = await self._plugin_manager.tool_pre_invoke(
+                            payload=ToolPreInvokePayload(name=name, args=arguments, headers=HttpHeaderPayload(headers)),
+                            global_context=global_context,
+                            local_contexts=None,
+                            violations_as_exceptions=True,
+                        )
+                        if pre_result.modified_payload:
+                            payload = pre_result.modified_payload
+                            name = payload.name
+                            arguments = payload.args
+                            if payload.headers:
+                                headers = payload.headers
 
                     # Build the payload based on integration type
                     payload = arguments.copy()
@@ -991,6 +981,24 @@ class ToolService:
                     tool_gateway_id = tool.gateway_id
                     tool_gateway = db.execute(select(DbGateway).where(DbGateway.id == tool_gateway_id).where(DbGateway.enabled)).scalar_one_or_none()
 
+                    if self._plugin_manager:
+                        tool_metadata = ToolMetaData.model_validate(tool)
+                        gateway_metadata = GatewayMetaData.model_validate(tool_gateway)
+                        global_context.metadata[TOOL_METADATA] = tool_metadata
+                        global_context.metadata[GATEWAY_METADATA] = gateway_metadata
+                        pre_result, context_table = await self._plugin_manager.tool_pre_invoke(
+                            payload=ToolPreInvokePayload(name=name, args=arguments, headers=HttpHeaderPayload(headers)),
+                            global_context=global_context,
+                            local_contexts=None,
+                            violations_as_exceptions=True,
+                        )
+                        if pre_result.modified_payload:
+                            payload = pre_result.modified_payload
+                            name = payload.name
+                            arguments = payload.args
+                            if payload.headers:
+                                headers = payload.headers
+
                     tool_call_result = ToolResult(content=[TextContent(text="", type="text")])
                     if transport == "sse":
                         tool_call_result = await connect_to_sse_server(tool_gateway.url)
@@ -1007,39 +1015,25 @@ class ToolService:
 
                 # Plugin hook: tool post-invoke
                 if self._plugin_manager:
-                    try:
-                        post_result, _ = await self._plugin_manager.tool_post_invoke(
-                            payload=ToolPostInvokePayload(name=name, result=tool_result.model_dump(by_alias=True)), global_context=global_context, local_contexts=context_table
-                        )
-                        if not post_result.continue_processing:
-                            # Plugin blocked the request
-                            if post_result.violation:
-                                plugin_name = post_result.violation.plugin_name
-                                violation_reason = post_result.violation.reason
-                                violation_desc = post_result.violation.description
-                                violation_code = post_result.violation.code
-                                raise PluginViolationError(f"Tool result blocked by plugin {plugin_name}: {violation_code} - {violation_reason} ({violation_desc})", post_result.violation)
-                            raise PluginViolationError("Tool result blocked by plugin")
-
-                        # Use modified payload if provided
-                        if post_result.modified_payload:
-                            # Reconstruct ToolResult from modified result
-                            modified_result = post_result.modified_payload.result
-                            if isinstance(modified_result, dict) and "content" in modified_result:
-                                tool_result = ToolResult(content=modified_result["content"])
-                            else:
-                                # If result is not in expected format, convert it to text content
-                                tool_result = ToolResult(content=[TextContent(type="text", text=str(modified_result))])
-
-                    except PluginViolationError:
-                        raise
-                    except Exception as e:
-                        logger.error(f"Error in post-tool invoke plugin hook: {e}")
-                        # Only fail if configured to do so
-                        if self._plugin_manager.config and self._plugin_manager.config.plugin_settings.fail_on_plugin_error:
-                            raise
+                    post_result, _ = await self._plugin_manager.tool_post_invoke(
+                        payload=ToolPostInvokePayload(name=name, result=tool_result.model_dump(by_alias=True)),
+                        global_context=global_context,
+                        local_contexts=context_table,
+                        violations_as_exceptions=True,
+                    )
+                    # Use modified payload if provided
+                    if post_result.modified_payload:
+                        # Reconstruct ToolResult from modified result
+                        modified_result = post_result.modified_payload.result
+                        if isinstance(modified_result, dict) and "content" in modified_result:
+                            tool_result = ToolResult(content=modified_result["content"])
+                        else:
+                            # If result is not in expected format, convert it to text content
+                            tool_result = ToolResult(content=[TextContent(type="text", text=str(modified_result))])
 
                 return tool_result
+            except (PluginError, PluginViolationError):
+                raise
             except Exception as e:
                 error_message = str(e)
                 # Set span error status

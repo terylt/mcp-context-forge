@@ -21,7 +21,7 @@ from sqlalchemy.exc import IntegrityError
 from mcpgateway.db import A2AAgent as DbA2AAgent
 from mcpgateway.db import Gateway as DbGateway
 from mcpgateway.db import Tool as DbTool
-from mcpgateway.plugins.framework import PluginViolationError
+from mcpgateway.plugins.framework import PluginError, PluginErrorModel, PluginViolationError, ToolMetaData
 from mcpgateway.schemas import AuthenticationValues, ToolCreate, ToolRead, ToolUpdate
 from mcpgateway.services.tool_service import (
     TextContent,
@@ -72,6 +72,34 @@ def mock_gateway():
 @pytest.fixture
 def mock_tool():
     """Create a mock tool model."""
+    """
+    tool_metadata = ToolMetaData(id = "1",
+    original_name = "test_tool",
+    url = "http://example.com/tools/test",
+    description = "A test tool",
+    integration_type = "MCP",
+    request_type = "SSE",
+    headers = {"Content-Type": "application/json"},
+    input_schema = {"type": "object", "properties": {"param": {"type": "string"}}},
+    jsonpath_filter = "",
+    created_at = "2023-01-01T00:00:00",
+    updated_at = "2023-01-01T00:00:00",
+    enabled = True,
+    reachable = True,
+    auth_type = None,
+    auth_username = None,
+    auth_password = None,
+    auth_token = None,
+    auth_value = None,
+    gateway_id = "1",
+    annotations = {},
+    name = "test-gateway-test-tool",
+    custom_name="test_tool",
+    custom_name_slug = "test-tool",
+    display_name = None,
+    tags = [])
+    """
+
     tool = MagicMock(spec=DbTool)
     tool.id = "1"
     tool.original_name = "test_tool"
@@ -84,6 +112,19 @@ def mock_tool():
     tool.jsonpath_filter = ""
     tool.created_at = "2023-01-01T00:00:00"
     tool.updated_at = "2023-01-01T00:00:00"
+    tool.created_by = "MCP Gateway team"
+    tool.created_from_ip = "1.2.3.4"
+    tool.created_via = "ui"
+    tool.created_user_agent = "Chrome"
+    tool.modified_by = "No one"
+    tool.modified_from_ip = "1.2.3.4"
+    tool.modified_via = "ui"
+    tool.modified_user_agent = "Chrome"
+    tool.import_batch_id = "2"
+    tool.federation_source = "federation_source"
+    tool.team_id = "5"
+    tool.visibility = "private"
+    tool.owner_email = "admin@admin.org"
     tool.enabled = True
     tool.reachable = True
     tool.auth_type = None
@@ -2338,43 +2379,3 @@ class TestToolService:
                 await tool_service.invoke_tool(test_db, "test_tool", {"param": "value"}, request_headers=None)
 
         assert "Plugin error" in str(exc_info.value)
-
-    async def test_invoke_tool_with_plugin_post_invoke_error_continue_on_error(self, tool_service, mock_tool, test_db):
-        """Test invoking tool with plugin post-invoke hook error when fail_on_plugin_error is False."""
-        # Configure tool as REST
-        mock_tool.integration_type = "REST"
-        mock_tool.request_type = "POST"
-        mock_tool.auth_value = None
-
-        # Mock DB to return the tool
-        mock_scalar = Mock()
-        mock_scalar.scalar_one_or_none.return_value = mock_tool
-        test_db.execute = Mock(return_value=mock_scalar)
-
-        # Mock HTTP client response
-        mock_response = AsyncMock()
-        mock_response.raise_for_status = AsyncMock()
-        mock_response.status_code = 200
-        mock_response.json = Mock(return_value={"result": "original response"})
-        tool_service._http_client.request.return_value = mock_response
-
-        # Mock plugin manager and post-invoke hook with error
-        tool_service._plugin_manager = Mock()
-        tool_service._plugin_manager.tool_pre_invoke = AsyncMock(return_value=(Mock(continue_processing=True, violation=None, modified_payload=None), None))
-        tool_service._plugin_manager.tool_post_invoke = AsyncMock(side_effect=Exception("Plugin error"))
-
-        # Mock plugin config to continue on errors
-        mock_plugin_settings = Mock()
-        mock_plugin_settings.fail_on_plugin_error = False
-        mock_config = Mock()
-        mock_config.plugin_settings = mock_plugin_settings
-        tool_service._plugin_manager.config = mock_config
-
-        with (
-            patch("mcpgateway.services.tool_service.decode_auth", return_value={}),
-            patch("mcpgateway.config.extract_using_jq", return_value={"result": "original response"}),
-        ):
-            result = await tool_service.invoke_tool(test_db, "test_tool", {"param": "value"}, request_headers=None)
-
-        # Verify result still succeeded despite plugin error
-        assert result.content[0].text == '{\n  "result": "original response"\n}'
