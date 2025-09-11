@@ -42,8 +42,6 @@ from mcpgateway.plugins.framework.models import (
     Config,
     GlobalContext,
     HookType,
-    HttpHeaderPayload,
-    HttpHeaderPayloadResult,
     PluginCondition,
     PluginContext,
     PluginContextTable,
@@ -78,7 +76,6 @@ logger = logging.getLogger(__name__)
 
 T = TypeVar(
     "T",
-    HttpHeaderPayload,
     PromptPosthookPayload,
     PromptPrehookPayload,
     ResourcePostFetchPayload,
@@ -456,54 +453,6 @@ async def post_resource_fetch(plugin: PluginRef, payload: ResourcePostFetchPaylo
     return await plugin.plugin.resource_post_fetch(payload, context)
 
 
-async def pre_http_forwarding_call(plugin: PluginRef, payload: HttpHeaderPayload, context: PluginContext) -> HttpHeaderPayloadResult:
-    """Call plugin's HTTP pre-forwarding call hook.
-
-    Args:
-        plugin: The plugin to execute.
-        payload: The set of HTTP headers to be analyzed.
-        context: The plugin context.
-
-    Returns:
-        Modified HTTP headers with processing status.
-
-    Examples:
-        >>> from mcpgateway.plugins.framework.base import PluginRef
-        >>> from mcpgateway.plugins.framework import Plugin, HttpHeaderPayload, PluginContext, GlobalContext
-        >>> # Assuming you have a plugin instance:
-        >>> # plugin_ref = PluginRef(my_plugin)
-        >>> payload = HttpHeaderPayload({"Authorization": "Basic QWxhZGRpbjpvcGVuIHNlc2FtZQ=="})
-        >>> context = PluginContext(request_id="123")
-        >>> # In async context:
-        >>> # result = await pre_http_forwarding_call(plugin_ref, payload, context)
-    """
-    return await plugin.plugin.http_pre_forwarding_call(payload, context)
-
-
-async def post_http_forwarding_call(plugin: PluginRef, payload: HttpHeaderPayload, context: PluginContext) -> HttpHeaderPayloadResult:
-    """Call plugin's HTTP post-forwarding call hook.
-
-    Args:
-        plugin: The plugin to execute.
-        payload: The set of HTTP headers to be analyzed.
-        context: The plugin context.
-
-    Returns:
-        Modified HTTP headers with processing status.
-
-    Examples:
-        >>> from mcpgateway.plugins.framework.base import PluginRef
-        >>> from mcpgateway.plugins.framework import Plugin, HttpHeaderPayload, PluginContext, GlobalContext
-        >>> # Assuming you have a plugin instance:
-        >>> # plugin_ref = PluginRef(my_plugin)
-        >>> payload = HttpHeaderPayload({"Authorization": "Basic QWxhZGRpbjpvcGVuIHNlc2FtZQ=="})
-        >>> context = PluginContext(request_id="123")
-        >>> # In async context:
-        >>> # result = await post_http_forwarding_call(plugin_ref, payload, context)
-    """
-    return await plugin.plugin.http_post_forwarding_call(payload, context)
-
-
 class PluginManager:
     """Plugin manager for managing the plugin lifecycle.
 
@@ -548,7 +497,6 @@ class PluginManager:
     _post_tool_executor: PluginExecutor[ToolPostInvokePayload] = PluginExecutor[ToolPostInvokePayload]()
     _resource_pre_executor: PluginExecutor[ResourcePreFetchPayload] = PluginExecutor[ResourcePreFetchPayload]()
     _resource_post_executor: PluginExecutor[ResourcePostFetchPayload] = PluginExecutor[ResourcePostFetchPayload]()
-    _http_executor: PluginExecutor[HttpHeaderPayload] = PluginExecutor[HttpHeaderPayload]()
 
     # Context cleanup tracking
     _context_store: Dict[str, Tuple[PluginContextTable, float]] = {}
@@ -1034,73 +982,5 @@ class PluginManager:
         # Clean up stored context after post-fetch
         if global_context.request_id in self._context_store:
             del self._context_store[global_context.request_id]
-
-        return result
-
-    async def http_pre_forwarding_call(
-        self, payload: HttpHeaderPayload, global_context: GlobalContext, local_contexts: Optional[PluginContextTable] = None, violations_as_exceptions: bool = False
-    ) -> tuple[HttpHeaderPayloadResult, PluginContextTable | None]:
-        """Execute pre-fetch hooks before an operation is called.
-
-        Args:
-            payload: The http payload containing http headers passed from requests to responses.
-            global_context: Shared context for all plugins with request metadata.
-            local_contexts: Optional existing contexts from previous hook executions.
-            violations_as_exceptions: Raise violations as exceptions rather than as returns.
-
-        Returns:
-            A tuple containing:
-            - HttpHeaderPayloadResult with processing status and modified headers
-            - PluginContextTable with plugin contexts for state management
-        """
-        # Get plugins configured for this hook
-        plugins = self._registry.get_plugins_for_hook(HookType.HTTP_PRE_FORWARDING_CALL)
-
-        def compare(payload: HttpHeaderPayload, conditions: list[PluginCondition], context: GlobalContext):
-            return True
-
-        # Execute plugins
-        result = await self._http_executor.execute(plugins, payload, global_context, pre_http_forwarding_call, compare, local_contexts, violations_as_exceptions)
-
-        # Store context for potential post-fetch
-        if result[1]:
-            self._context_store[global_context.request_id] = (result[1], time.time())
-
-        # Periodic cleanup
-        await self._cleanup_old_contexts()
-
-        return result
-
-    async def http_post_forwarding_call(
-        self, payload: HttpHeaderPayload, global_context: GlobalContext, local_contexts: Optional[PluginContextTable] = None, violations_as_exceptions: bool = False
-    ) -> tuple[HttpHeaderPayloadResult, PluginContextTable | None]:
-        """Execute post-fetch hooks after an operation is complete.
-
-        Args:
-            payload: The http payload containing http headers passed from requests to responses.
-            global_context: Shared context for all plugins with request metadata.
-            local_contexts: Optional existing contexts from previous hook executions.
-            violations_as_exceptions: Raise violations as exceptions rather than as returns.
-
-        Returns:
-            A tuple containing:
-            - HttpHeaderPayloadResult with processing status and modified headers
-            - PluginContextTable with plugin contexts for state management
-        """
-        # Get plugins configured for this hook
-        plugins = self._registry.get_plugins_for_hook(HookType.HTTP_POST_FORWARDING_CALL)
-
-        def compare(payload: HttpHeaderPayload, conditions: list[PluginCondition], context: GlobalContext):
-            return True
-
-        # Execute plugins
-        result = await self._http_executor.execute(plugins, payload, global_context, post_http_forwarding_call, compare, local_contexts, violations_as_exceptions)
-
-        # Store context for potential post-fetch
-        if result[1]:
-            self._context_store[global_context.request_id] = (result[1], time.time())
-
-        # Periodic cleanup
-        await self._cleanup_old_contexts()
 
         return result

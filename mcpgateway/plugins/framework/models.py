@@ -10,13 +10,12 @@ the base plugin layer including configurations, and contexts.
 """
 
 # Standard
-from datetime import datetime
 from enum import Enum
 from pathlib import Path
 from typing import Any, Generic, Optional, Self, TypeVar
 
 # Third-Party
-from pydantic import BaseModel, ConfigDict, Field, field_serializer, field_validator, model_validator, PrivateAttr, RootModel, ValidationInfo
+from pydantic import BaseModel, Field, field_serializer, field_validator, model_validator, PrivateAttr, RootModel, ValidationInfo
 
 # First-Party
 from mcpgateway.models import PromptResult
@@ -853,102 +852,3 @@ class ResourcePostFetchPayload(BaseModel):
 
 ResourcePreFetchResult = PluginResult[ResourcePreFetchPayload]
 ResourcePostFetchResult = PluginResult[ResourcePostFetchPayload]
-
-
-class ToolMetaData(BaseModel):
-    """Meta data about the tool on which the pre/post tool hook is being called."""
-
-    model_config = ConfigDict(from_attributes=True)
-    id: str
-    name: str
-    original_name: str
-    url: Optional[str] = None
-    description: Optional[str]
-    integration_type: str
-    request_type: str
-    headers: Optional[dict[str, str]]
-    input_schema: dict[str, Any]
-    annotations: Optional[dict[str, Any]]
-    created_at: datetime
-    updated_at: datetime
-    enabled: bool
-    reachable: bool
-    jsonpath_filter: str
-    tags: list[str]
-
-    # Comprehensive metadata for audit tracking
-    created_by: Optional[str]
-    created_from_ip: Optional[str]
-    created_via: Optional[str]
-    created_user_agent: Optional[str]
-
-    modified_by: Optional[str]
-    modified_from_ip: Optional[str]
-    modified_via: Optional[str]
-    modified_user_agent: Optional[str]
-
-    import_batch_id: Optional[str]
-    federation_source: Optional[str]
-    version: int
-
-    # Request type and authentication fields
-    auth_type: Optional[str]  # "basic", "bearer", or None
-    auth_value: Optional[str]
-
-    # custom_name,custom_name_slug, display_name
-    custom_name: Optional[str]
-    custom_name_slug: Optional[str]
-    display_name: Optional[str]
-
-    # Federation relationship with a local gateway
-    gateway_id: Optional[str]
-
-    # Team scoping fields for resource organization
-    team_id: Optional[str]
-    owner_email: Optional[str]
-    visibility: str
-
-
-class GatewayMetaData(BaseModel):
-    """Meta data about the gateway on which the pre/post hooks are being called."""
-
-    model_config = ConfigDict(from_attributes=True)
-    id: str
-    name: str
-    slug: str
-    url: Optional[str] = None
-    description: Optional[str]
-    transport: str
-    capabilities: dict[str, Any]
-    created_at: datetime
-    updated_at: datetime
-    enabled: bool
-    reachable: bool
-    last_seen: Optional[datetime]
-    tags: list[str]
-
-    # Comprehensive metadata for audit tracking
-    created_by: Optional[str]
-    created_from_ip: Optional[str]
-    created_via: Optional[str]
-    created_user_agent: Optional[str]
-
-    modified_by: Optional[str]
-    modified_from_ip: Optional[str]
-    modified_via: Optional[str]
-    modified_user_agent: Optional[str]
-
-    import_batch_id: Optional[str]
-    federation_source: Optional[str]
-    version: int
-
-    # Header passthrough configuration
-    passthrough_headers: Optional[list[str]]  # Store list of strings as JSON array
-    # Request type and authentication fields
-    auth_type: Optional[str]  # "basic", "bearer", "headers", "oauth" or None
-    auth_value: Optional[dict[str, str]]
-
-    # Team scoping fields for resource organization
-    team_id: Optional[str]
-    owner_email: Optional[str]
-    visibility: str
