@@ -21,7 +21,7 @@ from sqlalchemy.exc import IntegrityError
 from mcpgateway.db import A2AAgent as DbA2AAgent
 from mcpgateway.db import Gateway as DbGateway
 from mcpgateway.db import Tool as DbTool
-from mcpgateway.plugins.framework import PluginError, PluginErrorModel, PluginViolationError, ToolMetaData
+from mcpgateway.plugins.framework import PluginError, PluginErrorModel, PluginViolationError
 from mcpgateway.schemas import AuthenticationValues, ToolCreate, ToolRead, ToolUpdate
 from mcpgateway.services.tool_service import (
     TextContent,
@@ -47,7 +47,7 @@ def tool_service():
 def mock_gateway():
     """Create a mock gateway model."""
     gw = MagicMock(spec=DbGateway)
-    gw.id = 1
+    gw.id = "1"
     gw.name = "test_gateway"
     gw.slug = "test-gateway"
     gw.url = "http://example.com/gateway"
@@ -55,6 +55,11 @@ def mock_gateway():
     gw.transport = "SSE"
     gw.capabilities = {"prompts": {"listChanged": True}, "resources": {"listChanged": True}, "tools": {"listChanged": True}}
     gw.created_at = gw.updated_at = gw.last_seen = "2025-01-01T00:00:00Z"
+    gw.modified_by = gw.created_by = "Someone"
+    gw.modified_via = gw.created_via = "ui"
+    gw.modified_from_ip = gw.created_from_ip = "127.0.0.1"
+    gw.modified_user_agent = gw.created_user_agent = "Chrome"
+    gw.import_batch_id = gw.federation_source = gw.team_id = gw.visibility = gw.owner_email = None
 
     # one dummy tool hanging off the gateway
     tool = MagicMock(spec=DbTool, id=101, name="dummy_tool")
@@ -72,34 +77,6 @@ def mock_gateway():
 @pytest.fixture
 def mock_tool():
     """Create a mock tool model."""
-    """
-    tool_metadata = ToolMetaData(id = "1",
-    original_name = "test_tool",
-    url = "http://example.com/tools/test",
-    description = "A test tool",
-    integration_type = "MCP",
-    request_type = "SSE",
-    headers = {"Content-Type": "application/json"},
-    input_schema = {"type": "object", "properties": {"param": {"type": "string"}}},
-    jsonpath_filter = "",
-    created_at = "2023-01-01T00:00:00",
-    updated_at = "2023-01-01T00:00:00",
-    enabled = True,
-    reachable = True,
-    auth_type = None,
-    auth_username = None,
-    auth_password = None,
-    auth_token = None,
-    auth_value = None,
-    gateway_id = "1",
-    annotations = {},
-    name = "test-gateway-test-tool",
-    custom_name="test_tool",
-    custom_name_slug = "test-tool",
-    display_name = None,
-    tags = [])
-    """
-
     tool = MagicMock(spec=DbTool)
     tool.id = "1"
     tool.original_name = "test_tool"
@@ -1430,6 +1407,9 @@ class TestToolService:
             reachable=True,
             auth_type="bearer",  #  ←← attribute your error complained about
             auth_value="Bearer abc123",
+            capabilities = {"prompts": {"listChanged": True}, "resources": {"listChanged": True}, "tools": {"listChanged": True}},
+            transport = "STREAMABLEHTTP",
+            passthrough_headers = [],
         )
         # Configure tool as REST
         mock_tool.integration_type = "MCP"
@@ -1530,6 +1510,9 @@ class TestToolService:
             reachable=True,
             auth_type="bearer",  #  ←← attribute your error complained about
             auth_value="Bearer abc123",
+            capabilities = {"prompts": {"listChanged": True}, "resources": {"listChanged": True}, "tools": {"listChanged": True}},
+            transport = "STREAMABLEHTTP",
+            passthrough_headers = [],
         )
         # Configure tool as REST
         mock_tool.integration_type = "MCP"

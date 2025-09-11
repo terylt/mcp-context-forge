@@ -42,9 +42,12 @@ from mcpgateway.db import Gateway as DbGateway
 from mcpgateway.db import server_tool_association
 from mcpgateway.db import Tool as DbTool
 from mcpgateway.db import ToolMetric
-from mcpgateway.models import TextContent, ToolResult
+from mcpgateway.models import Gateway as PydanticGateway
+from mcpgateway.models import TextContent
+from mcpgateway.models import Tool as PydanticTool
+from mcpgateway.models import ToolResult
 from mcpgateway.observability import create_span
-from mcpgateway.plugins.framework import GatewayMetaData, GlobalContext, HttpHeaderPayload, PluginError, PluginManager, PluginViolationError, ToolMetaData, ToolPostInvokePayload, ToolPreInvokePayload
+from mcpgateway.plugins.framework import GlobalContext, HttpHeaderPayload, PluginError, PluginManager, PluginViolationError, ToolPostInvokePayload, ToolPreInvokePayload
 from mcpgateway.plugins.framework.constants import GATEWAY_METADATA, TOOL_METADATA
 from mcpgateway.schemas import ToolCreate, ToolRead, ToolUpdate, TopPerformer
 from mcpgateway.services.logging_service import LoggingService
@@ -864,7 +867,7 @@ class ToolService:
                         headers = get_passthrough_headers(request_headers, headers, db)
 
                     if self._plugin_manager:
-                        tool_metadata = ToolMetaData.model_validate(tool)
+                        tool_metadata = PydanticTool.model_validate(tool)
                         global_context.metadata[TOOL_METADATA] = tool_metadata
                         pre_result, context_table = await self._plugin_manager.tool_pre_invoke(
                             payload=ToolPreInvokePayload(name=name, args=arguments, headers=HttpHeaderPayload(headers)),
@@ -877,7 +880,7 @@ class ToolService:
                             name = payload.name
                             arguments = payload.args
                             if payload.headers:
-                                headers = payload.headers
+                                headers = payload.headers.model_dump()
 
                     # Build the payload based on integration type
                     payload = arguments.copy()
@@ -1008,8 +1011,8 @@ class ToolService:
                     tool_gateway = db.execute(select(DbGateway).where(DbGateway.id == tool_gateway_id).where(DbGateway.enabled)).scalar_one_or_none()
 
                     if self._plugin_manager:
-                        tool_metadata = ToolMetaData.model_validate(tool)
-                        gateway_metadata = GatewayMetaData.model_validate(tool_gateway)
+                        tool_metadata = PydanticTool.model_validate(tool)
+                        gateway_metadata = PydanticGateway.model_validate(tool_gateway)
                         global_context.metadata[TOOL_METADATA] = tool_metadata
                         global_context.metadata[GATEWAY_METADATA] = gateway_metadata
                         pre_result, context_table = await self._plugin_manager.tool_pre_invoke(
@@ -1023,7 +1026,7 @@ class ToolService:
                             name = payload.name
                             arguments = payload.args
                             if payload.headers:
-                                headers = payload.headers
+                                headers = payload.headers.model_dump()
 
                     tool_call_result = ToolResult(content=[TextContent(text="", type="text")])
                     if transport == "sse":
