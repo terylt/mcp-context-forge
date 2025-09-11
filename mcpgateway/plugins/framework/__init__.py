@@ -21,7 +21,6 @@ from mcpgateway.plugins.framework.loader.config import ConfigLoader
 from mcpgateway.plugins.framework.loader.plugin import PluginLoader
 from mcpgateway.plugins.framework.manager import PluginManager
 from mcpgateway.plugins.framework.models import (
-    GatewayMetaData,
     GlobalContext,
     HttpHeaderPayload,
     HttpHeaderPayloadResult,
@@ -42,7 +41,6 @@ from mcpgateway.plugins.framework.models import (
     ResourcePostFetchResult,
     ResourcePreFetchPayload,
     ResourcePreFetchResult,
-    ToolMetaData,
     ToolPostInvokePayload,
     ToolPostInvokeResult,
     ToolPreInvokePayload,
@@ -52,7 +50,6 @@ from mcpgateway.plugins.framework.models import (
 __all__ = [
     "ConfigLoader",
     "ExternalPluginServer",
-    "GatewayMetaData",
     "GlobalContext",
     "HookType",
     "HttpHeaderPayload",
@@ -78,7 +75,6 @@ __all__ = [
     "ResourcePostFetchResult",
     "ResourcePreFetchPayload",
     "ResourcePreFetchResult",
-    "ToolMetaData",
     "ToolPostInvokePayload",
     "ToolPostInvokeResult",
     "ToolPreInvokePayload",
