@@ -524,7 +524,11 @@ async def plugin_violation_exception_handler(_request: Request, exc: PluginViola
         >>> hasattr(result, 'body')
         True
     """
-    return JSONResponse(status_code=403, content={"detail": "policy_deny"})
+    response_details = {
+        "detail" : "policy_deny",
+        "message" : exc.message
+    }
+    return JSONResponse(status_code=403, content={"detail": response_details})
 
 
 @app.exception_handler(PluginError)
