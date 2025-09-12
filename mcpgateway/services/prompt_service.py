@@ -565,6 +565,7 @@ class PromptService:
             PluginViolationError: If prompt violates a plugin policy
             PromptNotFoundError: If prompt not found
             PromptError: For other prompt errors
+            PluginError: If encounters issue with plugin
 
         Examples:
             >>> from mcpgateway.services.prompt_service import PromptService
