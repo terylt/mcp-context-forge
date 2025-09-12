@@ -51,38 +51,47 @@ class ServerNotFoundError(ServerError):
 class ServerNameConflictError(ServerError):
     """Raised when a server name conflicts with an existing one."""
 
-    def __init__(self, name: str, is_active: bool = True, server_id: Optional[int] = None):
-        """Initialize a ServerNameConflictError exception.
+    def __init__(self, name: str, is_active: bool = True, server_id: Optional[int] = None, visibility: str = "public") -> None:
+        """
+        Initialize a ServerNameConflictError exception.
 
-        Creates an exception that indicates a server name conflict, with additional
-        context about whether the conflicting server is active and its ID if known.
-        The error message is customized based on the server's active status.
+        This exception indicates a server name conflict, with additional context about visibility,
+        whether the conflicting server is active, and its ID if known. The error message starts
+        with the visibility information.
+
+        Visibility rules:
+            - public: Restricts server names globally (across all teams).
+            - team: Restricts server names only within the same team.
 
         Args:
             name: The server name that caused the conflict.
-            is_active: Whether the conflicting server is currently active.
-                    Defaults to True.
-            server_id: The ID of the conflicting server, if known.
-                    Only included in message for inactive servers.
+            is_active: Whether the conflicting server is currently active. Defaults to True.
+            server_id: The ID of the conflicting server, if known. Only included in message for inactive servers.
+            visibility: The visibility of the conflicting server (e.g., "public", "private", "team").
 
         Examples:
             >>> error = ServerNameConflictError("My Server")
             >>> str(error)
-            'Server already exists with name: My Server'
+            'Public Server already exists with name: My Server'
             >>> error = ServerNameConflictError("My Server", is_active=False, server_id=123)
             >>> str(error)
-            'Server already exists with name: My Server (currently inactive, ID: 123)'
-            >>> error.name
-            'My Server'
+            'Public Server already exists with name: My Server (currently inactive, ID: 123)'
             >>> error.is_active
             False
             >>> error.server_id
             123
+            >>> error = ServerNameConflictError("My Server", is_active=False, visibility="team")
+            >>> str(error)
+            'Team Server already exists with name: My Server (currently inactive, ID: None)'
+            >>> error.is_active
+            False
+            >>> error.server_id is None
+            True
         """
         self.name = name
         self.is_active = is_active
         self.server_id = server_id
-        message = f"Server already exists with name: {name}"
+        message = f"{visibility.capitalize()} Server already exists with name: {name}"
         if not is_active:
             message += f" (currently inactive, ID: {server_id})"
         super().__init__(message)
@@ -232,6 +241,14 @@ class ServerService:
         server_dict["associated_prompts"] = [prompt.id for prompt in server.prompts] if server.prompts else []
         server_dict["associated_a2a_agents"] = [agent.id for agent in server.a2a_agents] if server.a2a_agents else []
         server_dict["tags"] = server.tags or []
+
+        # Include metadata fields for proper API response
+        server_dict["created_by"] = getattr(server, "created_by", None)
+        server_dict["modified_by"] = getattr(server, "modified_by", None)
+        server_dict["created_at"] = getattr(server, "created_at", None)
+        server_dict["updated_at"] = getattr(server, "updated_at", None)
+        server_dict["version"] = getattr(server, "version", None)
+
         return ServerRead.model_validate(server_dict)
 
     def _assemble_associated_items(
@@ -283,7 +300,16 @@ class ServerService:
         }
 
     async def register_server(
-        self, db: Session, server_in: ServerCreate, created_by: Optional[str] = None, team_id: Optional[str] = None, owner_email: Optional[str] = None, visibility: str = "private"
+        self,
+        db: Session,
+        server_in: ServerCreate,
+        created_by: Optional[str] = None,
+        created_from_ip: Optional[str] = None,
+        created_via: Optional[str] = None,
+        created_user_agent: Optional[str] = None,
+        team_id: Optional[str] = None,
+        owner_email: Optional[str] = None,
+        visibility: str = "private",
     ) -> ServerRead:
         """
         Register a new server in the catalog and validate that all associated items exist.
@@ -303,6 +329,9 @@ class ServerService:
             server_in (ServerCreate): The server creation schema containing server details and lists of
                 associated tool, resource, and prompt IDs (as strings).
             created_by (Optional[str]): Email of the user creating the server, used for ownership tracking.
+            created_from_ip (Optional[str]): IP address from which the creation request originated.
+            created_via (Optional[str]): Source of creation (api, ui, import).
+            created_user_agent (Optional[str]): User agent string from the creation request.
             team_id (Optional[str]): Team ID to assign the server to.
             owner_email (Optional[str]): Email of the user who owns this server.
             visibility (str): Server visibility level (private, team, public).
@@ -312,6 +341,7 @@ class ServerService:
 
         Raises:
             IntegrityError: If a database integrity error occurs.
+            ServerNameConflictError: If a server name conflict occurs (public or team visibility).
             ServerError: If any associated tool, resource, or prompt does not exist, or if any other registration error occurs.
 
         Examples:
@@ -345,8 +375,24 @@ class ServerService:
                 team_id=getattr(server_in, "team_id", None) or team_id,
                 owner_email=getattr(server_in, "owner_email", None) or owner_email or created_by,
                 visibility=getattr(server_in, "visibility", None) or visibility,
+                # Metadata fields
+                created_by=created_by,
+                created_from_ip=created_from_ip,
+                created_via=created_via,
+                created_user_agent=created_user_agent,
+                version=1,
             )
-
+            # Check for existing server with the same name
+            if visibility.lower() == "public":
+                # Check for existing public server with the same name
+                existing_server = db.execute(select(DbServer).where(DbServer.name == server_in.name, DbServer.visibility == "public")).scalar_one_or_none()
+                if existing_server:
+                    raise ServerNameConflictError(server_in.name, is_active=existing_server.is_active, server_id=existing_server.id, visibility=existing_server.visibility)
+            elif visibility.lower() == "team" and team_id:
+                # Check for existing team server with the same name
+                existing_server = db.execute(select(DbServer).where(DbServer.name == server_in.name, DbServer.visibility == "team", DbServer.team_id == team_id)).scalar_one_or_none()
+                if existing_server:
+                    raise ServerNameConflictError(server_in.name, is_active=existing_server.is_active, server_id=existing_server.id, visibility=existing_server.visibility)
             # Set custom UUID if provided
             if server_in.id:
                 logger.info(f"Setting custom UUID for server: {server_in.id}")
@@ -424,6 +470,9 @@ class ServerService:
             db.rollback()
             logger.error(f"IntegrityErrors in group: {ie}")
             raise ie
+        except ServerNameConflictError as se:
+            db.rollback()
+            raise se
         except Exception as ex:
             db.rollback()
             raise ServerError(f"Failed to register server: {str(ex)}")
@@ -580,13 +629,26 @@ class ServerService:
         logger.debug(f"Server Data: {server_data}")
         return self._convert_server_to_read(server)
 
-    async def update_server(self, db: Session, server_id: str, server_update: ServerUpdate) -> ServerRead:
+    async def update_server(
+        self,
+        db: Session,
+        server_id: str,
+        server_update: ServerUpdate,
+        modified_by: Optional[str] = None,
+        modified_from_ip: Optional[str] = None,
+        modified_via: Optional[str] = None,
+        modified_user_agent: Optional[str] = None,
+    ) -> ServerRead:
         """Update an existing server.
 
         Args:
             db: Database session.
             server_id: The unique identifier of the server.
             server_update: Server update schema with new data.
+            modified_by: Username who modified this server.
+            modified_from_ip: IP address from which modification was made.
+            modified_via: Source of modification (api, ui, etc.).
+            modified_user_agent: User agent of the client making the modification.
 
         Returns:
             The updated ServerRead object.
@@ -622,15 +684,20 @@ class ServerService:
             if not server:
                 raise ServerNotFoundError(f"Server not found: {server_id}")
 
-            # Check for name conflict if name is being changed
+            # Check for name conflict if name is being changed and visibility is public
             if server_update.name and server_update.name != server.name:
-                conflict = db.execute(select(DbServer).where(DbServer.name == server_update.name).where(DbServer.id != server_id)).scalar_one_or_none()
-                if conflict:
-                    raise ServerNameConflictError(
-                        server_update.name,
-                        is_active=conflict.is_active,
-                        server_id=conflict.id,
-                    )
+                visibility = server_update.visibility or server.visibility
+                team_id = server_update.team_id or server.team_id
+                if visibility.lower() == "public":
+                    # Check for existing public server with the same name
+                    existing_server = db.execute(select(DbServer).where(DbServer.name == server_update.name, DbServer.visibility == "public")).scalar_one_or_none()
+                    if existing_server:
+                        raise ServerNameConflictError(server_update.name, is_active=existing_server.is_active, server_id=existing_server.id, visibility=existing_server.visibility)
+                elif visibility.lower() == "team" and team_id:
+                    # Check for existing team server with the same name
+                    existing_server = db.execute(select(DbServer).where(DbServer.name == server_update.name, DbServer.visibility == "team", DbServer.team_id == team_id)).scalar_one_or_none()
+                    if existing_server:
+                        raise ServerNameConflictError(server_update.name, is_active=existing_server.is_active, server_id=existing_server.id, visibility=existing_server.visibility)
 
             # Update simple fields
             if server_update.id is not None and server_update.id != server.id:
@@ -683,7 +750,21 @@ class ServerService:
             if server_update.tags is not None:
                 server.tags = server_update.tags
 
+            # Update metadata fields
             server.updated_at = datetime.now(timezone.utc)
+            if modified_by:
+                server.modified_by = modified_by
+            if modified_from_ip:
+                server.modified_from_ip = modified_from_ip
+            if modified_via:
+                server.modified_via = modified_via
+            if modified_user_agent:
+                server.modified_user_agent = modified_user_agent
+            if hasattr(server, "version") and server.version is not None:
+                server.version = server.version + 1
+            else:
+                server.version = 1
+
             db.commit()
             db.refresh(server)
             # Force loading relationships

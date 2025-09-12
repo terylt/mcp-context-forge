@@ -36,7 +36,6 @@ from fastapi import APIRouter, Depends, HTTPException, Query, Request, Response
 from fastapi.encoders import jsonable_encoder
 from fastapi.responses import HTMLResponse, JSONResponse, RedirectResponse, StreamingResponse
 import httpx
-import jwt
 from pydantic import ValidationError
 from pydantic_core import ValidationError as CoreValidationError
 from sqlalchemy.exc import IntegrityError
@@ -88,7 +87,7 @@ from mcpgateway.services.server_service import ServerError, ServerNameConflictEr
 from mcpgateway.services.tag_service import TagService
 from mcpgateway.services.team_management_service import TeamManagementService
 from mcpgateway.services.tool_service import ToolError, ToolNotFoundError, ToolService
-from mcpgateway.utils.create_jwt_token import get_jwt_token
+from mcpgateway.utils.create_jwt_token import create_jwt_token, get_jwt_token
 from mcpgateway.utils.error_formatter import ErrorFormatter
 from mcpgateway.utils.metadata_capture import MetadataCapture
 from mcpgateway.utils.oauth_encryption import get_oauth_encryption
@@ -858,8 +857,20 @@ async def admin_add_server(request: Request, db: Session = Depends(get_db), user
         team_service = TeamManagementService(db)
         team_id = await team_service.verify_team_for_user(user_email, team_id)
 
+        # Extract metadata for server creation
+        creation_metadata = MetadataCapture.extract_creation_metadata(request, user)
+
         # Ensure default visibility is private and assign to personal team when available
-        await server_service.register_server(db, server, created_by=user_email, team_id=team_id, visibility=visibility)
+        await server_service.register_server(
+            db,
+            server,
+            created_by=user_email,  # Use the consistent user_email
+            created_from_ip=creation_metadata["created_from_ip"],
+            created_via=creation_metadata["created_via"],
+            created_user_agent=creation_metadata["created_user_agent"],
+            team_id=team_id,
+            visibility=visibility,
+        )
         return JSONResponse(
             content={"message": "Server created successfully!", "success": True},
             status_code=200,
@@ -867,6 +878,8 @@ async def admin_add_server(request: Request, db: Session = Depends(get_db), user
 
     except CoreValidationError as ex:
         return JSONResponse(content={"message": str(ex), "success": False}, status_code=422)
+    except ServerNameConflictError as ex:
+        return JSONResponse(content={"message": str(ex), "success": False}, status_code=409)
     except ServerError as ex:
         return JSONResponse(content={"message": str(ex), "success": False}, status_code=500)
     except ValueError as ex:
@@ -1009,6 +1022,8 @@ async def admin_edit_server(
         team_service = TeamManagementService(db)
         team_id = await team_service.verify_team_for_user(user_email, team_id)
 
+        mod_metadata = MetadataCapture.extract_modification_metadata(request, user, 0)
+
         server = ServerUpdate(
             id=form.get("id"),
             name=form.get("name"),
@@ -1023,7 +1038,15 @@ async def admin_edit_server(
             owner_email=user_email,
         )
 
-        await server_service.update_server(db, server_id, server)
+        await server_service.update_server(
+            db,
+            server_id,
+            server,
+            modified_by=mod_metadata["modified_by"],
+            modified_from_ip=mod_metadata["modified_from_ip"],
+            modified_via=mod_metadata["modified_via"],
+            modified_user_agent=mod_metadata["modified_user_agent"],
+        )
 
         return JSONResponse(
             content={"message": "Server updated successfully!", "success": True},
@@ -2177,7 +2200,8 @@ async def admin_ui(
                 "scopes": {"server_id": None, "permissions": ["*"], "ip_restrictions": [], "time_restrictions": {}},
             }
 
-            token = jwt.encode(payload, settings.jwt_secret_key, algorithm=settings.jwt_algorithm)
+            # Generate token using centralized token creation
+            token = await create_jwt_token(payload)
 
             # Set HTTP-only cookie for security
             response.set_cookie(
@@ -2314,7 +2338,7 @@ async def admin_login_handler(request: Request, db: Session = Depends(get_db)) -
             # First-Party
             from mcpgateway.routers.email_auth import create_access_token  # pylint: disable=import-outside-toplevel
 
-            token, _ = create_access_token(user)  # expires_seconds not needed here
+            token, _ = await create_access_token(user)  # expires_seconds not needed here
 
             # Create redirect response
             root_path = request.scope.get("root_path", "")
@@ -2826,8 +2850,8 @@ async def admin_view_team_members(
                         hx-target="#team-edit-modal-content"
                         hx-swap="innerHTML"
                         hx-trigger="change">
-                        <option value="member" {'selected' if membership.role == 'member' else ''}>Member</option>
-                        <option value="owner" {'selected' if membership.role == 'owner' else ''}>Owner</option>
+                        <option value="member" {"selected" if membership.role == "member" else ""}>Member</option>
+                        <option value="owner" {"selected" if membership.role == "owner" else ""}>Owner</option>
                     </select>
                 """
             else:
@@ -2874,7 +2898,7 @@ async def admin_view_team_members(
                         <div class="min-w-0 flex-1">
                             <div class="flex items-center space-x-2">
                                 <p class="text-sm font-medium text-gray-900 dark:text-white truncate">{member_user.full_name or member_user.email}</p>
-                                {' '.join(indicators)}
+                                {" ".join(indicators)}
                             </div>
                             <p class="text-sm text-gray-500 dark:text-gray-400 truncate">{member_user.email}</p>
                             <p class="text-xs text-gray-400 dark:text-gray-500">Joined: {membership.joined_at.strftime("%b %d, %Y") if membership.joined_at else "Unknown"}</p>
@@ -3953,8 +3977,8 @@ async def admin_list_users(
                             <h3 class="text-lg font-semibold text-gray-900 dark:text-white">{user_obj.full_name or "N/A"}</h3>
                             {admin_badge}
                             <span class="px-2 py-1 text-xs font-semibold {status_class} bg-gray-100 dark:bg-gray-700 rounded-full">{status_text}</span>
-                            {'<span class="px-2 py-1 text-xs font-semibold bg-blue-100 text-blue-800 rounded-full dark:bg-blue-900 dark:text-blue-200">You</span>' if is_current_user else ''}
-                            {'<span class="px-2 py-1 text-xs font-semibold bg-yellow-100 text-yellow-800 rounded-full dark:bg-yellow-900 dark:text-yellow-200">Last Admin</span>' if is_last_admin else ''}
+                            {'<span class="px-2 py-1 text-xs font-semibold bg-blue-100 text-blue-800 rounded-full dark:bg-blue-900 dark:text-blue-200">You</span>' if is_current_user else ""}
+                            {'<span class="px-2 py-1 text-xs font-semibold bg-yellow-100 text-yellow-800 rounded-full dark:bg-yellow-900 dark:text-yellow-200">Last Admin</span>' if is_last_admin else ""}
                         </div>
                         <p class="text-sm text-gray-600 dark:text-gray-400 mb-2">📧 {user_obj.email}</p>
                         <p class="text-sm text-gray-600 dark:text-gray-400 mb-2">🔐 Provider: {user_obj.auth_provider}</p>
@@ -5803,7 +5827,17 @@ async def admin_edit_gateway(
             owner_email=user_email,
             team_id=team_id,
         )
-        await gateway_service.update_gateway(db, gateway_id, gateway)
+
+        mod_metadata = MetadataCapture.extract_modification_metadata(request, user, 0)
+        await gateway_service.update_gateway(
+            db,
+            gateway_id,
+            gateway,
+            modified_by=mod_metadata["modified_by"],
+            modified_from_ip=mod_metadata["modified_from_ip"],
+            modified_via=mod_metadata["modified_via"],
+            modified_user_agent=mod_metadata["modified_user_agent"],
+        )
         return JSONResponse(
             content={"message": "Gateway updated successfully!", "success": True},
             status_code=200,
@@ -6202,6 +6236,7 @@ async def admin_edit_resource(
     tags: List[str] = [tag.strip() for tag in tags_str.split(",") if tag.strip()] if tags_str else []
 
     try:
+        mod_metadata = MetadataCapture.extract_modification_metadata(request, user, 0)
         resource = ResourceUpdate(
             name=str(form["name"]),
             description=str(form.get("description")),
@@ -6210,7 +6245,15 @@ async def admin_edit_resource(
             template=str(form.get("template")),
             tags=tags,
         )
-        await resource_service.update_resource(db, uri, resource)
+        await resource_service.update_resource(
+            db,
+            uri,
+            resource,
+            modified_by=mod_metadata["modified_by"],
+            modified_from_ip=mod_metadata["modified_from_ip"],
+            modified_via=mod_metadata["modified_via"],
+            modified_user_agent=mod_metadata["modified_user_agent"],
+        )
         return JSONResponse(
             content={"message": "Resource updated successfully!", "success": True},
             status_code=200,
@@ -6682,6 +6725,7 @@ async def admin_edit_prompt(
     tags_str = str(form.get("tags", ""))
     tags: List[str] = [tag.strip() for tag in tags_str.split(",") if tag.strip()] if tags_str else []
     try:
+        mod_metadata = MetadataCapture.extract_modification_metadata(request, user, 0)
         prompt = PromptUpdate(
             name=str(form["name"]),
             description=str(form.get("description")),
@@ -6689,7 +6733,15 @@ async def admin_edit_prompt(
             arguments=arguments,
             tags=tags,
         )
-        await prompt_service.update_prompt(db, name, prompt)
+        await prompt_service.update_prompt(
+            db,
+            name,
+            prompt,
+            modified_by=mod_metadata["modified_by"],
+            modified_from_ip=mod_metadata["modified_from_ip"],
+            modified_via=mod_metadata["modified_via"],
+            modified_user_agent=mod_metadata["modified_user_agent"],
+        )
 
         root_path = request.scope.get("root_path", "")
         is_inactive_checked: str = str(form.get("is_inactive_checked", "false"))
