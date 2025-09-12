@@ -573,6 +573,8 @@ class ResourceService:
         Raises:
             ResourceNotFoundError: If resource not found
             ResourceError: If blocked by plugin
+            PluginError: If encounters issue with plugin
+            PluginViolationError: If plugin violated the request. Example - In case of OPA plugin, if the request is denied by policy.
 
         Examples:
             >>> from mcpgateway.services.resource_service import ResourceService

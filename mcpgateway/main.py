@@ -3179,6 +3179,10 @@ async def handle_rpc(request: Request, db: Session = Depends(get_db), user=Depen
 
     Returns:
         Response with the RPC result or error.
+
+    Raises:
+        PluginError: If encounters issue with plugin
+        PluginViolationError: If plugin violated the request. Example - In case of OPA plugin, if the request is denied by policy.
     """
     try:
         # Extract user identifier from either RBAC user object or JWT payload
