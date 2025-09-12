@@ -481,7 +481,7 @@ class Tool(CommonAttributes):
     model_config = ConfigDict(from_attributes=True)
     integration_type: str = "MCP"
     request_type: str = "SSE"
-    headers: Dict[str, Any] = Field(default_factory=dict)
+    headers: Optional[Dict[str, Any]] = Field(default_factory=dict)
     input_schema: Dict[str, Any] = Field(default_factory=lambda: {"type": "object", "properties": {}})
     annotations: Optional[Dict[str, Any]] = Field(default_factory=dict, description="Tool annotations for behavior hints")
     auth_username: Optional[str] = None
