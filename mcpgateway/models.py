@@ -480,7 +480,7 @@ class Tool(CommonAttributes):
     """
 
     model_config = ConfigDict(from_attributes=True)
-    original_name: str
+    original_name: Optional[str] = None
     integration_type: str = "MCP"
     request_type: str = "SSE"
     headers: Optional[Dict[str, Any]] = Field(default_factory=dict)
