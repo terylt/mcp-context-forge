@@ -30,8 +30,6 @@ class HookType(str, Enum):
     """MCP Forge Gateway hook points.
 
     Attributes:
-        http_pre_forwarding_call: The pre hook before an http forwarding request.
-        http_post_forwarding_call: The post hook after an http forwarding request.
         prompt_pre_fetch: The prompt pre hook.
         prompt_post_fetch: The prompt post hook.
         tool_pre_invoke: The tool pre invoke hook.
@@ -50,8 +48,6 @@ class HookType(str, Enum):
         [<HookType.PROMPT_PRE_FETCH: 'prompt_pre_fetch'>, <HookType.PROMPT_POST_FETCH: 'prompt_post_fetch'>, <HookType.TOOL_PRE_INVOKE: 'tool_pre_invoke'>, <HookType.TOOL_POST_INVOKE: 'tool_post_invoke'>, ...]
     """
 
-    HTTP_PRE_FORWARDING_CALL = "http_pre_forwarding_call"
-    HTTP_POST_FORWARDING_CALL = "http_post_forwarding_call"
     PROMPT_PRE_FETCH = "prompt_pre_fetch"
     PROMPT_POST_FETCH = "prompt_post_fetch"
     TOOL_PRE_INVOKE = "tool_pre_invoke"
