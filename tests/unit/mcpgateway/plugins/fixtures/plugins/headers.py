@@ -71,7 +71,7 @@ class HeadersPlugin(Plugin):
         tool_meta = context.global_context.metadata[TOOL_METADATA]
         logger.info("The tool name is: %s, Tool %s, headers: %s ", tool_meta.name, tool_meta, payload.headers)
         return ToolPreInvokeResult(continue_processing = True)
-        
+
 
     async def tool_post_invoke(self, payload: ToolPostInvokePayload, context: PluginContext) -> ToolPostInvokeResult:
         """Plugin hook run after a tool is invoked.

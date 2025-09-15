@@ -108,15 +108,8 @@ class ContextPlugin(Plugin):
             The result of the plugin's analysis, including whether the resource result should proceed.
         """
         return ResourcePreFetchResult(continue_processing=True)
-<<<<<<< HEAD
-<<<<<<< HEAD
 
-=======
-    
->>>>>>> a810e799 (rebase: rebased with main, fixing merge conflicts)
-=======
 
->>>>>>> 322ac576 (fix(lint): fixed linting issues)
 class ContextPlugin2(Plugin):
     """A simple Context plugin."""
 
