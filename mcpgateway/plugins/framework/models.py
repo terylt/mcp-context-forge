@@ -625,6 +625,15 @@ class HttpHeaderPayload(RootModel[dict[str, str]]):
         """
         return self.root[item]
 
+    def __setitem__(self, key: str, value: str) -> None:
+        """Custom setitem function to override root attribute.
+
+        Args:
+            key: The http header key.
+            value: The http header value to be set.
+        """
+        self.root[key] = value
+
     def __len__(self):
         """Custom len function to override root attribute.
 

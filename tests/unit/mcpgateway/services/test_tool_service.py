@@ -2415,7 +2415,7 @@ class TestToolService:
         tool_service._http_client.request.return_value = mock_response
 
         # Mock plugin manager and post-invoke hook with error
-        tool_service._plugin_manager = PluginManager("./tests/unit/mcpgateway/plugins/fixtures/configs/tool_headers_plugin.yaml")
+        tool_service._plugin_manager = PluginManager("./tests/unit/mcpgateway/plugins/fixtures/configs/tool_headers_metadata_plugin.yaml")
         await tool_service._plugin_manager.initialize()
         # Mock metrics recording
         tool_service._record_tool_metric = AsyncMock()
@@ -2464,7 +2464,7 @@ class TestToolService:
         # Mock HTTP client response
 
         # Mock plugin manager and post-invoke hook with error
-        tool_service._plugin_manager = PluginManager("./tests/unit/mcpgateway/plugins/fixtures/configs/tool_headers_plugin.yaml")
+        tool_service._plugin_manager = PluginManager("./tests/unit/mcpgateway/plugins/fixtures/configs/tool_headers_metadata_plugin.yaml")
         await tool_service._plugin_manager.initialize()
         # Mock metrics recording
         tool_service._record_tool_metric = AsyncMock()
