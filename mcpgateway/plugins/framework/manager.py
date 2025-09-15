@@ -239,7 +239,9 @@ class PluginExecutor(Generic[T]):
                                 violation_reason = result.violation.reason
                                 violation_desc = result.violation.description
                                 violation_code = result.violation.code
-                                raise PluginViolationError(f"{plugin_run.__name__} blocked by plugin {plugin_name}: {violation_code} - {violation_reason} ({violation_desc})")
+                                raise PluginViolationError(
+                                    f"{plugin_run.__name__} blocked by plugin {plugin_name}: {violation_code} - {violation_reason} ({violation_desc})", violation=result.violation
+                                )
                             raise PluginViolationError(f"{plugin_run.__name__} blocked by plugin")
                         return (PluginResult[T](continue_processing=False, modified_payload=current_payload, violation=result.violation, metadata=combined_metadata), res_local_contexts)
                     if pluginref.plugin.mode == PluginMode.PERMISSIVE:

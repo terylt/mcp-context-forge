@@ -64,11 +64,22 @@ class HeadersPlugin(Plugin):
         Returns:
             The result of the plugin's analysis, including whether the tool can proceed.
         """
-        if payload.headers:
-            raise ValueError("headers are not empty.")
+        if not payload.headers:
+            raise ValueError("headers are empty.")
+        
+        if 'Content-Type' not in payload.headers:
+            raise ValueError("Content-Type not in headers")
+        
+        if payload.headers['Content-Type'] != 'application/json':
+            raise ValueError("Content-Type is not application/json")
         if not TOOL_METADATA in context.global_context.metadata:
             raise ValueError("TOOL_METADATA not in global metadata.")
         tool_meta = context.global_context.metadata[TOOL_METADATA]
+
+        if tool_meta.original_name != "test_tool":
+            raise ValueError("Tool name is not 'test_tool'")
+        if tool_meta.url.host != "example.com":
+            raise ValueError("Tool url host is not 'example.com'")
         logger.info("The tool name is: %s, Tool %s, headers: %s ", tool_meta.name, tool_meta, payload.headers)
         return ToolPreInvokeResult(continue_processing = True)
         

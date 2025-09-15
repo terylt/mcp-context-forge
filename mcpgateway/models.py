@@ -463,6 +463,7 @@ class Tool(CommonAttributes):
     """A tool that can be invoked.
 
     Attributes:
+        original_name (str): The original supplied name of the tool before imported by the gateway.
         integrationType (str): The integration type of the tool (e.g. MCP or REST).
         requestType (str): The HTTP method used to invoke the tool (GET, POST, PUT, DELETE, SSE, STDIO).
         headers (Dict[str, Any]): A JSON object representing HTTP headers.
@@ -479,6 +480,7 @@ class Tool(CommonAttributes):
     """
 
     model_config = ConfigDict(from_attributes=True)
+    original_name: str
     integration_type: str = "MCP"
     request_type: str = "SSE"
     headers: Optional[Dict[str, Any]] = Field(default_factory=dict)

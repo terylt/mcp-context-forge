@@ -11,8 +11,7 @@ import pytest
 
 # First-Party
 from mcpgateway.models import Message, PromptResult, Role, TextContent
-from mcpgateway.plugins.framework.manager import PluginManager
-from mcpgateway.plugins.framework.models import GlobalContext, PromptPosthookPayload, PromptPrehookPayload, ToolPostInvokePayload, ToolPreInvokePayload
+from mcpgateway.plugins.framework import GlobalContext, PluginManager, PluginViolationError, PromptPosthookPayload, PromptPrehookPayload, ToolPostInvokePayload, ToolPreInvokePayload
 from plugins.regex_filter.search_replace import SearchReplaceConfig
 
 
@@ -121,6 +120,11 @@ async def test_manager_filter_plugins():
     result, _ = await manager.prompt_pre_fetch(prompt, global_context=global_context)
     assert not result.continue_processing
     assert result.violation
+
+    with pytest.raises(PluginViolationError) as ve:
+        result, _ = await manager.prompt_pre_fetch(prompt, global_context=global_context, violations_as_exceptions=True)
+    assert ve.value.violation
+    assert ve.value.violation.reason == "Prompt not allowed"
     await manager.shutdown()
 
 
@@ -134,6 +138,9 @@ async def test_manager_multi_filter_plugins():
     result, _ = await manager.prompt_pre_fetch(prompt, global_context=global_context)
     assert not result.continue_processing
     assert result.violation
+    with pytest.raises(PluginViolationError) as ve:
+        result, _ = await manager.prompt_pre_fetch(prompt, global_context=global_context, violations_as_exceptions=True)
+    assert ve.value.violation
     await manager.shutdown()
 
 

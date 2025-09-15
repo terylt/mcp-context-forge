@@ -55,7 +55,7 @@ from mcpgateway.utils.sqlalchemy_modifier import json_contains_expr
 # Plugin support imports (conditional)
 try:
     # First-Party
-    from mcpgateway.plugins.framework import GlobalContext, PluginError, PluginManager, PluginViolationError, ResourcePostFetchPayload, ResourcePreFetchPayload
+    from mcpgateway.plugins.framework import GlobalContext, PluginManager, ResourcePostFetchPayload, ResourcePreFetchPayload
 
     PLUGINS_AVAILABLE = True
 except ImportError:
@@ -648,26 +648,11 @@ class ResourceService:
                 pre_payload = ResourcePreFetchPayload(uri=uri, metadata={})
 
                 # Execute pre-fetch hooks
-                try:
-                    pre_result, contexts = await self._plugin_manager.resource_pre_fetch(pre_payload, global_context)
-
-                    # Check if we should continue
-                    if not pre_result.continue_processing:
-                        # Plugin blocked the resource fetch
-                        if pre_result.violation:
-                            logger.warning(f"Resource blocked by plugin: {pre_result.violation.reason} (URI: {uri})")
-                            raise PluginViolationError(f"Resource blocked: {pre_result.violation.reason}")
-                        raise PluginViolationError("Resource fetch blocked by plugin")
-
-                    # Use modified URI if plugin changed it
-                    if pre_result.modified_payload:
-                        uri = pre_result.modified_payload.uri
-                        logger.debug(f"Resource URI modified by plugin: {original_uri} -> {uri}")
-                except (PluginError, PluginViolationError, ResourceError):
-                    raise
-                except Exception as e:
-                    logger.error(f"Error in resource pre-fetch hooks: {e}")
-                    # Continue without plugin processing if there's an error
+                pre_result, contexts = await self._plugin_manager.resource_pre_fetch(pre_payload, global_context, violations_as_exceptions=True)
+                # Use modified URI if plugin changed it
+                if pre_result.modified_payload:
+                    uri = pre_result.modified_payload.uri
+                    logger.debug(f"Resource URI modified by plugin: {original_uri} -> {uri}")
 
             # Original resource fetching logic
             # Check for template
@@ -694,30 +679,12 @@ class ResourceService:
                 post_payload = ResourcePostFetchPayload(uri=original_uri, content=content)
 
                 # Execute post-fetch hooks
-                try:
-                    post_result, _ = await self._plugin_manager.resource_post_fetch(
-                        post_payload,
-                        global_context,
-                        contexts,  # Pass contexts from pre-fetch
-                    )
+                post_result, _ = await self._plugin_manager.resource_post_fetch(post_payload, global_context, contexts, violations_as_exceptions=True)  # Pass contexts from pre-fetch
 
-                    # Check if we should continue
-                    if not post_result.continue_processing:
-                        # Plugin blocked the resource after fetching
-                        if post_result.violation:
-                            logger.warning(f"Resource content blocked by plugin: {post_result.violation.reason} (URI: {original_uri})")
-                            raise PluginViolationError(f"Resource content blocked: {post_result.violation.reason}")
-                        raise PluginViolationError("Resource content blocked by plugin")
-
-                    # Use modified content if plugin changed it
-                    if post_result.modified_payload:
-                        content = post_result.modified_payload.content
-                        logger.debug(f"Resource content modified by plugin for URI: {original_uri}")
-                except (PluginError, PluginViolationError, ResourceError):
-                    raise
-                except Exception as e:
-                    logger.error(f"Error in resource post-fetch hooks: {e}")
-                    # Continue with unmodified content if there's an error
+                # Use modified content if plugin changed it
+                if post_result.modified_payload:
+                    content = post_result.modified_payload.content
+                    logger.debug(f"Resource content modified by plugin for URI: {original_uri}")
 
             # Set success attributes on span
             if span:

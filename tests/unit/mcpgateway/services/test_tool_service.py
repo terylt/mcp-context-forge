@@ -21,7 +21,7 @@ from sqlalchemy.exc import IntegrityError
 from mcpgateway.db import A2AAgent as DbA2AAgent
 from mcpgateway.db import Gateway as DbGateway
 from mcpgateway.db import Tool as DbTool
-from mcpgateway.plugins.framework import PluginError, PluginErrorModel, PluginViolationError
+from mcpgateway.plugins.framework import PluginError, PluginErrorModel, PluginViolationError, PluginManager
 from mcpgateway.schemas import AuthenticationValues, ToolCreate, ToolRead, ToolUpdate
 from mcpgateway.services.tool_service import (
     TextContent,
@@ -2393,3 +2393,37 @@ class TestToolService:
                 await tool_service.invoke_tool(test_db, "test_tool", {"param": "value"}, request_headers=None)
 
         assert "Plugin error" in str(exc_info.value)
+
+
+    async def test_invoke_tool_with_plugin_metadata(self, tool_service, mock_tool, test_db):
+        """Test invoking tool with plugin post-invoke hook error when fail_on_plugin_error is True."""
+        # Configure tool as REST
+        mock_tool.integration_type = "REST"
+        mock_tool.request_type = "POST"
+        mock_tool.auth_value = None
+
+        # Mock DB to return the tool
+        mock_scalar = Mock()
+        mock_scalar.scalar_one_or_none.return_value = mock_tool
+        test_db.execute = Mock(return_value=mock_scalar)
+
+        # Mock HTTP client response
+        mock_response = AsyncMock()
+        mock_response.raise_for_status = AsyncMock()
+        mock_response.status_code = 200
+        mock_response.json = Mock(return_value={"result": "original response"})
+        tool_service._http_client.request.return_value = mock_response
+
+        # Mock plugin manager and post-invoke hook with error
+        tool_service._plugin_manager = PluginManager("./tests/unit/mcpgateway/plugins/fixtures/configs/tool_headers_plugin.yaml")
+        await tool_service._plugin_manager.initialize()
+        # Mock metrics recording
+        tool_service._record_tool_metric = AsyncMock()
+
+        with (
+            patch("mcpgateway.services.tool_service.decode_auth", return_value={}),
+            patch("mcpgateway.config.extract_using_jq", return_value={"result": "original response"}),
+        ):
+            await tool_service.invoke_tool(test_db, "test_tool", {"param": "value"}, request_headers=None)
+        
+        await tool_service._plugin_manager.shutdown()
