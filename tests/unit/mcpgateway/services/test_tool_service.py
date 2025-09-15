@@ -2395,7 +2395,7 @@ class TestToolService:
         assert "Plugin error" in str(exc_info.value)
 
 
-    async def test_invoke_tool_with_plugin_metadata(self, tool_service, mock_tool, test_db):
+    async def test_invoke_tool_with_plugin_metadata_rest(self, tool_service, mock_tool, test_db):
         """Test invoking tool with plugin post-invoke hook error when fail_on_plugin_error is True."""
         # Configure tool as REST
         mock_tool.integration_type = "REST"
@@ -2423,6 +2423,56 @@ class TestToolService:
         with (
             patch("mcpgateway.services.tool_service.decode_auth", return_value={}),
             patch("mcpgateway.config.extract_using_jq", return_value={"result": "original response"}),
+        ):
+            await tool_service.invoke_tool(test_db, "test_tool", {"param": "value"}, request_headers=None)
+        
+        await tool_service._plugin_manager.shutdown()
+
+    async def test_invoke_tool_with_plugin_metadata_sse(self, tool_service, mock_tool, mock_gateway, test_db):
+        """Test invoking tool with plugin post-invoke hook error when fail_on_plugin_error is True."""
+        # Configure tool as REST
+        #mock_tool.integration_type = "REST"
+        #mock_tool.request_type = "POST"
+        #mock_tool.auth_value = None
+        mock_tool.integration_type = "MCP"
+        mock_tool.request_type = "sse"
+        mock_gateway.auth_value = None
+
+        # Mock DB queries
+        mock_scalar1 = Mock()
+        mock_scalar1.scalar_one_or_none.return_value = mock_tool
+        mock_scalar2 = Mock()
+        mock_scalar2.scalar_one_or_none.return_value = mock_gateway
+        mock_scalar3 = Mock()
+        mock_scalar3.scalar_one_or_none.return_value = mock_gateway
+
+        test_db.execute = Mock(side_effect=[mock_scalar1, mock_scalar2, mock_scalar3])
+
+        expected_result = ToolResult(content=[TextContent(type="text", text="MCP OAuth response")])
+        session_mock = AsyncMock()
+        session_mock.initialize = AsyncMock()
+        session_mock.call_tool = AsyncMock(return_value=expected_result)
+
+        client_session_cm = AsyncMock()
+        client_session_cm.__aenter__.return_value = session_mock
+        client_session_cm.__aexit__.return_value = AsyncMock()
+
+        sse_ctx = AsyncMock()
+        sse_ctx.__aenter__.return_value = ("read", "write")
+
+
+        # Mock HTTP client response
+
+        # Mock plugin manager and post-invoke hook with error
+        tool_service._plugin_manager = PluginManager("./tests/unit/mcpgateway/plugins/fixtures/configs/tool_headers_plugin.yaml")
+        await tool_service._plugin_manager.initialize()
+        # Mock metrics recording
+        tool_service._record_tool_metric = AsyncMock()
+
+        with (
+            patch("mcpgateway.services.tool_service.sse_client", return_value=sse_ctx),
+            patch("mcpgateway.services.tool_service.ClientSession", return_value=client_session_cm),
+            patch("mcpgateway.services.tool_service.extract_using_jq", side_effect=lambda data, _filt: data),
         ):
             await tool_service.invoke_tool(test_db, "test_tool", {"param": "value"}, request_headers=None)
         

@@ -9,7 +9,7 @@ SPDX-License-Identifier: Apache-2.0
 
 import logging
 
-from mcpgateway.plugins.framework.constants import TOOL_METADATA
+from mcpgateway.plugins.framework.constants import GATEWAY_METADATA, TOOL_METADATA
 from mcpgateway.plugins.framework import (
     Plugin,
     PluginContext,
@@ -64,22 +64,21 @@ class HeadersPlugin(Plugin):
         Returns:
             The result of the plugin's analysis, including whether the tool can proceed.
         """
-        if not payload.headers:
-            raise ValueError("headers are empty.")
-        
-        if 'Content-Type' not in payload.headers:
-            raise ValueError("Content-Type not in headers")
-        
-        if payload.headers['Content-Type'] != 'application/json':
-            raise ValueError("Content-Type is not application/json")
-        if not TOOL_METADATA in context.global_context.metadata:
-            raise ValueError("TOOL_METADATA not in global metadata.")
+        assert TOOL_METADATA in context.global_context.metadata
         tool_meta = context.global_context.metadata[TOOL_METADATA]
-
-        if tool_meta.original_name != "test_tool":
-            raise ValueError("Tool name is not 'test_tool'")
-        if tool_meta.url.host != "example.com":
-            raise ValueError("Tool url host is not 'example.com'")
+        assert tool_meta.original_name == "test_tool"
+        assert tool_meta.url.host == "example.com"
+        assert tool_meta.integration_type == "REST" or tool_meta.integration_type == "MCP"
+        if tool_meta.integration_type == "REST":
+            assert payload.headers
+            assert 'Content-Type' in payload.headers
+            assert  payload.headers['Content-Type'] == 'application/json'
+        elif tool_meta.integration_type == "MCP":
+            assert GATEWAY_METADATA in context.global_context.metadata
+            gateway_meta = context.global_context.metadata[GATEWAY_METADATA]
+            assert gateway_meta.name == "test_gateway"
+            assert gateway_meta.transport == "sse"
+            assert gateway_meta.url.host == "example.com"
         logger.info("The tool name is: %s, Tool %s, headers: %s ", tool_meta.name, tool_meta, payload.headers)
         return ToolPreInvokeResult(continue_processing = True)
         
