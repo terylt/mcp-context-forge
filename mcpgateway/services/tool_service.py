@@ -880,7 +880,7 @@ class ToolService:
                             payload = pre_result.modified_payload
                             name = payload.name
                             arguments = payload.args
-                            if payload.headers:
+                            if payload.headers is not None:
                                 headers = payload.headers.model_dump()
 
                     # Build the payload based on integration type
@@ -1027,7 +1027,7 @@ class ToolService:
                             payload = pre_result.modified_payload
                             name = payload.name
                             arguments = payload.args
-                            if payload.headers:
+                            if payload.headers is not None:
                                 headers = payload.headers.model_dump()
 
                     tool_call_result = ToolResult(content=[TextContent(text="", type="text")])
