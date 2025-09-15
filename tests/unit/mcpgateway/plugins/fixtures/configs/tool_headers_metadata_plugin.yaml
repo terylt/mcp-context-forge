@@ -5,7 +5,7 @@ plugins:
     description: "A tools header plugin."
     version: "0.1"
     author: "MCP Context Forge Team"
-    hooks: ["tool_pre_invoke"]
+    hooks: ["tool_pre_invoke", "tool_post_invoke"]
     tags: ["plugin", "headers"]
     mode: "enforce"  # enforce | permissive | disabled
     priority: 150

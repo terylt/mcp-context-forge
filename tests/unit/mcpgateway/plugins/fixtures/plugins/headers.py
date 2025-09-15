@@ -102,7 +102,19 @@ class HeadersMetaDataPlugin(Plugin):
         Returns:
             The result of the plugin's analysis, including whether the tool result should proceed.
         """
-        raise ValueError("Sadly! Tool postfetch is broken!")
+        assert TOOL_METADATA in context.global_context.metadata
+        tool_meta = context.global_context.metadata[TOOL_METADATA]
+        assert tool_meta.original_name == "test_tool"
+        assert tool_meta.url.host == "example.com"
+        assert tool_meta.integration_type == "REST" or tool_meta.integration_type == "MCP"
+        if tool_meta.integration_type == "MCP":
+            assert GATEWAY_METADATA in context.global_context.metadata
+            gateway_meta = context.global_context.metadata[GATEWAY_METADATA]
+            assert gateway_meta.name == "test_gateway"
+            assert gateway_meta.transport == "sse"
+            assert gateway_meta.url.host == "example.com"
+        return ToolPostInvokeResult(continue_processing=True)
+        
 
     async def resource_post_fetch(self, payload: ResourcePostFetchPayload, context: PluginContext) -> ResourcePostFetchResult:
         """Plugin hook run after a resource was fetched.

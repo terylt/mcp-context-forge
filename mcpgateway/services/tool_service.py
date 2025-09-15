@@ -1013,9 +1013,10 @@ class ToolService:
 
                     if self._plugin_manager:
                         tool_metadata = PydanticTool.model_validate(tool)
-                        gateway_metadata = PydanticGateway.model_validate(tool_gateway)
                         global_context.metadata[TOOL_METADATA] = tool_metadata
-                        global_context.metadata[GATEWAY_METADATA] = gateway_metadata
+                        if tool_gateway:
+                            gateway_metadata = PydanticGateway.model_validate(tool_gateway)
+                            global_context.metadata[GATEWAY_METADATA] = gateway_metadata
                         pre_result, context_table = await self._plugin_manager.tool_pre_invoke(
                             payload=ToolPreInvokePayload(name=name, args=arguments, headers=HttpHeaderPayload(headers)),
                             global_context=global_context,
