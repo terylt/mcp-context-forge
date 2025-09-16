@@ -83,14 +83,14 @@ class HeadersMetaDataPlugin(Plugin):
             assert gateway_meta.name == "test_gateway"
             assert gateway_meta.transport == "sse"
             assert gateway_meta.url.host == "example.com"
-        
+
         modified_payload.headers["User-Agent"] = "Mozilla/5.0"
         modified_payload.headers["Connection"] = "keep-alive"
 
 
-        
+
         return ToolPreInvokeResult(continue_processing = True, modified_payload = modified_payload)
-        
+
 
     async def tool_post_invoke(self, payload: ToolPostInvokePayload, context: PluginContext) -> ToolPostInvokeResult:
         """Plugin hook run after a tool is invoked.
@@ -114,7 +114,7 @@ class HeadersMetaDataPlugin(Plugin):
             assert gateway_meta.transport == "sse"
             assert gateway_meta.url.host == "example.com"
         return ToolPostInvokeResult(continue_processing=True)
-        
+
 
     async def resource_post_fetch(self, payload: ResourcePostFetchPayload, context: PluginContext) -> ResourcePostFetchResult:
         """Plugin hook run after a resource was fetched.
@@ -185,7 +185,7 @@ class HeadersPlugin(Plugin):
         modified_payload.headers["User-Agent"] = "Mozilla/5.0"
         modified_payload.headers["Connection"] = "keep-alive"
         return ToolPreInvokeResult(continue_processing = True, modified_payload = modified_payload)
-        
+
 
     async def tool_post_invoke(self, payload: ToolPostInvokePayload, context: PluginContext) -> ToolPostInvokeResult:
         """Plugin hook run after a tool is invoked.

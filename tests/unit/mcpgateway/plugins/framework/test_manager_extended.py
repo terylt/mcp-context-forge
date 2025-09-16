@@ -153,7 +153,7 @@ async def test_manager_exception_handling():
         # Should continue in permissive mode
         assert result.continue_processing
         assert result.violation is None
-    
+
     plugin_config.mode = PluginMode.ENFORCE_IGNORE_ERROR
     with patch.object(manager._registry, 'get_plugins_for_hook') as mock_get:
         plugin_ref = PluginRef(error_plugin)
@@ -416,7 +416,7 @@ async def test_manager_plugin_blocking():
         assert result.violation is not None
         assert result.violation.code == "CONTENT_BLOCKED"
         assert result.violation.plugin_name == "BlockingPlugin"
-        
+
         with pytest.raises(PluginViolationError) as pve:
             result, _ = await manager.prompt_pre_fetch(prompt, global_context=global_context, violations_as_exceptions=True)
         assert pve.value.violation

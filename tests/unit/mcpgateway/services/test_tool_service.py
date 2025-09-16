@@ -2425,7 +2425,7 @@ class TestToolService:
             patch("mcpgateway.config.extract_using_jq", return_value={"result": "original response"}),
         ):
             await tool_service.invoke_tool(test_db, "test_tool", {"param": "value"}, request_headers=None)
-        
+
         await tool_service._plugin_manager.shutdown()
 
     async def test_invoke_tool_with_plugin_metadata_sse(self, tool_service, mock_tool, mock_gateway, test_db):
@@ -2475,5 +2475,5 @@ class TestToolService:
             patch("mcpgateway.services.tool_service.extract_using_jq", side_effect=lambda data, _filt: data),
         ):
             await tool_service.invoke_tool(test_db, "test_tool", {"param": "value"}, request_headers=None)
-        
+
         await tool_service._plugin_manager.shutdown()
