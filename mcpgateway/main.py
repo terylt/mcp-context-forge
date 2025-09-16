@@ -527,8 +527,9 @@ async def plugin_violation_exception_handler(_request: Request, exc: PluginViola
         >>> result.status_code
         403
     """
-    response_details = {"detail": "policy_deny", "message": exc.message if hasattr(exc, "message") else ""}
-    return JSONResponse(status_code=403, content={"detail": response_details})
+    policy_violation = exc.violation.model_dump() if exc.violation else {}
+    policy_violation["message"] = exc.message
+    return JSONResponse(status_code=403, content=policy_violation)
 
 
 @app.exception_handler(PluginError)
@@ -564,8 +565,8 @@ async def plugin_exception_handler(_request: Request, exc: PluginError):
         >>> result.status_code
         500
     """
-    # error_str = str(exc.message) if hasattr(exc, "message") else str(exc)
-    return JSONResponse(status_code=500, content=exc.error.message)
+    error_obj = exc.error.model_dump() if exc.error else {}
+    return JSONResponse(status_code=500, content=error_obj)
 
 
 class DocsAuthMiddleware(BaseHTTPMiddleware):
