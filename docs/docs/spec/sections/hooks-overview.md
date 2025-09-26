@@ -23,6 +23,7 @@ All hook functions share three fundamental components that provide a complete ex
 3. **Plugin Result** - Returns execution status, modifications, and control flow decisions
 
 This architecture enables plugins to:
+
 - **Inspect** incoming data through structured payloads
 - **Transform** data by returning modified payloads
 - **Control Flow** by blocking or allowing request continuation
@@ -34,6 +35,7 @@ This architecture enables plugins to:
 The **Payload** is a strongly-typed data container that carries the specific information being processed at each hook point. Payloads are immutable input objects that plugins can inspect and optionally modify.
 
 **Payload Characteristics:**
+
 - **Type-Safe**: All payloads extend Pydantic `BaseModel` for validation
 - **Hook-Specific**: Each hook type has its own payload structure
 - **Immutable Input**: Original payload is never modified directly
@@ -177,11 +179,16 @@ return PluginResult(
 ```
 
 **Flow Control Logic:**
+
 - `continue_processing=True`: Request continues to next plugin/core logic
 - `continue_processing=False`: Request is blocked, violation returned to client
 - `modified_payload`: Used for next plugin execution if provided
 - `violation`: Structured error information for blocked requests
 - `metadata`: Observability and debugging information
+
+**Processing Model**:
+
+Plugin processing uses short circuiting to abort evaluation in the case of a violation and `continue_processing=False`. If the plugin needs to record side effects, such as the bookkeeping, these plugins should be executed first with the highest priority. 
 
 ### 5.2 HTTP Header Hook Integration Example
 

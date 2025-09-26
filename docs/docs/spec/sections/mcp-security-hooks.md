@@ -8,16 +8,24 @@ This document details the security-focused hook points in the MCP Gateway Plugin
 
 The framework provides eight primary hook points covering the complete MCP request/response lifecycle:
 
-| Hook Function | Description | When It Executes | Primary Use Cases |
-|---------------|-------------|-------------------|-------------------|
-| [`http_pre_forwarding_call()`](#http-pre-forwarding-hook) | Process HTTP headers before forwarding requests to tools/gateways | Before HTTP calls are made to external services | Authentication token injection, request labeling, session management, header validation |
-| [`http_post_forwarding_call()`](#http-post-forwarding-hook) | Process HTTP headers after forwarding requests to tools/gateways | After HTTP responses are received from external services | Response header validation, data flow labeling, session tracking, compliance metadata |
-| [`prompt_pre_fetch()`](#prompt-pre-fetch-hook) | Process prompt requests before template retrieval and rendering | Before prompt template is loaded and processed | Input validation, argument sanitization, access control, PII detection |
-| [`prompt_post_fetch()`](#prompt-post-fetch-hook) | Process prompt responses after template rendering into messages | After prompt template is rendered into final messages | Output filtering, content transformation, response validation, compliance checks |
-| [`tool_pre_invoke()`](#tool-pre-invoke-hook) | Process tool calls before execution | Before tool is invoked with arguments | Parameter validation, security checks, rate limiting, access control, argument transformation |
-| [`tool_post_invoke()`](#tool-post-invoke-hook) | Process tool results after execution completes | After tool has finished processing and returned results | Result filtering, output validation, sensitive data redaction, response enhancement |
-| [`resource_pre_fetch()`](#resource-pre-fetch-hook) | Process resource requests before fetching content | Before resource is retrieved from URI | URI validation, protocol restrictions, domain filtering, access control, request enhancement |
-| [`resource_post_fetch()`](#resource-post-fetch-hook) | Process resource content after successful retrieval | After resource content has been fetched and loaded | Content validation, size limits, content filtering, data transformation, format conversion |
+| Hook Function | Description | When It Executes | Primary Use Cases | Status |
+|---------------|-------------|-------------------|-------------------|--------|
+| [`http_pre_forwarding_call()`](#http-pre-forwarding-hook) | Process HTTP headers before forwarding requests to tools/gateways | Before HTTP calls are made to external services | Authentication token injection, request labeling, session management, header validation | ✅ |
+| [`http_post_forwarding_call()`](#http-post-forwarding-hook) | Process HTTP headers after forwarding requests to tools/gateways | After HTTP responses are received from external services | Response header validation, data flow labeling, session tracking, compliance metadata | ✅ |
+| [`prompt_post_list()`](#) | Process a `prompts/list` request before the results are returned to the client. | After a `prompts/list` is returned from the server | Detection or [poisoning](#) threats. | ❌ |
+| [`prompt_pre_fetch()`](#prompt-pre-fetch-hook) | Process prompt requests before template retrieval and rendering | Before prompt template is loaded and processed | Input validation, argument sanitization, access control, PII detection | ✅ |
+| [`prompt_post_fetch()`](#prompt-post-fetch-hook) | Process prompt responses after template rendering into messages | After prompt template is rendered into final messages | Output filtering, content transformation, response validation, compliance checks | ✅ |
+| [`tools_post_list()`](#) | Process a `tools/list` request before the results are returned to the client. | After a `tools/list` is returned from the server | Detection or [poisoning](#) threats. | ❌ |
+| [`tool_pre_invoke()`](#tool-pre-invoke-hook) | Process tool calls before execution | Before tool is invoked with arguments | Parameter validation, security checks, rate limiting, access control, argument transformation | ✅ |
+| [`tool_post_invoke()`](#tool-post-invoke-hook) | Process tool results after execution completes | After tool has finished processing and returned results | Result filtering, output validation, sensitive data redaction, response enhancement | ✅ |
+| [`resource_post_list()`](#) | Process a `resources/list` request before the results are returned to the client. | After a `resources/list` is returned from the server | Detection or [poisoning](#) threats. | ❌ |
+| [`resource_pre_fetch()`](#resource-pre-fetch-hook) | Process resource requests before fetching content | Before resource is retrieved from URI | URI validation, protocol restrictions, domain filtering, access control, request enhancement | ✅ |
+| [`resource_post_fetch()`](#resource-post-fetch-hook) | Process resource content after successful retrieval | After resource content has been fetched and loaded | Content validation, size limits, content filtering, data transformation, format conversion | ✅ |
+| [`roots_post_list()`](#) | Process a `roots/list` request before the results are returned to the client. | After a `roots/list` is returned from the server | Detection or [poisoning](#) threats. | ❌ |
+| [`elicit_pre_create()`](#) | Process elicitation requests from MCP servers before sending to users | Before the elicitation request is sent to the MCP client | Access control, rerouting and processing elicitation requests | ❌ |
+| [`elicit_post_response()`](#) | Process user responses to elicitation requests | After the elicitation response is returned by the client but before it is sent to the MCP server | Input sanitization, access control, PII and and DLP | ❌ |
+| [`sampling_pre_create()`](#) | Process sampling requests sent to MCP host LLMs | Before the sampling request is returned to the MCP client | Prompt injection, goal manipulation, denial of wallet | ❌ |
+| [`sampling_post_complete()`](#) | Process sampling requests returned from the LLM | Before returning the LLM response to the MCP server | Sensitive information leakage, prompt injection, tool poisoning, PII detection | ❌ |
 
 ---
 

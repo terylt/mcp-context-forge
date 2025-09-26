@@ -10,24 +10,28 @@
 The plugin configuration system is the cornerstone of the MCP Context Forge plugin framework, providing a declarative, YAML-based approach to plugin management, deployment, and orchestration. This system enables administrators and developers to:
 
 **🎯 Plugin Lifecycle Management**
+
 - **Discovery & Loading**: Automatically discover and load plugins from configuration
 - **Dependency Resolution**: Handle plugin dependencies and load order
 - **Runtime Control**: Enable, disable, or modify plugin behavior without code changes
 - **Version Management**: Track plugin versions and manage updates
 
 **🔧 Operational Control**
+
 - **Environment-Specific Deployment**: Different configurations for dev/staging/production
 - **Conditional Execution**: Run plugins only under specific conditions (tenant, server, user)
 - **Priority-Based Orchestration**: Control execution order through priority settings
 - **Mode-Based Behavior**: Switch between enforce/enforce_ignore_error/permissive/disabled modes
 
 **🔐 Security & Compliance**
+
 - **Access Control**: Restrict plugin execution to specific users, tenants, or servers
 - **Audit Trail**: Track plugin configuration changes and deployment history
 - **Policy Enforcement**: Implement organizational security policies through configuration
 - **External Service Integration**: Securely configure connections to external AI safety services
 
 **⚡ Performance Optimization**
+
 - **Resource Limits**: Configure timeouts, memory limits, and execution constraints
 - **Selective Loading**: Load only necessary plugins to optimize performance
 - **Monitoring Integration**: Configure metrics collection and health monitoring
@@ -171,7 +175,7 @@ class PluginConfig(BaseModel):
 ```python
 class MCPConfig(BaseModel):
     """MCP configuration for external plugins"""
-    proto: TransportType                      # STDIO, SSE, or STREAMABLEHTTP
+    proto: TransportType                     # STDIO, SSE, or STREAMABLEHTTP
     url: Optional[str] = None                # Service URL (for HTTP transports)
     script: Optional[str] = None             # Script path (for STDIO transport)
 ```
@@ -266,7 +270,7 @@ tags:
   - "gdpr"
 
 # Plugin characteristics
-plugin_type: "native"                     # native | external
+plugin_type: "native"                    # native | external
 language: "python"                       # python | typescript | go | rust | java
 performance_tier: "high"                 # high | medium | low (expected latency)
 
@@ -374,7 +378,9 @@ mcpplugins bootstrap --destination ./my-plugin --template advanced-filter
 ```
 
 **IDE Integration**:
+
 The manifest enables development tools to provide:
+
 - **Hook Autocomplete**: Available hooks based on `available_hooks`
 - **Configuration Validation**: Schema validation using `default_config`
 - **Dependency Management**: Package requirements from `dependencies`
@@ -383,22 +389,26 @@ The manifest enables development tools to provide:
 #### 4.8.7 Best Practices for Plugin Manifests
 
 **Versioning**:
+
 - Use semantic versioning (MAJOR.MINOR.PATCH)
 - Update version for any changes that affect plugin behavior
 - Include pre-release identifiers for development versions (e.g., `2.1.0-beta.1`)
 
 **Documentation**:
+
 - Provide clear, comprehensive descriptions
 - Include usage examples in the repository
 - Document all configuration options in `default_config`
 - Maintain up-to-date README files
 
 **Dependencies**:
+
 - Pin dependency versions for reproducible builds
 - Use minimum version constraints where appropriate
 - Document external service dependencies in description
 
 **Tags and Categories**:
+
 - Use consistent, descriptive tags for discoverability
 - Include functional tags (`security`, `validation`) and domain tags (`gdpr`, `healthcare`)
 - Follow established tag conventions within your organization

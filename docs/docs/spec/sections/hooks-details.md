@@ -39,16 +39,19 @@ sequenceDiagram
 #### 6.1.1 Execution Flow Breakdown
 
 **Phase 1: Request Reception & Hook Identification**
+
 1. **Client Request**: MCP client sends request (tool invocation, prompt fetch, resource access) to the gateway
 2. **Hook Selection**: Gateway identifies the appropriate hook type based on the request (e.g., `tool_pre_invoke` for tool calls)
 3. **Plugin Manager Invocation**: Gateway delegates hook execution to the Plugin Manager with request payload
 
 **Phase 2: Priority-Based Plugin Execution**
+
 4. **Plugin Discovery**: Plugin Manager retrieves all plugins registered for the specific hook type
 5. **Priority Sorting**: Plugins are sorted in **ascending priority order** (lower numbers execute first)
 6. **Conditional Filtering**: Plugins with conditions are filtered based on current request context (user, tenant, server, etc.)
 
 **Phase 3: Sequential Plugin Processing**
+
 7. **First Plugin Execution**: Highest priority plugin (P1, priority 10) executes with original payload
 8. **Result Evaluation**: Plugin returns `PluginResult` indicating whether to continue processing
 9. **Payload Chain**: If P1 modifies the payload, the modified version is passed to the next plugin
@@ -56,10 +59,12 @@ sequenceDiagram
 11. **Continue Chain**: Process repeats for all remaining plugins in priority order
 
 **Phase 4: Flow Control Decision**
+
 12. **Aggregated Result**: Plugin Manager combines all plugin results and determines final action
 13. **Continue vs Block**: Based on plugin results, request either continues to core logic or is blocked
 
 **Phase 5: Request Resolution**
+
 - **Continue Path**: If all plugins allow processing, request continues to core gateway logic
   - Core logic executes the actual MCP operation (tool invocation, prompt rendering, resource fetching)
   - Success response is returned to client
@@ -75,6 +80,7 @@ Original Payload → Plugin 1 → Modified Payload → Plugin 2 → Final Payloa
 ```
 
 **Example Flow for Tool Pre-Invoke:**
+
 1. Client calls `file_reader` tool with path argument
 2. Gateway triggers `tool_pre_invoke` hook
 3. **Security Plugin (Priority 10)**: Validates file path, blocks access to `/etc/passwd`
@@ -82,6 +88,7 @@ Original Payload → Plugin 1 → Modified Payload → Plugin 2 → Final Payloa
 5. **Result**: Client receives "Access Denied" error
 
 **Alternative Success Flow:**
+
 1. Client calls `file_reader` tool with path `./documents/report.txt`
 2. **Security Plugin (Priority 10)**: Validates path, allows access, normalizes path
 3. **Sanitization Plugin (Priority 20)**: Adds read timeout, limits file size
@@ -91,6 +98,7 @@ Original Payload → Plugin 1 → Modified Payload → Plugin 2 → Final Payloa
 #### 6.1.3 Error Handling and Resilience
 
 **Plugin Error Isolation:**
+
 - Plugin execution errors don't crash other plugins or the gateway
 - Failed plugins are logged and handled based on their execution mode:
   - **Enforce Mode**: Plugin errors block the request
@@ -98,11 +106,13 @@ Original Payload → Plugin 1 → Modified Payload → Plugin 2 → Final Payloa
   - **Enforce Ignore Error Mode**: Plugin violations block, but technical errors are ignored
 
 **Timeout Protection:**
+
 - Each plugin execution is wrapped with configurable timeouts (default 30 seconds)
 - Timed-out plugins are treated as errors according to their execution mode
 - External plugins may have longer timeout allowances due to network latency
 
 **Context Preservation:**
+
 - Plugin contexts are preserved across the execution chain
 - State set by early plugins is available to later plugins
 - Global context maintains request-level information throughout the flow
@@ -161,6 +171,7 @@ For detailed information about MCP protocol security hooks including payload str
 **[📖 MCP Security Hooks Reference](./mcp-security-hooks.md)**
 
 This document covers the eight core MCP protocol hooks:
+
 - HTTP Pre/Post-Forwarding Hooks - Header processing and authentication
 - Prompt Pre/Post-Fetch Hooks - Input validation and content filtering
 - Tool Pre/Post-Invoke Hooks - Parameter validation and result processing
@@ -173,6 +184,7 @@ For detailed information about gateway management and administrative hooks, see:
 **[📖 Gateway Administrative Hooks Reference](./gateway-admin-hooks.md)**
 
 This document covers administrative operation hooks:
+
 - Server Management Hooks - Registration, updates, deletion, activation
 - Gateway Federation Hooks - Peer gateway management *(Future)*
 - A2A Agent Hooks - Agent-to-Agent integration management *(Future)*
