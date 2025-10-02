@@ -258,19 +258,44 @@ async def resource_post_fetch(plugin_name: str, payload: Dict[str, Any], context
 async def run():  # pragma: no cover
     """Run the external plugin SERVER.
 
+    Automatically detects mTLS configuration from environment variables and
+    delegates to runtime_mtls.py if mTLS is enabled.
+
+    Environment Variables (mTLS detection):
+        MCP_SSL_ENABLED: Enable SSL/TLS (true/false)
+        MCP_SSL_KEYFILE: Path to server private key
+        MCP_SSL_CERTFILE: Path to server certificate
+        MCP_SSL_CA_CERTS: Path to CA bundle (optional)
+        MCP_SSL_CERT_REQS: Certificate verification mode (0=NONE, 1=OPTIONAL, 2=REQUIRED)
+
     Raises:
         Exception: if unnable to run the plugin SERVER.
     """
-    global SERVER  # pylint: disable=global-statement
-    SERVER = ExternalPluginServer()
-    if await SERVER.initialize():
-        try:
-            await main_async()
-        except Exception:
-            logger.exception("Caught error while executing plugin server")
-            raise
-        finally:
-            await SERVER.shutdown()
+    import os
+
+    # Check if mTLS is enabled via environment variables
+    ssl_enabled = os.getenv("MCP_SSL_ENABLED", "").lower() == "true"
+
+    if ssl_enabled:
+        # Delegate to mTLS runtime
+        logger.info("mTLS enabled - delegating to runtime_mtls")
+        from mcpgateway.plugins.framework.external.mcp.server.runtime_mtls import run_with_mtls
+
+        # Set the global SERVER for runtime_mtls to use
+        global SERVER  # pylint: disable=global-statement
+        await run_with_mtls()
+    else:
+        # Standard runtime without mTLS
+        global SERVER  # pylint: disable=global-statement
+        SERVER = ExternalPluginServer()
+        if await SERVER.initialize():
+            try:
+                await main_async()
+            except Exception:
+                logger.exception("Caught error while executing plugin server")
+                raise
+            finally:
+                await SERVER.shutdown()
 
 
 if __name__ == "__main__":  # pragma: no cover
