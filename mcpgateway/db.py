@@ -146,6 +146,31 @@ def utc_now() -> datetime:
     return datetime.now(timezone.utc)
 
 
+# Configure SQLite for better concurrency if using SQLite
+if backend == "sqlite":
+
+    @event.listens_for(engine, "connect")
+    def set_sqlite_pragma(dbapi_conn, _connection_record):
+        """Set SQLite pragmas for better concurrency.
+
+        This is critical for running with multiple gunicorn workers.
+        WAL mode allows multiple readers and a single writer concurrently.
+
+        Args:
+            dbapi_conn: The raw DBAPI connection.
+            _connection_record: A SQLAlchemy-specific object that maintains
+                information about the connection's context.
+        """
+        cursor = dbapi_conn.cursor()
+        # Enable WAL mode for better concurrency
+        cursor.execute("PRAGMA journal_mode=WAL")
+        # Set busy timeout to 10 seconds (10000 ms) to handle lock contention
+        cursor.execute("PRAGMA busy_timeout=10000")
+        # Synchronous=NORMAL is safe with WAL mode and improves performance
+        cursor.execute("PRAGMA synchronous=NORMAL")
+        cursor.close()
+
+
 # Session factory
 SessionLocal = sessionmaker(autocommit=False, autoflush=False, bind=engine)
 
@@ -942,6 +967,81 @@ class EmailTeamMember(Base):
             str: String representation of EmailTeamMember instance
         """
         return f"<EmailTeamMember(team_id='{self.team_id}', user_email='{self.user_email}', role='{self.role}')>"
+
+
+# Team member history model
+class EmailTeamMemberHistory(Base):
+    """
+    History of team member actions (add, remove, reactivate, role change).
+
+    This model records every membership-related event for audit and compliance.
+    Each record tracks the team, user, role, action type, actor, and timestamp.
+
+    Attributes:
+        id (str): Primary key UUID
+        team_id (str): Foreign key to email_teams
+        user_email (str): Foreign key to email_users
+        role (str): Role at the time of action
+        action (str): Action type ("added", "removed", "reactivated", "role_changed")
+        action_by (str): Email of the user who performed the action
+        action_timestamp (datetime): When the action occurred
+
+    Examples:
+        >>> from mcpgateway.db import EmailTeamMemberHistory, utc_now
+        >>> history = EmailTeamMemberHistory(
+        ...     team_id="team-123",
+        ...     user_email="user@example.com",
+        ...     role="member",
+        ...     action="added",
+        ...     action_by="admin@example.com",
+        ...     action_timestamp=utc_now()
+        ... )
+        >>> history.action
+        'added'
+        >>> history.role
+        'member'
+        >>> isinstance(history.action_timestamp, type(utc_now()))
+        True
+    """
+
+    __tablename__ = "email_team_member_history"
+
+    id: Mapped[str] = mapped_column(String(36), primary_key=True, default=lambda: uuid.uuid4().hex)
+    team_member_id: Mapped[str] = mapped_column(String(36), ForeignKey("email_team_members.id"), nullable=False)
+    team_id: Mapped[str] = mapped_column(String(36), ForeignKey("email_teams.id"), nullable=False)
+    user_email: Mapped[str] = mapped_column(String(255), ForeignKey("email_users.email"), nullable=False)
+    role: Mapped[str] = mapped_column(String(50), default="member", nullable=False)
+    action: Mapped[str] = mapped_column(String(50), nullable=False)  # e.g. "added", "removed", "reactivated", "role_changed"
+    action_by: Mapped[Optional[str]] = mapped_column(String(255), ForeignKey("email_users.email"), nullable=True)
+    action_timestamp: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=utc_now, nullable=False)
+
+    team_member: Mapped["EmailTeamMember"] = relationship("EmailTeamMember")
+    team: Mapped["EmailTeam"] = relationship("EmailTeam")
+    user: Mapped["EmailUser"] = relationship("EmailUser", foreign_keys=[user_email])
+    actor: Mapped[Optional["EmailUser"]] = relationship("EmailUser", foreign_keys=[action_by])
+
+    def __repr__(self) -> str:
+        """
+        Return a string representation of the EmailTeamMemberHistory instance.
+
+        Returns:
+            str: A string summarizing the team member history record.
+
+        Examples:
+            >>> from mcpgateway.db import EmailTeamMemberHistory, utc_now
+            >>> history = EmailTeamMemberHistory(
+            ...     team_member_id="tm-123",
+            ...     team_id="team-123",
+            ...     user_email="user@example.com",
+            ...     role="member",
+            ...     action="added",
+            ...     action_by="admin@example.com",
+            ...     action_timestamp=utc_now()
+            ... )
+            >>> isinstance(repr(history), str)
+            True
+        """
+        return f"<EmailTeamMemberHistory(team_member_id='{self.team_member_id}', team_id='{self.team_id}', user_email='{self.user_email}', role='{self.role}', action='{self.action}', action_by='{self.action_by}', action_timestamp='{self.action_timestamp}')>"
 
 
 class EmailTeamInvitation(Base):

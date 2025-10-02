@@ -38,7 +38,7 @@ from fastapi import APIRouter, Depends, HTTPException, Query, Request, Response
 from fastapi.encoders import jsonable_encoder
 from fastapi.responses import HTMLResponse, JSONResponse, RedirectResponse, StreamingResponse
 import httpx
-from pydantic import ValidationError
+from pydantic import SecretStr, ValidationError
 from pydantic_core import ValidationError as CoreValidationError
 from sqlalchemy.exc import IntegrityError
 from sqlalchemy.orm import Session
@@ -53,6 +53,13 @@ from mcpgateway.models import LogLevel
 from mcpgateway.schemas import (
     A2AAgentCreate,
     A2AAgentRead,
+    CatalogBulkRegisterRequest,
+    CatalogBulkRegisterResponse,
+    CatalogListRequest,
+    CatalogListResponse,
+    CatalogServerRegisterRequest,
+    CatalogServerRegisterResponse,
+    CatalogServerStatusResponse,
     GatewayCreate,
     GatewayRead,
     GatewayTestRequest,
@@ -60,6 +67,9 @@ from mcpgateway.schemas import (
     GatewayUpdate,
     GlobalConfigRead,
     GlobalConfigUpdate,
+    PluginDetail,
+    PluginListResponse,
+    PluginStatsResponse,
     PromptCreate,
     PromptMetrics,
     PromptRead,
@@ -78,6 +88,7 @@ from mcpgateway.schemas import (
     ToolUpdate,
 )
 from mcpgateway.services.a2a_service import A2AAgentError, A2AAgentNameConflictError, A2AAgentNotFoundError, A2AAgentService
+from mcpgateway.services.catalog_service import catalog_service
 from mcpgateway.services.export_service import ExportError, ExportService
 from mcpgateway.services.gateway_service import GatewayConnectionError, GatewayNameConflictError, GatewayNotFoundError, GatewayService, GatewayUrlConflictError
 from mcpgateway.services.import_service import ConflictStrategy
@@ -85,6 +96,7 @@ from mcpgateway.services.import_service import ImportError as ImportServiceError
 from mcpgateway.services.import_service import ImportService, ImportValidationError
 from mcpgateway.services.logging_service import LoggingService
 from mcpgateway.services.oauth_manager import OAuthManager
+from mcpgateway.services.plugin_service import get_plugin_service
 from mcpgateway.services.prompt_service import PromptNotFoundError, PromptService
 from mcpgateway.services.resource_service import ResourceNotFoundError, ResourceService
 from mcpgateway.services.root_service import RootService
@@ -503,6 +515,157 @@ async def update_global_passthrough_headers(
         if isinstance(e, PassthroughHeadersError):
             raise HTTPException(status_code=500, detail=str(e))
         raise HTTPException(status_code=500, detail="Unknown error occurred")
+
+
+@admin_router.get("/config/settings")
+async def get_configuration_settings(
+    _db: Session = Depends(get_db),
+    _user=Depends(get_current_user_with_permissions),
+) -> Dict[str, Any]:
+    """Get application configuration settings grouped by category.
+
+    Returns configuration settings with sensitive values masked.
+
+    Args:
+        _db: Database session
+        _user: Authenticated user
+
+    Returns:
+        Dict with configuration groups and their settings
+    """
+
+    def mask_sensitive(value: Any, key: str) -> Any:
+        """Mask sensitive configuration values.
+
+        Args:
+            value: Configuration value to potentially mask
+            key: Configuration key name to check for sensitive patterns
+
+        Returns:
+            Masked value if sensitive, original value otherwise
+        """
+        sensitive_keys = {"password", "secret", "key", "token", "credentials", "client_secret", "private_key", "auth_encryption_secret"}
+        if any(s in key.lower() for s in sensitive_keys):
+            # Handle SecretStr objects
+            if isinstance(value, SecretStr):
+                return settings.masked_auth_value
+            if value and str(value) not in ["", "None", "null"]:
+                return settings.masked_auth_value
+        # Handle SecretStr even for non-sensitive keys
+        if isinstance(value, SecretStr):
+            return value.get_secret_value()
+        return value
+
+    # Group settings by category
+    config_groups = {
+        "Basic Settings": {
+            "app_name": settings.app_name,
+            "host": settings.host,
+            "port": settings.port,
+            "environment": settings.environment,
+            "app_domain": str(settings.app_domain),
+            "protocol_version": settings.protocol_version,
+        },
+        "Authentication & Security": {
+            "auth_required": settings.auth_required,
+            "basic_auth_user": settings.basic_auth_user,
+            "basic_auth_password": mask_sensitive(settings.basic_auth_password, "password"),
+            "jwt_algorithm": settings.jwt_algorithm,
+            "jwt_secret_key": mask_sensitive(settings.jwt_secret_key, "secret_key"),
+            "jwt_audience": settings.jwt_audience,
+            "jwt_issuer": settings.jwt_issuer,
+            "token_expiry": settings.token_expiry,
+            "require_token_expiration": settings.require_token_expiration,
+            "mcp_client_auth_enabled": settings.mcp_client_auth_enabled,
+            "trust_proxy_auth": settings.trust_proxy_auth,
+            "skip_ssl_verify": settings.skip_ssl_verify,
+        },
+        "SSO Configuration": {
+            "sso_enabled": settings.sso_enabled,
+            "sso_github_enabled": settings.sso_github_enabled,
+            "sso_google_enabled": settings.sso_google_enabled,
+            "sso_ibm_verify_enabled": settings.sso_ibm_verify_enabled,
+            "sso_okta_enabled": settings.sso_okta_enabled,
+            "sso_auto_create_users": settings.sso_auto_create_users,
+            "sso_preserve_admin_auth": settings.sso_preserve_admin_auth,
+            "sso_require_admin_approval": settings.sso_require_admin_approval,
+        },
+        "Email Authentication": {
+            "email_auth_enabled": settings.email_auth_enabled,
+            "platform_admin_email": settings.platform_admin_email,
+            "platform_admin_password": mask_sensitive(settings.platform_admin_password, "password"),
+        },
+        "Database & Cache": {
+            "database_url": settings.database_url.replace("://", "://***@") if "@" in settings.database_url else settings.database_url,
+            "cache_type": settings.cache_type,
+            "redis_url": settings.redis_url.replace("://", "://***@") if settings.redis_url and "@" in settings.redis_url else settings.redis_url,
+            "db_pool_size": settings.db_pool_size,
+            "db_max_overflow": settings.db_max_overflow,
+        },
+        "Feature Flags": {
+            "mcpgateway_ui_enabled": settings.mcpgateway_ui_enabled,
+            "mcpgateway_admin_api_enabled": settings.mcpgateway_admin_api_enabled,
+            "mcpgateway_bulk_import_enabled": settings.mcpgateway_bulk_import_enabled,
+            "mcpgateway_a2a_enabled": settings.mcpgateway_a2a_enabled,
+            "mcpgateway_catalog_enabled": settings.mcpgateway_catalog_enabled,
+            "plugins_enabled": settings.plugins_enabled,
+            "well_known_enabled": settings.well_known_enabled,
+        },
+        "Federation": {
+            "federation_enabled": settings.federation_enabled,
+            "federation_discovery": settings.federation_discovery,
+            "federation_timeout": settings.federation_timeout,
+            "federation_sync_interval": settings.federation_sync_interval,
+        },
+        "Transport": {
+            "transport_type": settings.transport_type,
+            "websocket_ping_interval": settings.websocket_ping_interval,
+            "sse_retry_timeout": settings.sse_retry_timeout,
+            "sse_keepalive_enabled": settings.sse_keepalive_enabled,
+        },
+        "Logging": {
+            "log_level": settings.log_level,
+            "log_format": settings.log_format,
+            "log_to_file": settings.log_to_file,
+            "log_file": settings.log_file,
+            "log_rotation_enabled": settings.log_rotation_enabled,
+        },
+        "Resources & Tools": {
+            "tool_timeout": settings.tool_timeout,
+            "tool_rate_limit": settings.tool_rate_limit,
+            "tool_concurrent_limit": settings.tool_concurrent_limit,
+            "resource_cache_size": settings.resource_cache_size,
+            "resource_cache_ttl": settings.resource_cache_ttl,
+            "max_resource_size": settings.max_resource_size,
+        },
+        "CORS Settings": {
+            "cors_enabled": settings.cors_enabled,
+            "allowed_origins": list(settings.allowed_origins),
+            "cors_allow_credentials": settings.cors_allow_credentials,
+        },
+        "Security Headers": {
+            "security_headers_enabled": settings.security_headers_enabled,
+            "x_frame_options": settings.x_frame_options,
+            "hsts_enabled": settings.hsts_enabled,
+            "hsts_max_age": settings.hsts_max_age,
+            "remove_server_headers": settings.remove_server_headers,
+        },
+        "Observability": {
+            "otel_enable_observability": settings.otel_enable_observability,
+            "otel_traces_exporter": settings.otel_traces_exporter,
+            "otel_service_name": settings.otel_service_name,
+        },
+        "Development": {
+            "dev_mode": settings.dev_mode,
+            "reload": settings.reload,
+            "debug": settings.debug,
+        },
+    }
+
+    return {
+        "groups": config_groups,
+        "security_status": settings.get_security_status(),
+    }
 
 
 @admin_router.get("/servers", response_model=List[ServerRead])
@@ -2155,7 +2318,7 @@ async def admin_ui(
     if a2a_service and settings.mcpgateway_a2a_enabled:
         a2a_agents_raw = await a2a_service.list_agents_for_user(
             db,
-            user_email=user_email,
+            user_info=user_email,
             include_inactive=include_inactive,
         )
         a2a_agents = [agent.model_dump(by_alias=True) for agent in a2a_agents_raw]
@@ -2183,6 +2346,7 @@ async def admin_ui(
             "gateway_tool_name_separator": settings.gateway_tool_name_separator,
             "bulk_import_max_tools": settings.mcpgateway_bulk_import_max_tools,
             "a2a_enabled": settings.mcpgateway_a2a_enabled,
+            "catalog_enabled": settings.mcpgateway_catalog_enabled,
             "current_user": get_user_email(user),
             "email_auth_enabled": getattr(settings, "email_auth_enabled", False),
             "is_admin": bool(user.get("is_admin") if isinstance(user, dict) else False),
@@ -8647,7 +8811,7 @@ async def admin_list_a2a_agents(
 
     agents = await a2a_service.list_agents_for_user(
         db,
-        user_email=user_email,
+        user_info=user_email,
         include_inactive=include_inactive,
     )
     return [agent.model_dump(by_alias=True) for agent in agents]
@@ -8721,12 +8885,6 @@ async def admin_add_a2a_agent(
             import_batch_id=metadata["import_batch_id"],
             federation_source=metadata["federation_source"],
         )
-
-        """
-        # Return redirect to admin page with A2A tab
-        root_path = request.scope.get("root_path", "")
-        return RedirectResponse(f"{root_path}/admin#a2a-agents", status_code=303)
-        """
 
         return JSONResponse(
             content={"message": "A2A agent created successfully!", "success": True},
@@ -9163,3 +9321,408 @@ async def get_gateways_section(
     except Exception as e:
         LOGGER.error(f"Error loading gateways section: {e}")
         return JSONResponse(content={"error": str(e)}, status_code=500)
+
+
+####################
+# Plugin Routes    #
+####################
+
+
+@admin_router.get("/plugins/partial")
+async def get_plugins_partial(request: Request, db: Session = Depends(get_db), user=Depends(get_current_user_with_permissions)) -> HTMLResponse:  # pylint: disable=unused-argument
+    """Render the plugins partial HTML template.
+
+    This endpoint returns a rendered HTML partial containing plugin information,
+    similar to the version_info_partial pattern. It's designed to be loaded via HTMX
+    into the admin interface.
+
+    Args:
+        request: FastAPI request object
+        db: Database session
+        user: Authenticated user
+
+    Returns:
+        HTMLResponse with rendered plugins partial template
+    """
+    LOGGER.debug(f"User {get_user_email(user)} requested plugins partial")
+
+    try:
+        # Get plugin service and check if plugins are enabled
+        plugin_service = get_plugin_service()
+
+        # Check if plugin manager is available in app state
+        plugin_manager = getattr(request.app.state, "plugin_manager", None)
+        if plugin_manager:
+            plugin_service.set_plugin_manager(plugin_manager)
+
+        # Get plugin data
+        plugins = plugin_service.get_all_plugins()
+        stats = plugin_service.get_plugin_statistics()
+
+        # Prepare context for template
+        context = {"request": request, "plugins": plugins, "stats": stats, "plugins_enabled": plugin_manager is not None, "root_path": request.scope.get("root_path", "")}
+
+        # Render the partial template
+        return request.app.state.templates.TemplateResponse("plugins_partial.html", context)
+
+    except Exception as e:
+        LOGGER.error(f"Error rendering plugins partial: {e}")
+        # Return error HTML that can be displayed in the UI
+        error_html = f"""
+        <div class="bg-red-50 border border-red-200 text-red-700 px-4 py-3 rounded">
+            <strong class="font-bold">Error loading plugins:</strong>
+            <span class="block sm:inline">{str(e)}</span>
+        </div>
+        """
+        return HTMLResponse(content=error_html, status_code=500)
+
+
+@admin_router.get("/plugins", response_model=PluginListResponse)
+async def list_plugins(
+    request: Request,
+    search: Optional[str] = None,
+    mode: Optional[str] = None,
+    hook: Optional[str] = None,
+    tag: Optional[str] = None,
+    db: Session = Depends(get_db),  # pylint: disable=unused-argument
+    user=Depends(get_current_user_with_permissions),
+) -> PluginListResponse:
+    """Get list of all plugins with optional filtering.
+
+    Args:
+        request: FastAPI request object
+        search: Optional text search in name/description/author
+        mode: Optional filter by mode (enforce/permissive/disabled)
+        hook: Optional filter by hook type
+        tag: Optional filter by tag
+        db: Database session
+        user: Authenticated user
+
+    Returns:
+        PluginListResponse with list of plugins and statistics
+
+    Raises:
+        HTTPException: If there's an error retrieving plugins
+    """
+    LOGGER.debug(f"User {get_user_email(user)} requested plugin list")
+
+    try:
+        # Get plugin service
+        plugin_service = get_plugin_service()
+
+        # Check if plugin manager is available
+        plugin_manager = getattr(request.app.state, "plugin_manager", None)
+        if plugin_manager:
+            plugin_service.set_plugin_manager(plugin_manager)
+
+        # Get filtered plugins
+        if any([search, mode, hook, tag]):
+            plugins = plugin_service.search_plugins(query=search, mode=mode, hook=hook, tag=tag)
+        else:
+            plugins = plugin_service.get_all_plugins()
+
+        # Count enabled/disabled
+        enabled_count = sum(1 for p in plugins if p["status"] == "enabled")
+        disabled_count = sum(1 for p in plugins if p["status"] == "disabled")
+
+        return PluginListResponse(plugins=plugins, total=len(plugins), enabled_count=enabled_count, disabled_count=disabled_count)
+
+    except Exception as e:
+        LOGGER.error(f"Error listing plugins: {e}")
+        raise HTTPException(status_code=500, detail=str(e))
+
+
+@admin_router.get("/plugins/stats", response_model=PluginStatsResponse)
+async def get_plugin_stats(request: Request, db: Session = Depends(get_db), user=Depends(get_current_user_with_permissions)) -> PluginStatsResponse:  # pylint: disable=unused-argument
+    """Get plugin statistics.
+
+    Args:
+        request: FastAPI request object
+        db: Database session
+        user: Authenticated user
+
+    Returns:
+        PluginStatsResponse with aggregated plugin statistics
+
+    Raises:
+        HTTPException: If there's an error getting plugin statistics
+    """
+    LOGGER.debug(f"User {get_user_email(user)} requested plugin statistics")
+
+    try:
+        # Get plugin service
+        plugin_service = get_plugin_service()
+
+        # Check if plugin manager is available
+        plugin_manager = getattr(request.app.state, "plugin_manager", None)
+        if plugin_manager:
+            plugin_service.set_plugin_manager(plugin_manager)
+
+        # Get statistics
+        stats = plugin_service.get_plugin_statistics()
+
+        return PluginStatsResponse(**stats)
+
+    except Exception as e:
+        LOGGER.error(f"Error getting plugin statistics: {e}")
+        raise HTTPException(status_code=500, detail=str(e))
+
+
+@admin_router.get("/plugins/{name}", response_model=PluginDetail)
+async def get_plugin_details(name: str, request: Request, db: Session = Depends(get_db), user=Depends(get_current_user_with_permissions)) -> PluginDetail:  # pylint: disable=unused-argument
+    """Get detailed information about a specific plugin.
+
+    Args:
+        name: Plugin name
+        request: FastAPI request object
+        db: Database session
+        user: Authenticated user
+
+    Returns:
+        PluginDetail with full plugin information
+
+    Raises:
+        HTTPException: If plugin not found
+    """
+    LOGGER.debug(f"User {get_user_email(user)} requested details for plugin {name}")
+
+    try:
+        # Get plugin service
+        plugin_service = get_plugin_service()
+
+        # Check if plugin manager is available
+        plugin_manager = getattr(request.app.state, "plugin_manager", None)
+        if plugin_manager:
+            plugin_service.set_plugin_manager(plugin_manager)
+
+        # Get plugin details
+        plugin = plugin_service.get_plugin_by_name(name)
+
+        if not plugin:
+            raise HTTPException(status_code=404, detail=f"Plugin '{name}' not found")
+
+        return PluginDetail(**plugin)
+
+    except HTTPException:
+        raise
+    except Exception as e:
+        LOGGER.error(f"Error getting plugin details: {e}")
+        raise HTTPException(status_code=500, detail=str(e))
+
+
+##################################################
+# MCP Registry Endpoints
+##################################################
+
+
+@admin_router.get("/mcp-registry/servers", response_model=CatalogListResponse)
+async def list_catalog_servers(
+    _request: Request,
+    category: Optional[str] = None,
+    auth_type: Optional[str] = None,
+    provider: Optional[str] = None,
+    search: Optional[str] = None,
+    tags: Optional[List[str]] = Query(None),
+    show_registered_only: bool = False,
+    show_available_only: bool = True,
+    limit: int = 100,
+    offset: int = 0,
+    db: Session = Depends(get_db),
+    _user=Depends(get_current_user_with_permissions),
+) -> CatalogListResponse:
+    """Get list of catalog servers with filtering.
+
+    Args:
+        _request: FastAPI request object
+        category: Filter by category
+        auth_type: Filter by authentication type
+        provider: Filter by provider
+        search: Search in name/description
+        tags: Filter by tags
+        show_registered_only: Show only already registered servers
+        show_available_only: Show only available servers
+        limit: Maximum results
+        offset: Pagination offset
+        db: Database session
+        _user: Authenticated user
+
+    Returns:
+        List of catalog servers matching filters
+
+    Raises:
+        HTTPException: If the catalog feature is disabled.
+    """
+    if not settings.mcpgateway_catalog_enabled:
+        raise HTTPException(status_code=404, detail="Catalog feature is disabled")
+
+    catalog_request = CatalogListRequest(
+        category=category,
+        auth_type=auth_type,
+        provider=provider,
+        search=search,
+        tags=tags or [],
+        show_registered_only=show_registered_only,
+        show_available_only=show_available_only,
+        limit=limit,
+        offset=offset,
+    )
+
+    return await catalog_service.get_catalog_servers(catalog_request, db)
+
+
+@admin_router.post("/mcp-registry/{server_id}/register", response_model=CatalogServerRegisterResponse)
+@require_permission("servers.create")
+async def register_catalog_server(
+    server_id: str,
+    request: Optional[CatalogServerRegisterRequest] = None,
+    db: Session = Depends(get_db),
+    _user=Depends(get_current_user_with_permissions),
+) -> CatalogServerRegisterResponse:
+    """Register a catalog server.
+
+    Args:
+        server_id: Catalog server ID to register
+        request: Optional registration parameters
+        db: Database session
+        _user: Authenticated user
+
+    Returns:
+        Registration response with success status
+
+    Raises:
+        HTTPException: If the catalog feature is disabled.
+    """
+    if not settings.mcpgateway_catalog_enabled:
+        raise HTTPException(status_code=404, detail="Catalog feature is disabled")
+
+    return await catalog_service.register_catalog_server(catalog_id=server_id, request=request, db=db)
+
+
+@admin_router.get("/mcp-registry/{server_id}/status", response_model=CatalogServerStatusResponse)
+async def check_catalog_server_status(
+    server_id: str,
+    _db: Session = Depends(get_db),
+    _user=Depends(get_current_user_with_permissions),
+) -> CatalogServerStatusResponse:
+    """Check catalog server availability.
+
+    Args:
+        server_id: Catalog server ID to check
+        _db: Database session
+        _user: Authenticated user
+
+    Returns:
+        Server status including availability and response time
+
+    Raises:
+        HTTPException: If the catalog feature is disabled.
+    """
+    if not settings.mcpgateway_catalog_enabled:
+        raise HTTPException(status_code=404, detail="Catalog feature is disabled")
+
+    return await catalog_service.check_server_availability(server_id)
+
+
+@admin_router.post("/mcp-registry/bulk-register", response_model=CatalogBulkRegisterResponse)
+@require_permission("servers.create")
+async def bulk_register_catalog_servers(
+    request: CatalogBulkRegisterRequest,
+    db: Session = Depends(get_db),
+    _user=Depends(get_current_user_with_permissions),
+) -> CatalogBulkRegisterResponse:
+    """Register multiple catalog servers at once.
+
+    Args:
+        request: Bulk registration request with server IDs
+        db: Database session
+        _user: Authenticated user
+
+    Returns:
+        Bulk registration response with success/failure details
+
+    Raises:
+        HTTPException: If the catalog feature is disabled.
+    """
+    if not settings.mcpgateway_catalog_enabled:
+        raise HTTPException(status_code=404, detail="Catalog feature is disabled")
+
+    return await catalog_service.bulk_register_servers(request, db)
+
+
+@admin_router.get("/mcp-registry/partial")
+async def catalog_partial(
+    request: Request,
+    category: Optional[str] = None,
+    auth_type: Optional[str] = None,
+    search: Optional[str] = None,
+    page: int = 1,
+    db: Session = Depends(get_db),
+    _user=Depends(get_current_user_with_permissions),
+) -> HTMLResponse:
+    """Get HTML partial for catalog servers (used by HTMX).
+
+    Args:
+        request: FastAPI request object
+        category: Filter by category
+        auth_type: Filter by authentication type
+        search: Search term
+        page: Page number (1-indexed)
+        db: Database session
+        _user: Authenticated user
+
+    Returns:
+        HTML partial with filtered catalog servers
+
+    Raises:
+        HTTPException: If the catalog feature is disabled.
+    """
+    if not settings.mcpgateway_catalog_enabled:
+        raise HTTPException(status_code=404, detail="Catalog feature is disabled")
+
+    root_path = request.scope.get("root_path", "")
+
+    # Calculate pagination
+    page_size = 100
+    offset = (page - 1) * page_size
+
+    catalog_request = CatalogListRequest(category=category, auth_type=auth_type, search=search, show_available_only=False, limit=page_size, offset=offset)
+
+    response = await catalog_service.get_catalog_servers(catalog_request, db)
+
+    # Calculate statistics and pagination info
+    total_servers = response.total
+    registered_count = sum(1 for s in response.servers if s.is_registered)
+    total_pages = (total_servers + page_size - 1) // page_size  # Ceiling division
+
+    # Count servers by category, auth type, and provider
+    servers_by_category = {}
+    servers_by_auth_type = {}
+    servers_by_provider = {}
+
+    for server in response.servers:
+        servers_by_category[server.category] = servers_by_category.get(server.category, 0) + 1
+        servers_by_auth_type[server.auth_type] = servers_by_auth_type.get(server.auth_type, 0) + 1
+        servers_by_provider[server.provider] = servers_by_provider.get(server.provider, 0) + 1
+
+    stats = {
+        "total_servers": total_servers,
+        "registered_servers": registered_count,
+        "categories": response.categories,
+        "auth_types": response.auth_types,
+        "providers": response.providers,
+        "servers_by_category": servers_by_category,
+        "servers_by_auth_type": servers_by_auth_type,
+        "servers_by_provider": servers_by_provider,
+    }
+
+    context = {
+        "request": request,
+        "servers": response.servers,
+        "stats": stats,
+        "root_path": root_path,
+        "page": page,
+        "total_pages": total_pages,
+        "page_size": page_size,
+    }
+
+    return request.app.state.templates.TemplateResponse("mcp_registry_partial.html", context)

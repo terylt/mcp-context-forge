@@ -4795,6 +4795,165 @@ function showTab(tabName) {
                     }
                 }
 
+                if (tabName === "mcp-registry") {
+                    // Load MCP Registry content
+                    const registryContent = safeGetElement(
+                        "mcp-registry-content",
+                    );
+                    if (registryContent) {
+                        // Always load on first visit or if showing loading message
+                        const hasLoadingMessage =
+                            registryContent.innerHTML.includes(
+                                "Loading MCP Registry servers...",
+                            );
+                        const needsLoad =
+                            hasLoadingMessage ||
+                            !registryContent.getAttribute("data-loaded");
+
+                        if (needsLoad) {
+                            const rootPath = window.ROOT_PATH || "";
+
+                            // Use HTMX if available
+                            if (window.htmx && window.htmx.ajax) {
+                                window.htmx
+                                    .ajax(
+                                        "GET",
+                                        `${rootPath}/admin/mcp-registry/partial`,
+                                        {
+                                            target: "#mcp-registry-content",
+                                            swap: "innerHTML",
+                                        },
+                                    )
+                                    .then(() => {
+                                        registryContent.setAttribute(
+                                            "data-loaded",
+                                            "true",
+                                        );
+                                    });
+                            } else {
+                                // Fallback to fetch if HTMX is not available
+                                fetch(`${rootPath}/admin/mcp-registry/partial`)
+                                    .then((response) => response.text())
+                                    .then((html) => {
+                                        registryContent.innerHTML = html;
+                                        registryContent.setAttribute(
+                                            "data-loaded",
+                                            "true",
+                                        );
+                                        // Process any HTMX attributes in the new content
+                                        if (window.htmx) {
+                                            window.htmx.process(
+                                                registryContent,
+                                            );
+                                        }
+                                    })
+                                    .catch((error) => {
+                                        console.error(
+                                            "Failed to load MCP Registry:",
+                                            error,
+                                        );
+                                        registryContent.innerHTML =
+                                            '<div class="text-center text-red-600 py-8">Failed to load MCP Registry servers</div>';
+                                    });
+                            }
+                        }
+                    }
+                }
+
+                if (tabName === "gateways") {
+                    // Reload gateways list to show any newly registered servers
+                    const gatewaysSection = safeGetElement("gateways-section");
+                    if (gatewaysSection) {
+                        const gatewaysTbody =
+                            gatewaysSection.querySelector("tbody");
+                        if (gatewaysTbody) {
+                            // Trigger HTMX reload if available
+                            if (window.htmx && window.htmx.trigger) {
+                                window.htmx.trigger(gatewaysTbody, "load");
+                            } else {
+                                // Fallback: reload the page section via fetch
+                                const rootPath = window.ROOT_PATH || "";
+                                fetch(`${rootPath}/admin`)
+                                    .then((response) => response.text())
+                                    .then((html) => {
+                                        // Parse the HTML and extract just the gateways table
+                                        const parser = new DOMParser();
+                                        const doc = parser.parseFromString(
+                                            html,
+                                            "text/html",
+                                        );
+                                        const newTbody = doc.querySelector(
+                                            "#gateways-section tbody",
+                                        );
+                                        if (newTbody) {
+                                            gatewaysTbody.innerHTML =
+                                                newTbody.innerHTML;
+                                            // Process any HTMX attributes in the new content
+                                            if (window.htmx) {
+                                                window.htmx.process(
+                                                    gatewaysTbody,
+                                                );
+                                            }
+                                        }
+                                    })
+                                    .catch((error) => {
+                                        console.error(
+                                            "Failed to reload gateways:",
+                                            error,
+                                        );
+                                    });
+                            }
+                        }
+                    }
+                }
+
+                if (tabName === "plugins") {
+                    const pluginsPanel = safeGetElement("plugins-panel");
+                    if (pluginsPanel && pluginsPanel.innerHTML.trim() === "") {
+                        const rootPath = window.ROOT_PATH || "";
+                        fetchWithTimeout(
+                            `${rootPath}/admin/plugins/partial`,
+                            {
+                                method: "GET",
+                                credentials: "same-origin",
+                                headers: {
+                                    Accept: "text/html",
+                                },
+                            },
+                            5000,
+                        )
+                            .then((response) => {
+                                if (!response.ok) {
+                                    throw new Error(
+                                        `HTTP error! status: ${response.status}`,
+                                    );
+                                }
+                                return response.text();
+                            })
+                            .then((html) => {
+                                pluginsPanel.innerHTML = html;
+                                // Initialize plugin functions after HTML is loaded
+                                initializePluginFunctions();
+                                // Populate filter dropdowns
+                                if (window.populatePluginFilters) {
+                                    window.populatePluginFilters();
+                                }
+                            })
+                            .catch((error) => {
+                                console.error(
+                                    "Error loading plugins partial:",
+                                    error,
+                                );
+                                pluginsPanel.innerHTML = `
+                                    <div class="bg-red-50 border border-red-200 text-red-700 px-4 py-3 rounded">
+                                        <strong class="font-bold">Error loading plugins:</strong>
+                                        <span class="block sm:inline">${escapeHtml(error.message)}</span>
+                                    </div>
+                                `;
+                            });
+                    }
+                }
+
                 if (tabName === "version-info") {
                     const versionPanel = safeGetElement("version-info-panel");
                     if (versionPanel && versionPanel.innerHTML.trim() === "") {
@@ -8804,6 +8963,7 @@ function setupTabNavigation() {
         "a2a-agents",
         "roots",
         "metrics",
+        "plugins",
         "logs",
         "export-import",
         "version-info",
@@ -8811,7 +8971,13 @@ function setupTabNavigation() {
 
     tabs.forEach((tabName) => {
         // Suppress warnings for optional tabs that might not be enabled
-        const optionalTabs = ["roots", "logs", "export-import", "version-info"];
+        const optionalTabs = [
+            "roots",
+            "logs",
+            "export-import",
+            "version-info",
+            "plugins",
+        ];
         const suppressWarning = optionalTabs.includes(tabName);
 
         const tabElement = safeGetElement(`tab-${tabName}`, suppressWarning);
@@ -13109,3 +13275,517 @@ window.selectAllItems = selectAllItems;
 window.selectNoneItems = selectNoneItems;
 window.selectOnlyCustom = selectOnlyCustom;
 window.resetImportSelection = resetImportSelection;
+
+// Plugin management functions
+function initializePluginFunctions() {
+    // Populate hook, tag, and author filters on page load
+    window.populatePluginFilters = function () {
+        const cards = document.querySelectorAll(".plugin-card");
+        const hookSet = new Set();
+        const tagSet = new Set();
+        const authorSet = new Set();
+
+        cards.forEach((card) => {
+            const hooks = card.dataset.hooks
+                ? card.dataset.hooks.split(",")
+                : [];
+            const tags = card.dataset.tags ? card.dataset.tags.split(",") : [];
+            const author = card.dataset.author;
+
+            hooks.forEach((hook) => {
+                if (hook.trim()) {
+                    hookSet.add(hook.trim());
+                }
+            });
+            tags.forEach((tag) => {
+                if (tag.trim()) {
+                    tagSet.add(tag.trim());
+                }
+            });
+            if (author && author.trim()) {
+                authorSet.add(author.trim());
+            }
+        });
+
+        const hookFilter = document.getElementById("plugin-hook-filter");
+        const tagFilter = document.getElementById("plugin-tag-filter");
+        const authorFilter = document.getElementById("plugin-author-filter");
+
+        if (hookFilter) {
+            hookSet.forEach((hook) => {
+                const option = document.createElement("option");
+                option.value = hook;
+                option.textContent = hook
+                    .replace(/_/g, " ")
+                    .replace(/\b\w/g, (l) => l.toUpperCase());
+                hookFilter.appendChild(option);
+            });
+        }
+
+        if (tagFilter) {
+            tagSet.forEach((tag) => {
+                const option = document.createElement("option");
+                option.value = tag;
+                option.textContent = tag;
+                tagFilter.appendChild(option);
+            });
+        }
+
+        if (authorFilter) {
+            // Convert authorSet to array and sort for consistent ordering
+            const sortedAuthors = Array.from(authorSet).sort();
+            sortedAuthors.forEach((author) => {
+                const option = document.createElement("option");
+                // Value is lowercase (matches data-author), text is capitalized for display
+                option.value = author.toLowerCase();
+                option.textContent =
+                    author.charAt(0).toUpperCase() + author.slice(1);
+                authorFilter.appendChild(option);
+            });
+        }
+    };
+
+    // Filter plugins based on search and filters
+    window.filterPlugins = function () {
+        const searchInput = document.getElementById("plugin-search");
+        const modeFilter = document.getElementById("plugin-mode-filter");
+        const statusFilter = document.getElementById("plugin-status-filter");
+        const hookFilter = document.getElementById("plugin-hook-filter");
+        const tagFilter = document.getElementById("plugin-tag-filter");
+        const authorFilter = document.getElementById("plugin-author-filter");
+
+        const searchQuery = searchInput ? searchInput.value.toLowerCase() : "";
+        const selectedMode = modeFilter ? modeFilter.value : "";
+        const selectedStatus = statusFilter ? statusFilter.value : "";
+        const selectedHook = hookFilter ? hookFilter.value : "";
+        const selectedTag = tagFilter ? tagFilter.value : "";
+        const selectedAuthor = authorFilter ? authorFilter.value : "";
+
+        // Update visual highlighting for all filter types
+        updateBadgeHighlighting("hook", selectedHook);
+        updateBadgeHighlighting("tag", selectedTag);
+        updateBadgeHighlighting("author", selectedAuthor);
+
+        const cards = document.querySelectorAll(".plugin-card");
+
+        cards.forEach((card) => {
+            const name = card.dataset.name
+                ? card.dataset.name.toLowerCase()
+                : "";
+            const description = card.dataset.description
+                ? card.dataset.description.toLowerCase()
+                : "";
+            const author = card.dataset.author
+                ? card.dataset.author.toLowerCase()
+                : "";
+            const mode = card.dataset.mode;
+            const status = card.dataset.status;
+            const hooks = card.dataset.hooks
+                ? card.dataset.hooks.split(",")
+                : [];
+            const tags = card.dataset.tags ? card.dataset.tags.split(",") : [];
+
+            let visible = true;
+
+            // Search filter
+            if (
+                searchQuery &&
+                !name.includes(searchQuery) &&
+                !description.includes(searchQuery) &&
+                !author.includes(searchQuery)
+            ) {
+                visible = false;
+            }
+
+            // Mode filter
+            if (selectedMode && mode !== selectedMode) {
+                visible = false;
+            }
+
+            // Status filter
+            if (selectedStatus && status !== selectedStatus) {
+                visible = false;
+            }
+
+            // Hook filter
+            if (selectedHook && !hooks.includes(selectedHook)) {
+                visible = false;
+            }
+
+            // Tag filter
+            if (selectedTag && !tags.includes(selectedTag)) {
+                visible = false;
+            }
+
+            // Author filter
+            if (
+                selectedAuthor &&
+                author.trim() !== selectedAuthor.toLowerCase().trim()
+            ) {
+                visible = false;
+            }
+
+            if (visible) {
+                card.style.display = "block";
+            } else {
+                card.style.display = "none";
+            }
+        });
+    };
+
+    // Filter by hook when clicking on hook point
+    window.filterByHook = function (hook) {
+        const hookFilter = document.getElementById("plugin-hook-filter");
+        if (hookFilter) {
+            hookFilter.value = hook;
+            window.filterPlugins();
+            hookFilter.scrollIntoView({ behavior: "smooth", block: "nearest" });
+
+            // Update visual highlighting
+            updateBadgeHighlighting("hook", hook);
+        }
+    };
+
+    // Filter by tag when clicking on tag
+    window.filterByTag = function (tag) {
+        const tagFilter = document.getElementById("plugin-tag-filter");
+        if (tagFilter) {
+            tagFilter.value = tag;
+            window.filterPlugins();
+            tagFilter.scrollIntoView({ behavior: "smooth", block: "nearest" });
+
+            // Update visual highlighting
+            updateBadgeHighlighting("tag", tag);
+        }
+    };
+
+    // Filter by author when clicking on author
+    window.filterByAuthor = function (author) {
+        const authorFilter = document.getElementById("plugin-author-filter");
+        if (authorFilter) {
+            // Convert to lowercase to match data-author attribute
+            authorFilter.value = author.toLowerCase();
+            window.filterPlugins();
+            authorFilter.scrollIntoView({
+                behavior: "smooth",
+                block: "nearest",
+            });
+
+            // Update visual highlighting
+            updateBadgeHighlighting("author", author);
+        }
+    };
+
+    // Helper function to update badge highlighting
+    function updateBadgeHighlighting(type, value) {
+        // Define selectors for each type
+        const selectors = {
+            hook: "[onclick^='filterByHook']",
+            tag: "[onclick^='filterByTag']",
+            author: "[onclick^='filterByAuthor']",
+        };
+
+        const selector = selectors[type];
+        if (!selector) {
+            return;
+        }
+
+        // Get all badges of this type
+        const badges = document.querySelectorAll(selector);
+
+        badges.forEach((badge) => {
+            // Check if this is the "All" badge (empty value)
+            const isAllBadge = badge.getAttribute("onclick").includes("('')");
+
+            // Check if this badge matches the selected value
+            const badgeValue = badge
+                .getAttribute("onclick")
+                .match(/'([^']*)'/)?.[1];
+            const isSelected =
+                value === ""
+                    ? isAllBadge
+                    : badgeValue?.toLowerCase() === value?.toLowerCase();
+
+            if (isSelected) {
+                // Apply active/selected styling
+                badge.classList.remove(
+                    "bg-gray-100",
+                    "text-gray-800",
+                    "hover:bg-gray-200",
+                );
+                badge.classList.remove(
+                    "dark:bg-gray-700",
+                    "dark:text-gray-200",
+                    "dark:hover:bg-gray-600",
+                );
+                badge.classList.add(
+                    "bg-indigo-100",
+                    "text-indigo-800",
+                    "border",
+                    "border-indigo-300",
+                );
+                badge.classList.add(
+                    "dark:bg-indigo-900",
+                    "dark:text-indigo-200",
+                    "dark:border-indigo-700",
+                );
+            } else if (!isAllBadge) {
+                // Reset to default styling for non-All badges
+                badge.classList.remove(
+                    "bg-indigo-100",
+                    "text-indigo-800",
+                    "border",
+                    "border-indigo-300",
+                );
+                badge.classList.remove(
+                    "dark:bg-indigo-900",
+                    "dark:text-indigo-200",
+                    "dark:border-indigo-700",
+                );
+                badge.classList.add(
+                    "bg-gray-100",
+                    "text-gray-800",
+                    "hover:bg-gray-200",
+                );
+                badge.classList.add(
+                    "dark:bg-gray-700",
+                    "dark:text-gray-200",
+                    "dark:hover:bg-gray-600",
+                );
+            }
+        });
+    }
+
+    // Show plugin details modal
+    window.showPluginDetails = async function (pluginName) {
+        const modal = document.getElementById("plugin-details-modal");
+        const modalName = document.getElementById("modal-plugin-name");
+        const modalContent = document.getElementById("modal-plugin-content");
+
+        if (!modal || !modalName || !modalContent) {
+            console.error("Plugin details modal elements not found");
+            return;
+        }
+
+        // Show loading state
+        modalName.textContent = pluginName;
+        modalContent.innerHTML =
+            '<div class="text-center py-4">Loading...</div>';
+        modal.classList.remove("hidden");
+
+        try {
+            const rootPath = window.ROOT_PATH || "";
+            // Fetch plugin details
+            const response = await fetch(
+                `${rootPath}/admin/plugins/${encodeURIComponent(pluginName)}`,
+                {
+                    credentials: "same-origin",
+                    headers: {
+                        Accept: "application/json",
+                    },
+                },
+            );
+
+            if (!response.ok) {
+                throw new Error(
+                    `Failed to load plugin details: ${response.statusText}`,
+                );
+            }
+
+            const plugin = await response.json();
+
+            // Render plugin details
+            modalContent.innerHTML = `
+                <div class="space-y-4">
+                    <div>
+                        <h4 class="font-medium text-gray-700 dark:text-gray-300">Description</h4>
+                        <p class="mt-1">${plugin.description || "No description available"}</p>
+                    </div>
+
+                    <div class="grid grid-cols-2 gap-4">
+                        <div>
+                            <h4 class="font-medium text-gray-700 dark:text-gray-300">Author</h4>
+                            <p class="mt-1">${plugin.author || "Unknown"}</p>
+                        </div>
+                        <div>
+                            <h4 class="font-medium text-gray-700 dark:text-gray-300">Version</h4>
+                            <p class="mt-1">${plugin.version || "0.0.0"}</p>
+                        </div>
+                    </div>
+
+                    <div class="grid grid-cols-2 gap-4">
+                        <div>
+                            <h4 class="font-medium text-gray-700 dark:text-gray-300">Mode</h4>
+                            <p class="mt-1">
+                                <span class="px-2 py-1 text-xs rounded-full ${
+                                    plugin.mode === "enforce"
+                                        ? "bg-red-100 text-red-800"
+                                        : plugin.mode === "permissive"
+                                          ? "bg-yellow-100 text-yellow-800"
+                                          : "bg-gray-100 text-gray-800"
+                                }">
+                                    ${plugin.mode}
+                                </span>
+                            </p>
+                        </div>
+                        <div>
+                            <h4 class="font-medium text-gray-700 dark:text-gray-300">Priority</h4>
+                            <p class="mt-1">${plugin.priority}</p>
+                        </div>
+                    </div>
+
+                    <div>
+                        <h4 class="font-medium text-gray-700 dark:text-gray-300">Hooks</h4>
+                        <div class="mt-1 flex flex-wrap gap-1">
+                            ${(plugin.hooks || [])
+                                .map(
+                                    (hook) =>
+                                        `<span class="px-2 py-1 text-xs bg-blue-100 text-blue-800 rounded">${hook}</span>`,
+                                )
+                                .join("")}
+                        </div>
+                    </div>
+
+                    <div>
+                        <h4 class="font-medium text-gray-700 dark:text-gray-300">Tags</h4>
+                        <div class="mt-1 flex flex-wrap gap-1">
+                            ${(plugin.tags || [])
+                                .map(
+                                    (tag) =>
+                                        `<span class="px-2 py-1 text-xs bg-gray-100 text-gray-700 rounded">${tag}</span>`,
+                                )
+                                .join("")}
+                        </div>
+                    </div>
+
+                    ${
+                        plugin.config && Object.keys(plugin.config).length > 0
+                            ? `
+                        <div>
+                            <h4 class="font-medium text-gray-700 dark:text-gray-300">Configuration</h4>
+                            <pre class="mt-1 p-2 bg-gray-50 dark:bg-gray-800 rounded text-xs overflow-x-auto">${JSON.stringify(plugin.config, null, 2)}</pre>
+                        </div>
+                    `
+                            : ""
+                    }
+                </div>
+            `;
+        } catch (error) {
+            console.error("Error loading plugin details:", error);
+            modalContent.innerHTML = `
+                <div class="bg-red-50 border border-red-200 text-red-700 px-4 py-3 rounded">
+                    <strong class="font-bold">Error:</strong>
+                    <span class="block sm:inline">${error.message}</span>
+                </div>
+            `;
+        }
+    };
+
+    // Close plugin details modal
+    window.closePluginDetails = function () {
+        const modal = document.getElementById("plugin-details-modal");
+        if (modal) {
+            modal.classList.add("hidden");
+        }
+    };
+}
+
+// Initialize plugin functions if plugins panel exists
+if (document.getElementById("plugins-panel")) {
+    initializePluginFunctions();
+    // Populate filter dropdowns on initial load
+    if (window.populatePluginFilters) {
+        window.populatePluginFilters();
+    }
+}
+
+// Expose plugin functions to global scope
+window.initializePluginFunctions = initializePluginFunctions;
+
+// ===================================================================
+// MCP REGISTRY MODAL FUNCTIONS
+// ===================================================================
+
+// Define modal functions in global scope for MCP Registry
+window.showApiKeyModal = function (serverId, serverName, serverUrl) {
+    const modal = document.getElementById("api-key-modal");
+    if (modal) {
+        document.getElementById("modal-server-id").value = serverId;
+        document.getElementById("modal-server-name").textContent = serverName;
+        document.getElementById("modal-custom-name").placeholder = serverName;
+        modal.classList.remove("hidden");
+    }
+};
+
+window.closeApiKeyModal = function () {
+    const modal = document.getElementById("api-key-modal");
+    if (modal) {
+        modal.classList.add("hidden");
+    }
+    const form = document.getElementById("api-key-form");
+    if (form) {
+        form.reset();
+    }
+};
+
+window.submitApiKeyForm = function (event) {
+    event.preventDefault();
+    const serverId = document.getElementById("modal-server-id").value;
+    const customName = document.getElementById("modal-custom-name").value;
+    const apiKey = document.getElementById("modal-api-key").value;
+
+    // Prepare request data
+    const requestData = {};
+    if (customName) {
+        requestData.name = customName;
+    }
+    if (apiKey) {
+        requestData.api_key = apiKey;
+    }
+
+    const rootPath = window.ROOT_PATH || "";
+
+    // Send registration request
+    fetch(`${rootPath}/admin/mcp-registry/${serverId}/register`, {
+        method: "POST",
+        headers: {
+            "Content-Type": "application/json",
+            Authorization: "Bearer " + (getCookie("jwt_token") || ""),
+        },
+        body: JSON.stringify(requestData),
+    })
+        .then((response) => response.json())
+        .then((data) => {
+            if (data.success) {
+                window.closeApiKeyModal();
+                // Reload the catalog
+                if (window.htmx && window.htmx.ajax) {
+                    window.htmx.ajax(
+                        "GET",
+                        `${rootPath}/admin/mcp-registry/partial`,
+                        {
+                            target: "#mcp-registry-content",
+                            swap: "innerHTML",
+                        },
+                    );
+                }
+            } else {
+                alert("Registration failed: " + (data.error || data.message));
+            }
+        })
+        .catch((error) => {
+            alert("Error registering server: " + error);
+        });
+};
+
+// Helper function to get cookie if not already defined
+if (typeof window.getCookie === "undefined") {
+    window.getCookie = function (name) {
+        const value = "; " + document.cookie;
+        const parts = value.split("; " + name + "=");
+        if (parts.length === 2) {
+            return parts.pop().split(";").shift();
+        }
+        return "";
+    };
+}
