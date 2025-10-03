@@ -30,7 +30,7 @@ from mcpgateway.plugins.framework.constants import CONTEXT, ERROR, GET_PLUGIN_CO
 from mcpgateway.plugins.framework.errors import convert_exception_to_error, PluginError
 from mcpgateway.plugins.framework.models import (
     HookType,
-    MCPTransportTLSConfig,
+    MCPClientTLSConfig,
     PluginConfig,
     PluginContext,
     PluginErrorModel,
@@ -147,7 +147,7 @@ class ExternalPlugin(Plugin):
             PluginError: if there is an external connection error after all retries.
         """
         plugin_tls = self._config.mcp.tls if self._config and self._config.mcp else None
-        tls_config = plugin_tls or MCPTransportTLSConfig.from_env()
+        tls_config = plugin_tls or MCPClientTLSConfig.from_env()
 
         def _tls_httpx_client_factory(
             headers: Optional[dict[str, str]] = None,
@@ -177,11 +177,11 @@ class ExternalPlugin(Plugin):
                     if not tls_config.check_hostname:
                         ssl_context.check_hostname = False
 
-                if tls_config.client_cert:
+                if tls_config.certfile:
                     ssl_context.load_cert_chain(
-                        certfile=tls_config.client_cert,
-                        keyfile=tls_config.client_key,
-                        password=tls_config.client_key_password,
+                        certfile=tls_config.certfile,
+                        keyfile=tls_config.keyfile,
+                        password=tls_config.keyfile_password,
                     )
 
                 kwargs["verify"] = ssl_context
@@ -189,11 +189,12 @@ class ExternalPlugin(Plugin):
                 raise PluginError(error=PluginErrorModel(message=f"Failed configuring TLS for external plugin: {exc}", plugin_name=self.name)) from exc
 
             return httpx.AsyncClient(**kwargs)
+
         max_retries = 3
         base_delay = 1.0
 
         for attempt in range(max_retries):
-  
+
             try:
                 client_factory = _tls_httpx_client_factory if tls_config else None
                 async with AsyncExitStack() as temp_stack:
@@ -206,7 +207,7 @@ class ExternalPlugin(Plugin):
                     response = await session.list_tools()
                     tools = response.tools
                     logger.info("Successfully connected to plugin MCP server with tools: %s", " ".join([tool.name for tool in tools]))
-                
+
                 client_factory = _tls_httpx_client_factory if tls_config else None
                 streamable_client = streamablehttp_client(uri, httpx_client_factory=client_factory) if client_factory else streamablehttp_client(uri)
                 http_transport = await self._exit_stack.enter_async_context(streamable_client)

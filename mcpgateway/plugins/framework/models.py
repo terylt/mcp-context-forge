@@ -247,26 +247,22 @@ class AppliedTo(BaseModel):
     resources: Optional[list[ResourceTemplate]] = None
 
 
-class MCPTransportTLSConfig(BaseModel):
-    """TLS configuration for HTTP-based MCP transports.
+class MCPTransportTLSConfigBase(BaseModel):
+    """Base TLS configuration with common fields for both client and server.
 
     Attributes:
-        verify (bool): Whether to verify the remote certificate chain.
-        ca_bundle (Optional[str]): Path to a CA bundle file used for verification.
-        client_cert (Optional[str]): Path to the PEM-encoded client certificate (can include key).
-        client_key (Optional[str]): Path to the PEM-encoded client private key when stored separately.
-        client_key_password (Optional[str]): Optional password for the private key file.
-        check_hostname (bool): Enable hostname verification (default: True).
+        certfile (Optional[str]): Path to the PEM-encoded certificate file.
+        keyfile (Optional[str]): Path to the PEM-encoded private key file.
+        ca_bundle (Optional[str]): Path to a CA bundle file for verification.
+        keyfile_password (Optional[str]): Optional password for encrypted private key.
     """
 
-    verify: bool = Field(default=True, description="Verify the upstream server certificate")
-    ca_bundle: Optional[str] = Field(default=None, description="Path to CA bundle for upstream verification")
-    client_cert: Optional[str] = Field(default=None, description="Path to PEM client certificate or bundle")
-    client_key: Optional[str] = Field(default=None, description="Path to PEM client private key (if separate)")
-    client_key_password: Optional[str] = Field(default=None, description="Password for the client key, when encrypted")
-    check_hostname: bool = Field(default=True, description="Enable hostname verification when verify is true")
+    certfile: Optional[str] = Field(default=None, description="Path to PEM certificate file")
+    keyfile: Optional[str] = Field(default=None, description="Path to PEM private key file")
+    ca_bundle: Optional[str] = Field(default=None, description="Path to CA bundle for verification")
+    keyfile_password: Optional[str] = Field(default=None, description="Password for encrypted private key")
 
-    @field_validator("ca_bundle", "client_cert", "client_key", mode=AFTER)
+    @field_validator("ca_bundle", "certfile", "keyfile", mode=AFTER)
     @classmethod
     def validate_path(cls, value: Optional[str]) -> Optional[str]:
         """Expand and validate file paths supplied in TLS configuration."""
@@ -279,11 +275,11 @@ class MCPTransportTLSConfig(BaseModel):
         return str(expanded)
 
     @model_validator(mode=AFTER)
-    def validate_client_cert(self) -> Self:  # pylint: disable=bad-classmethod-argument
-        """Ensure TLS client certificate options are consistent."""
+    def validate_cert_key(self) -> Self:  # pylint: disable=bad-classmethod-argument
+        """Ensure certificate and key options are consistent."""
 
-        if self.client_key and not self.client_cert:
-            raise ValueError("client_key requires client_cert to be specified")
+        if self.keyfile and not self.certfile:
+            raise ValueError("keyfile requires certfile to be specified")
         return self
 
     @staticmethod
@@ -299,27 +295,39 @@ class MCPTransportTLSConfig(BaseModel):
             return False
         raise ValueError(f"Invalid boolean value: {value}")
 
+
+class MCPClientTLSConfig(MCPTransportTLSConfigBase):
+    """Client-side TLS configuration (gateway connecting to plugin).
+
+    Attributes:
+        verify (bool): Whether to verify the remote server certificate.
+        check_hostname (bool): Enable hostname verification when verify is true.
+    """
+
+    verify: bool = Field(default=True, description="Verify the upstream server certificate")
+    check_hostname: bool = Field(default=True, description="Enable hostname verification")
+
     @classmethod
-    def from_env(cls) -> Optional["MCPTransportTLSConfig"]:
-        """Construct a TLS configuration from environment defaults."""
+    def from_env(cls) -> Optional["MCPClientTLSConfig"]:
+        """Construct client TLS configuration from PLUGINS_CLIENT_* environment variables."""
 
         env = os.environ
         data: dict[str, Any] = {}
 
-        if env.get("PLUGINS_MTLS_CA_BUNDLE"):
-            data["ca_bundle"] = env["PLUGINS_MTLS_CA_BUNDLE"]
-        if env.get("PLUGINS_MTLS_CLIENT_CERT"):
-            data["client_cert"] = env["PLUGINS_MTLS_CLIENT_CERT"]
-        if env.get("PLUGINS_MTLS_CLIENT_KEY"):
-            data["client_key"] = env["PLUGINS_MTLS_CLIENT_KEY"]
-        if env.get("PLUGINS_MTLS_CLIENT_KEY_PASSWORD") is not None:
-            data["client_key_password"] = env["PLUGINS_MTLS_CLIENT_KEY_PASSWORD"]
+        if env.get("PLUGINS_CLIENT_MTLS_CERTFILE"):
+            data["certfile"] = env["PLUGINS_CLIENT_MTLS_CERTFILE"]
+        if env.get("PLUGINS_CLIENT_MTLS_KEYFILE"):
+            data["keyfile"] = env["PLUGINS_CLIENT_MTLS_KEYFILE"]
+        if env.get("PLUGINS_CLIENT_MTLS_CA_BUNDLE"):
+            data["ca_bundle"] = env["PLUGINS_CLIENT_MTLS_CA_BUNDLE"]
+        if env.get("PLUGINS_CLIENT_MTLS_KEYFILE_PASSWORD") is not None:
+            data["keyfile_password"] = env["PLUGINS_CLIENT_MTLS_KEYFILE_PASSWORD"]
 
-        verify_val = cls._parse_bool(env.get("PLUGINS_MTLS_VERIFY"))
+        verify_val = cls._parse_bool(env.get("PLUGINS_CLIENT_MTLS_VERIFY"))
         if verify_val is not None:
             data["verify"] = verify_val
 
-        check_hostname_val = cls._parse_bool(env.get("PLUGINS_MTLS_CHECK_HOSTNAME"))
+        check_hostname_val = cls._parse_bool(env.get("PLUGINS_CLIENT_MTLS_CHECK_HOSTNAME"))
         if check_hostname_val is not None:
             data["check_hostname"] = check_hostname_val
 
@@ -329,19 +337,112 @@ class MCPTransportTLSConfig(BaseModel):
         return cls(**data)
 
 
-class MCPConfig(BaseModel):
-    """An MCP configuration for external MCP plugin objects.
+class MCPServerTLSConfig(MCPTransportTLSConfigBase):
+    """Server-side TLS configuration (plugin accepting gateway connections).
 
     Attributes:
-        type (TransportType): The MCP transport type. Can be SSE, STDIO, or STREAMABLEHTTP
+        ssl_cert_reqs (int): Client certificate requirement (0=NONE, 1=OPTIONAL, 2=REQUIRED).
+    """
+
+    ssl_cert_reqs: int = Field(default=2, description="Client certificate requirement (0=NONE, 1=OPTIONAL, 2=REQUIRED)")
+
+    @classmethod
+    def from_env(cls) -> Optional["MCPServerTLSConfig"]:
+        """Construct server TLS configuration from PLUGINS_SERVER_SSL_* environment variables."""
+
+        env = os.environ
+        data: dict[str, Any] = {}
+
+        if env.get("PLUGINS_SERVER_SSL_KEYFILE"):
+            data["keyfile"] = env["PLUGINS_SERVER_SSL_KEYFILE"]
+        if env.get("PLUGINS_SERVER_SSL_CERTFILE"):
+            data["certfile"] = env["PLUGINS_SERVER_SSL_CERTFILE"]
+        if env.get("PLUGINS_SERVER_SSL_CA_CERTS"):
+            data["ca_bundle"] = env["PLUGINS_SERVER_SSL_CA_CERTS"]
+        if env.get("PLUGINS_SERVER_SSL_KEYFILE_PASSWORD") is not None:
+            data["keyfile_password"] = env["PLUGINS_SERVER_SSL_KEYFILE_PASSWORD"]
+
+        if env.get("PLUGINS_SERVER_SSL_CERT_REQS"):
+            try:
+                data["ssl_cert_reqs"] = int(env["PLUGINS_SERVER_SSL_CERT_REQS"])
+            except ValueError:
+                raise ValueError(f"Invalid PLUGINS_SERVER_SSL_CERT_REQS: {env['PLUGINS_SERVER_SSL_CERT_REQS']}")
+
+        if not data:
+            return None
+
+        return cls(**data)
+
+
+class MCPServerConfig(BaseModel):
+    """Server-side MCP configuration (plugin running as server).
+
+    Attributes:
+        host (str): Server host to bind to.
+        port (int): Server port to bind to.
+        tls (Optional[MCPServerTLSConfig]): Server-side TLS configuration.
+    """
+
+    host: str = Field(default="0.0.0.0", description="Server host to bind to")
+    port: int = Field(default=8000, description="Server port to bind to")
+    tls: Optional[MCPServerTLSConfig] = Field(default=None, description="Server-side TLS configuration")
+
+    @staticmethod
+    def _parse_bool(value: Optional[str]) -> Optional[bool]:
+        """Convert a string environment value to boolean."""
+
+        if value is None:
+            return None
+        normalized = value.strip().lower()
+        if normalized in {"1", "true", "yes", "on"}:
+            return True
+        if normalized in {"0", "false", "no", "off"}:
+            return False
+        raise ValueError(f"Invalid boolean value: {value}")
+
+    @classmethod
+    def from_env(cls) -> Optional["MCPServerConfig"]:
+        """Construct server configuration from PLUGINS_SERVER_* environment variables."""
+
+        env = os.environ
+        data: dict[str, Any] = {}
+
+        if env.get("PLUGINS_SERVER_HOST"):
+            data["host"] = env["PLUGINS_SERVER_HOST"]
+        if env.get("PLUGINS_SERVER_PORT"):
+            try:
+                data["port"] = int(env["PLUGINS_SERVER_PORT"])
+            except ValueError:
+                raise ValueError(f"Invalid PLUGINS_SERVER_PORT: {env['PLUGINS_SERVER_PORT']}")
+
+        # Check if SSL/TLS is enabled
+        ssl_enabled = cls._parse_bool(env.get("PLUGINS_SERVER_SSL_ENABLED"))
+        if ssl_enabled:
+            # Load TLS configuration
+            tls_config = MCPServerTLSConfig.from_env()
+            if tls_config:
+                data["tls"] = tls_config
+
+        if not data:
+            return None
+
+        return cls(**data)
+
+
+class MCPClientConfig(BaseModel):
+    """Client-side MCP configuration (gateway connecting to external plugin).
+
+    Attributes:
+        proto (TransportType): The MCP transport type. Can be SSE, STDIO, or STREAMABLEHTTP
         url (Optional[str]): An MCP URL. Only valid when MCP transport type is SSE or STREAMABLEHTTP.
         script (Optional[str]): The path and name to the STDIO script that runs the plugin server. Only valid for STDIO type.
+        tls (Optional[MCPClientTLSConfig]): Client-side TLS configuration for mTLS.
     """
 
     proto: TransportType
     url: Optional[str] = None
     script: Optional[str] = None
-    tls: Optional[MCPTransportTLSConfig] = None
+    tls: Optional[MCPClientTLSConfig] = None
 
     @field_validator(URL, mode=AFTER)
     @classmethod
@@ -412,7 +513,7 @@ class PluginConfig(BaseModel):
         conditions (Optional[list[PluginCondition]]): the conditions on which the plugin is run.
         applied_to (Optional[list[AppliedTo]]): the tools, fields, that the plugin is applied to.
         config (dict[str, Any]): the plugin specific configurations.
-        mcp (Optional[MCPConfig]): MCP configuration for external plugin when kind is "external".
+        mcp (Optional[MCPClientConfig]): Client-side MCP configuration (gateway connecting to plugin).
     """
 
     name: str
@@ -428,7 +529,7 @@ class PluginConfig(BaseModel):
     conditions: Optional[list[PluginCondition]] = None  # When to apply
     applied_to: Optional[AppliedTo] = None  # Fields to apply to.
     config: Optional[dict[str, Any]] = None
-    mcp: Optional[MCPConfig] = None
+    mcp: Optional[MCPClientConfig] = None
 
     @model_validator(mode=AFTER)
     def check_url_or_script_filled(self) -> Self:  # pylint: disable=bad-classmethod-argument
@@ -590,14 +691,16 @@ class Config(BaseModel):
     """Configurations for plugins.
 
     Attributes:
-        plugins: the list of plugins to enable.
-        plugin_dirs: The directories in which to look for plugins.
-        plugin_settings: global settings for plugins.
+        plugins (Optional[list[PluginConfig]]): the list of plugins to enable.
+        plugin_dirs (list[str]): The directories in which to look for plugins.
+        plugin_settings (PluginSettings): global settings for plugins.
+        server_settings (Optional[MCPServerConfig]): Server-side MCP configuration (when plugins run as server).
     """
 
     plugins: Optional[list[PluginConfig]] = []
     plugin_dirs: list[str] = []
     plugin_settings: PluginSettings
+    server_settings: Optional[MCPServerConfig] = None
 
 
 class PromptPrehookPayload(BaseModel):
