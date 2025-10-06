@@ -101,11 +101,38 @@ class SSLCapableFastMCP(FastMCP):
 
         return ssl_config
 
+    async def _start_health_check_server(self, health_port: int) -> None:
+        """Start a simple HTTP-only health check server on a separate port.
+
+        This allows health checks to work even when the main server uses HTTPS/mTLS.
+        """
+        from starlette.applications import Starlette
+        from starlette.requests import Request
+        from starlette.responses import JSONResponse
+        from starlette.routing import Route
+
+        async def health_check(request: Request):
+            """Health check endpoint for container orchestration."""
+            return JSONResponse({"status": "healthy"})
+
+        # Create a minimal Starlette app with only the health endpoint
+        health_app = Starlette(routes=[Route("/health", health_check, methods=["GET"])])
+
+        logger.info(f"Starting HTTP health check server on {self.settings.host}:{health_port}")
+        config = uvicorn.Config(
+            app=health_app,
+            host=self.settings.host,
+            port=health_port,
+            log_level="warning",  # Reduce noise from health checks
+        )
+        server = uvicorn.Server(config)
+        await server.serve()
+
     async def run_streamable_http_async(self) -> None:
         """Run the server using StreamableHTTP transport with optional SSL/TLS."""
         starlette_app = self.streamable_http_app()
 
-        # Add health check endpoint
+        # Add health check endpoint to main app
         from starlette.requests import Request
         from starlette.responses import JSONResponse
         from starlette.routing import Route
@@ -130,7 +157,19 @@ class SSLCapableFastMCP(FastMCP):
         logger.info(f"Starting plugin server on {self.settings.host}:{self.settings.port}")
         config = uvicorn.Config(**config_kwargs)
         server = uvicorn.Server(config)
-        await server.serve()
+
+        # If SSL is enabled, start a separate HTTP health check server
+        if ssl_config:
+            health_port = self.settings.port + 1000  # Use port+1000 for health checks
+            logger.info(f"SSL enabled - starting separate HTTP health check on port {health_port}")
+            # Run both servers concurrently
+            await asyncio.gather(
+                server.serve(),
+                self._start_health_check_server(health_port)
+            )
+        else:
+            # Just run the main server (health check is already on it)
+            await server.serve()
 
 
 async def run():
