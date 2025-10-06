@@ -105,6 +105,18 @@ class SSLCapableFastMCP(FastMCP):
         """Run the server using StreamableHTTP transport with optional SSL/TLS."""
         starlette_app = self.streamable_http_app()
 
+        # Add health check endpoint
+        from starlette.requests import Request
+        from starlette.responses import JSONResponse
+        from starlette.routing import Route
+
+        async def health_check(request: Request):
+            """Health check endpoint for container orchestration."""
+            return JSONResponse({"status": "healthy"})
+
+        # Add the health route to the Starlette app
+        starlette_app.routes.append(Route("/health", health_check, methods=["GET"]))
+
         # Build uvicorn config with optional SSL
         ssl_config = self._get_ssl_config()
         config_kwargs = {
