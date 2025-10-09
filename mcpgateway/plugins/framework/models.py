@@ -265,7 +265,17 @@ class MCPTransportTLSConfigBase(BaseModel):
     @field_validator("ca_bundle", "certfile", "keyfile", mode=AFTER)
     @classmethod
     def validate_path(cls, value: Optional[str]) -> Optional[str]:
-        """Expand and validate file paths supplied in TLS configuration."""
+        """Expand and validate file paths supplied in TLS configuration.
+
+        Args:
+            value: File path to validate.
+
+        Returns:
+            Expanded file path or None if not provided.
+
+        Raises:
+            ValueError: If file path does not exist.
+        """
 
         if not value:
             return value
@@ -276,7 +286,14 @@ class MCPTransportTLSConfigBase(BaseModel):
 
     @model_validator(mode=AFTER)
     def validate_cert_key(self) -> Self:  # pylint: disable=bad-classmethod-argument
-        """Ensure certificate and key options are consistent."""
+        """Ensure certificate and key options are consistent.
+
+        Returns:
+            Self after validation.
+
+        Raises:
+            ValueError: If keyfile is specified without certfile.
+        """
 
         if self.keyfile and not self.certfile:
             raise ValueError("keyfile requires certfile to be specified")
@@ -284,7 +301,17 @@ class MCPTransportTLSConfigBase(BaseModel):
 
     @staticmethod
     def _parse_bool(value: Optional[str]) -> Optional[bool]:
-        """Convert a string environment value to boolean."""
+        """Convert a string environment value to boolean.
+
+        Args:
+            value: String value to parse as boolean.
+
+        Returns:
+            Boolean value or None if value is None.
+
+        Raises:
+            ValueError: If value is not a valid boolean string.
+        """
 
         if value is None:
             return None
@@ -309,7 +336,11 @@ class MCPClientTLSConfig(MCPTransportTLSConfigBase):
 
     @classmethod
     def from_env(cls) -> Optional["MCPClientTLSConfig"]:
-        """Construct client TLS configuration from PLUGINS_CLIENT_* environment variables."""
+        """Construct client TLS configuration from PLUGINS_CLIENT_* environment variables.
+
+        Returns:
+            MCPClientTLSConfig instance or None if no environment variables are set.
+        """
 
         env = os.environ
         data: dict[str, Any] = {}
@@ -348,7 +379,14 @@ class MCPServerTLSConfig(MCPTransportTLSConfigBase):
 
     @classmethod
     def from_env(cls) -> Optional["MCPServerTLSConfig"]:
-        """Construct server TLS configuration from PLUGINS_SERVER_SSL_* environment variables."""
+        """Construct server TLS configuration from PLUGINS_SERVER_SSL_* environment variables.
+
+        Returns:
+            MCPServerTLSConfig instance or None if no environment variables are set.
+
+        Raises:
+            ValueError: If PLUGINS_SERVER_SSL_CERT_REQS is not a valid integer.
+        """
 
         env = os.environ
         data: dict[str, Any] = {}
@@ -389,7 +427,17 @@ class MCPServerConfig(BaseModel):
 
     @staticmethod
     def _parse_bool(value: Optional[str]) -> Optional[bool]:
-        """Convert a string environment value to boolean."""
+        """Convert a string environment value to boolean.
+
+        Args:
+            value: String value to parse as boolean.
+
+        Returns:
+            Boolean value or None if value is None.
+
+        Raises:
+            ValueError: If value is not a valid boolean string.
+        """
 
         if value is None:
             return None
@@ -402,7 +450,14 @@ class MCPServerConfig(BaseModel):
 
     @classmethod
     def from_env(cls) -> Optional["MCPServerConfig"]:
-        """Construct server configuration from PLUGINS_SERVER_* environment variables."""
+        """Construct server configuration from PLUGINS_SERVER_* environment variables.
+
+        Returns:
+            MCPServerConfig instance or None if no environment variables are set.
+
+        Raises:
+            ValueError: If PLUGINS_SERVER_PORT is not a valid integer.
+        """
 
         env = os.environ
         data: dict[str, Any] = {}
@@ -489,7 +544,14 @@ class MCPClientConfig(BaseModel):
 
     @model_validator(mode=AFTER)
     def validate_tls_usage(self) -> Self:  # pylint: disable=bad-classmethod-argument
-        """Ensure TLS configuration is only used with HTTP-based transports."""
+        """Ensure TLS configuration is only used with HTTP-based transports.
+
+        Returns:
+            Self after validation.
+
+        Raises:
+            ValueError: If TLS configuration is used with non-HTTP transports.
+        """
 
         if self.tls and self.proto not in (TransportType.SSE, TransportType.STREAMABLEHTTP):
             raise ValueError("TLS configuration is only valid for HTTP/SSE transports")

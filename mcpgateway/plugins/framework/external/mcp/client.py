@@ -157,7 +157,19 @@ class ExternalPlugin(Plugin):
             timeout: Optional[httpx.Timeout] = None,
             auth: Optional[httpx.Auth] = None,
         ) -> httpx.AsyncClient:
-            """Build an httpx client with TLS configuration for external MCP servers."""
+            """Build an httpx client with TLS configuration for external MCP servers.
+
+            Args:
+                headers: Optional HTTP headers to include in requests.
+                timeout: Optional timeout configuration for HTTP requests.
+                auth: Optional authentication handler for HTTP requests.
+
+            Returns:
+                Configured httpx AsyncClient with TLS settings applied.
+
+            Raises:
+                PluginError: If TLS configuration fails.
+            """
 
             kwargs: dict[str, Any] = {"follow_redirects": True}
             if headers:
@@ -173,7 +185,7 @@ class ExternalPlugin(Plugin):
                 ssl_context = ssl.create_default_context()
                 if not tls_config.verify:
                     ssl_context.check_hostname = False
-                    ssl_context.verify_mode = ssl.CERT_NONE
+                    ssl_context.verify_mode = ssl.CERT_NONE  # noqa: DUO122
                 else:
                     if tls_config.ca_bundle:
                         ssl_context.load_verify_locations(cafile=tls_config.ca_bundle)
