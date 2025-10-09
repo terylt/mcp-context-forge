@@ -59,6 +59,11 @@ class SSLCapableFastMCP(FastMCP):
     """FastMCP server with SSL/TLS support using MCPServerConfig."""
 
     def __init__(self, server_config: MCPServerConfig, *args, **kwargs):
+        """Initialize an SSL capable Fast MCP server.
+
+        Args:
+            server_config: the MCP server configuration including mTLS information.
+        """
         # Load server config from environment
 
         self.server_config = server_config
@@ -106,13 +111,18 @@ class SSLCapableFastMCP(FastMCP):
 
         This allows health checks to work even when the main server uses HTTPS/mTLS.
         """
+        # Third-Party
         from starlette.applications import Starlette
         from starlette.requests import Request
         from starlette.responses import JSONResponse
         from starlette.routing import Route
 
         async def health_check(request: Request):
-            """Health check endpoint for container orchestration."""
+            """Health check endpoint for container orchestration.
+
+            Args:
+                request: the http request from which the health check occurs.
+            """
             return JSONResponse({"status": "healthy"})
 
         # Create a minimal Starlette app with only the health endpoint
@@ -133,12 +143,17 @@ class SSLCapableFastMCP(FastMCP):
         starlette_app = self.streamable_http_app()
 
         # Add health check endpoint to main app
+        # Third-Party
         from starlette.requests import Request
         from starlette.responses import JSONResponse
         from starlette.routing import Route
 
         async def health_check(request: Request):
-            """Health check endpoint for container orchestration."""
+            """Health check endpoint for container orchestration.
+
+            Args:
+                request: the http request from which the health check occurs.
+            """
             return JSONResponse({"status": "healthy"})
 
         # Add the health route to the Starlette app
@@ -163,10 +178,7 @@ class SSLCapableFastMCP(FastMCP):
             health_port = self.settings.port + 1000  # Use port+1000 for health checks
             logger.info(f"SSL enabled - starting separate HTTP health check on port {health_port}")
             # Run both servers concurrently
-            await asyncio.gather(
-                server.serve(),
-                self._start_health_check_server(health_port)
-            )
+            await asyncio.gather(server.serve(), self._start_health_check_server(health_port))
         else:
             # Just run the main server (health check is already on it)
             await server.serve()
