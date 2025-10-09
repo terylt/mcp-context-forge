@@ -7,7 +7,7 @@ from pathlib import Path
 import pytest
 
 # First-Party
-from mcpgateway.plugins.framework.models import MCPTransportTLSConfig, PluginConfig
+from mcpgateway.plugins.framework.models import MCPClientTLSConfig, PluginConfig
 
 
 def _write_pem(path: Path) -> str:
@@ -94,7 +94,7 @@ def test_tls_config_from_env_defaults(monkeypatch, tmp_path):
     monkeypatch.setenv("PLUGINS_MTLS_VERIFY", "true")
     monkeypatch.setenv("PLUGINS_MTLS_CHECK_HOSTNAME", "true")
 
-    tls_config = MCPTransportTLSConfig.from_env()
+    tls_config = MCPClientTLSConfig.from_env()
 
     assert tls_config is not None
     assert tls_config.ca_bundle == str(ca_path)
@@ -111,4 +111,4 @@ def test_tls_config_from_env_returns_none(monkeypatch):
     monkeypatch.delenv("PLUGINS_MTLS_VERIFY", raising=False)
     monkeypatch.delenv("PLUGINS_MTLS_CHECK_HOSTNAME", raising=False)
 
-    assert MCPTransportTLSConfig.from_env() is None
+    assert MCPClientTLSConfig.from_env() is None
