@@ -55,6 +55,113 @@ logger = logging.getLogger(__name__)
 SERVER: ExternalPluginServer = None
 
 
+# Module-level tool functions (extracted for testability)
+
+
+async def get_plugin_configs() -> list[dict]:
+    """Get the plugin configurations installed on the server."""
+    return await SERVER.get_plugin_configs()
+
+
+async def get_plugin_config(name: str) -> dict:
+    """Get the plugin configuration for a specific plugin.
+
+    Args:
+        name: The name of the plugin
+    """
+    return await SERVER.get_plugin_config(name)
+
+
+async def prompt_pre_fetch(plugin_name: str, payload: Dict[str, Any], context: Dict[str, Any]) -> dict:
+    """Execute prompt prefetch hook for a plugin.
+
+    Args:
+        plugin_name: The name of the plugin to execute
+        payload: The prompt name and arguments to be analyzed
+        context: Contextual information required for execution
+    """
+
+    def prompt_pre_fetch_func(plugin: Plugin, payload: PromptPrehookPayload, context: PluginContext) -> PromptPrehookResult:
+        return plugin.prompt_pre_fetch(payload, context)
+
+    return await SERVER.invoke_hook(PromptPrehookPayload, prompt_pre_fetch_func, plugin_name, payload, context)
+
+
+async def prompt_post_fetch(plugin_name: str, payload: Dict[str, Any], context: Dict[str, Any]) -> dict:
+    """Execute prompt postfetch hook for a plugin.
+
+    Args:
+        plugin_name: The name of the plugin to execute
+        payload: The prompt payload to be analyzed
+        context: Contextual information
+    """
+
+    def prompt_post_fetch_func(plugin: Plugin, payload: PromptPosthookPayload, context: PluginContext) -> PromptPosthookResult:
+        return plugin.prompt_post_fetch(payload, context)
+
+    return await SERVER.invoke_hook(PromptPosthookPayload, prompt_post_fetch_func, plugin_name, payload, context)
+
+
+async def tool_pre_invoke(plugin_name: str, payload: Dict[str, Any], context: Dict[str, Any]) -> dict:
+    """Execute tool pre-invoke hook for a plugin.
+
+    Args:
+        plugin_name: The name of the plugin to execute
+        payload: The tool name and arguments to be analyzed
+        context: Contextual information
+    """
+
+    def tool_pre_invoke_func(plugin: Plugin, payload: ToolPreInvokePayload, context: PluginContext) -> ToolPreInvokeResult:
+        return plugin.tool_pre_invoke(payload, context)
+
+    return await SERVER.invoke_hook(ToolPreInvokePayload, tool_pre_invoke_func, plugin_name, payload, context)
+
+
+async def tool_post_invoke(plugin_name: str, payload: Dict[str, Any], context: Dict[str, Any]) -> dict:
+    """Execute tool post-invoke hook for a plugin.
+
+    Args:
+        plugin_name: The name of the plugin to execute
+        payload: The tool result to be analyzed
+        context: Contextual information
+    """
+
+    def tool_post_invoke_func(plugin: Plugin, payload: ToolPostInvokePayload, context: PluginContext) -> ToolPostInvokeResult:
+        return plugin.tool_post_invoke(payload, context)
+
+    return await SERVER.invoke_hook(ToolPostInvokePayload, tool_post_invoke_func, plugin_name, payload, context)
+
+
+async def resource_pre_fetch(plugin_name: str, payload: Dict[str, Any], context: Dict[str, Any]) -> dict:
+    """Execute resource prefetch hook for a plugin.
+
+    Args:
+        plugin_name: The name of the plugin to execute
+        payload: The resource name and arguments to be analyzed
+        context: Contextual information
+    """
+
+    def resource_pre_fetch_func(plugin: Plugin, payload: ResourcePreFetchPayload, context: PluginContext) -> ResourcePreFetchResult:
+        return plugin.resource_pre_fetch(payload, context)
+
+    return await SERVER.invoke_hook(ResourcePreFetchPayload, resource_pre_fetch_func, plugin_name, payload, context)
+
+
+async def resource_post_fetch(plugin_name: str, payload: Dict[str, Any], context: Dict[str, Any]) -> dict:
+    """Execute resource postfetch hook for a plugin.
+
+    Args:
+        plugin_name: The name of the plugin to execute
+        payload: The resource payload to be analyzed
+        context: Contextual information
+    """
+
+    def resource_post_fetch_func(plugin: Plugin, payload: ResourcePostFetchPayload, context: PluginContext) -> ResourcePostFetchResult:
+        return plugin.resource_post_fetch(payload, context)
+
+    return await SERVER.invoke_hook(ResourcePostFetchPayload, resource_post_fetch_func, plugin_name, payload, context)
+
+
 class SSLCapableFastMCP(FastMCP):
     """FastMCP server with SSL/TLS support using MCPServerConfig."""
 
@@ -213,110 +320,16 @@ async def run():
             instructions=MCP_SERVER_INSTRUCTIONS,
         )
 
-        # Register plugin hook tools
-        @mcp.tool(name=GET_PLUGIN_CONFIGS)
-        async def get_plugin_configs() -> list[dict]:
-            """Get the plugin configurations installed on the server."""
-            return await SERVER.get_plugin_configs()
-
-        @mcp.tool(name=GET_PLUGIN_CONFIG)
-        async def get_plugin_config(name: str) -> dict:
-            """Get the plugin configuration for a specific plugin.
-
-            Args:
-                name: The name of the plugin
-            """
-            return await SERVER.get_plugin_config(name)
-
-        @mcp.tool(name=HookType.PROMPT_PRE_FETCH.value)
-        async def prompt_pre_fetch(plugin_name: str, payload: Dict[str, Any], context: Dict[str, Any]) -> dict:
-            """Execute prompt prefetch hook for a plugin.
-
-            Args:
-                plugin_name: The name of the plugin to execute
-                payload: The prompt name and arguments to be analyzed
-                context: Contextual information required for execution
-            """
-
-            def prompt_pre_fetch_func(plugin: Plugin, payload: PromptPrehookPayload, context: PluginContext) -> PromptPrehookResult:
-                return plugin.prompt_pre_fetch(payload, context)
-
-            return await SERVER.invoke_hook(PromptPrehookPayload, prompt_pre_fetch_func, plugin_name, payload, context)
-
-        @mcp.tool(name=HookType.PROMPT_POST_FETCH.value)
-        async def prompt_post_fetch(plugin_name: str, payload: Dict[str, Any], context: Dict[str, Any]) -> dict:
-            """Execute prompt postfetch hook for a plugin.
-
-            Args:
-                plugin_name: The name of the plugin to execute
-                payload: The prompt payload to be analyzed
-                context: Contextual information
-            """
-
-            def prompt_post_fetch_func(plugin: Plugin, payload: PromptPosthookPayload, context: PluginContext) -> PromptPosthookResult:
-                return plugin.prompt_post_fetch(payload, context)
-
-            return await SERVER.invoke_hook(PromptPosthookPayload, prompt_post_fetch_func, plugin_name, payload, context)
-
-        @mcp.tool(name=HookType.TOOL_PRE_INVOKE.value)
-        async def tool_pre_invoke(plugin_name: str, payload: Dict[str, Any], context: Dict[str, Any]) -> dict:
-            """Execute tool pre-invoke hook for a plugin.
-
-            Args:
-                plugin_name: The name of the plugin to execute
-                payload: The tool name and arguments to be analyzed
-                context: Contextual information
-            """
-
-            def tool_pre_invoke_func(plugin: Plugin, payload: ToolPreInvokePayload, context: PluginContext) -> ToolPreInvokeResult:
-                return plugin.tool_pre_invoke(payload, context)
-
-            return await SERVER.invoke_hook(ToolPreInvokePayload, tool_pre_invoke_func, plugin_name, payload, context)
-
-        @mcp.tool(name=HookType.TOOL_POST_INVOKE.value)
-        async def tool_post_invoke(plugin_name: str, payload: Dict[str, Any], context: Dict[str, Any]) -> dict:
-            """Execute tool post-invoke hook for a plugin.
-
-            Args:
-                plugin_name: The name of the plugin to execute
-                payload: The tool result to be analyzed
-                context: Contextual information
-            """
-
-            def tool_post_invoke_func(plugin: Plugin, payload: ToolPostInvokePayload, context: PluginContext) -> ToolPostInvokeResult:
-                return plugin.tool_post_invoke(payload, context)
-
-            return await SERVER.invoke_hook(ToolPostInvokePayload, tool_post_invoke_func, plugin_name, payload, context)
-
-        @mcp.tool(name=HookType.RESOURCE_PRE_FETCH.value)
-        async def resource_pre_fetch(plugin_name: str, payload: Dict[str, Any], context: Dict[str, Any]) -> dict:
-            """Execute resource prefetch hook for a plugin.
-
-            Args:
-                plugin_name: The name of the plugin to execute
-                payload: The resource name and arguments to be analyzed
-                context: Contextual information
-            """
-
-            def resource_pre_fetch_func(plugin: Plugin, payload: ResourcePreFetchPayload, context: PluginContext) -> ResourcePreFetchResult:
-                return plugin.resource_pre_fetch(payload, context)
-
-            return await SERVER.invoke_hook(ResourcePreFetchPayload, resource_pre_fetch_func, plugin_name, payload, context)
-
-        @mcp.tool(name=HookType.RESOURCE_POST_FETCH.value)
-        async def resource_post_fetch(plugin_name: str, payload: Dict[str, Any], context: Dict[str, Any]) -> dict:
-            """Execute resource postfetch hook for a plugin.
-
-            Args:
-                plugin_name: The name of the plugin to execute
-                payload: The resource payload to be analyzed
-                context: Contextual information
-            """
-
-            def resource_post_fetch_func(plugin: Plugin, payload: ResourcePostFetchPayload, context: PluginContext) -> ResourcePostFetchResult:
-                return plugin.resource_post_fetch(payload, context)
-
-            return await SERVER.invoke_hook(ResourcePostFetchPayload, resource_post_fetch_func, plugin_name, payload, context)
+        # Register module-level tool functions with FastMCP
+        # These are defined at module level for testability
+        mcp.tool(name=GET_PLUGIN_CONFIGS)(get_plugin_configs)
+        mcp.tool(name=GET_PLUGIN_CONFIG)(get_plugin_config)
+        mcp.tool(name=HookType.PROMPT_PRE_FETCH.value)(prompt_pre_fetch)
+        mcp.tool(name=HookType.PROMPT_POST_FETCH.value)(prompt_post_fetch)
+        mcp.tool(name=HookType.TOOL_PRE_INVOKE.value)(tool_pre_invoke)
+        mcp.tool(name=HookType.TOOL_POST_INVOKE.value)(tool_post_invoke)
+        mcp.tool(name=HookType.RESOURCE_PRE_FETCH.value)(resource_pre_fetch)
+        mcp.tool(name=HookType.RESOURCE_POST_FETCH.value)(resource_post_fetch)
 
         # Run with streamable-http transport
         logger.info("Starting MCP plugin server with FastMCP")
