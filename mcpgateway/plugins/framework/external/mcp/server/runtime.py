@@ -59,7 +59,11 @@ SERVER: ExternalPluginServer = None
 
 
 async def get_plugin_configs() -> list[dict]:
-    """Get the plugin configurations installed on the server."""
+    """Get the plugin configurations installed on the server.
+
+    Returns:
+        List of plugin configuration dictionaries.
+    """
     return await SERVER.get_plugin_configs()
 
 
@@ -68,6 +72,9 @@ async def get_plugin_config(name: str) -> dict:
 
     Args:
         name: The name of the plugin
+
+    Returns:
+        Plugin configuration dictionary.
     """
     return await SERVER.get_plugin_config(name)
 
@@ -79,9 +86,22 @@ async def prompt_pre_fetch(plugin_name: str, payload: Dict[str, Any], context: D
         plugin_name: The name of the plugin to execute
         payload: The prompt name and arguments to be analyzed
         context: Contextual information required for execution
+
+    Returns:
+        Result dictionary from the prompt prefetch hook.
     """
 
     def prompt_pre_fetch_func(plugin: Plugin, payload: PromptPrehookPayload, context: PluginContext) -> PromptPrehookResult:
+        """Wrapper function to invoke prompt prefetch on a plugin instance.
+
+        Args:
+            plugin: The plugin instance to execute.
+            payload: The prompt prehook payload.
+            context: The plugin context.
+
+        Returns:
+            Result from the plugin's prompt_pre_fetch method.
+        """
         return plugin.prompt_pre_fetch(payload, context)
 
     return await SERVER.invoke_hook(PromptPrehookPayload, prompt_pre_fetch_func, plugin_name, payload, context)
@@ -94,9 +114,22 @@ async def prompt_post_fetch(plugin_name: str, payload: Dict[str, Any], context: 
         plugin_name: The name of the plugin to execute
         payload: The prompt payload to be analyzed
         context: Contextual information
+
+    Returns:
+        Result dictionary from the prompt postfetch hook.
     """
 
     def prompt_post_fetch_func(plugin: Plugin, payload: PromptPosthookPayload, context: PluginContext) -> PromptPosthookResult:
+        """Wrapper function to invoke prompt postfetch on a plugin instance.
+
+        Args:
+            plugin: The plugin instance to execute.
+            payload: The prompt posthook payload.
+            context: The plugin context.
+
+        Returns:
+            Result from the plugin's prompt_post_fetch method.
+        """
         return plugin.prompt_post_fetch(payload, context)
 
     return await SERVER.invoke_hook(PromptPosthookPayload, prompt_post_fetch_func, plugin_name, payload, context)
@@ -109,9 +142,22 @@ async def tool_pre_invoke(plugin_name: str, payload: Dict[str, Any], context: Di
         plugin_name: The name of the plugin to execute
         payload: The tool name and arguments to be analyzed
         context: Contextual information
+
+    Returns:
+        Result dictionary from the tool pre-invoke hook.
     """
 
     def tool_pre_invoke_func(plugin: Plugin, payload: ToolPreInvokePayload, context: PluginContext) -> ToolPreInvokeResult:
+        """Wrapper function to invoke tool pre-invoke on a plugin instance.
+
+        Args:
+            plugin: The plugin instance to execute.
+            payload: The tool pre-invoke payload.
+            context: The plugin context.
+
+        Returns:
+            Result from the plugin's tool_pre_invoke method.
+        """
         return plugin.tool_pre_invoke(payload, context)
 
     return await SERVER.invoke_hook(ToolPreInvokePayload, tool_pre_invoke_func, plugin_name, payload, context)
@@ -124,9 +170,22 @@ async def tool_post_invoke(plugin_name: str, payload: Dict[str, Any], context: D
         plugin_name: The name of the plugin to execute
         payload: The tool result to be analyzed
         context: Contextual information
+
+    Returns:
+        Result dictionary from the tool post-invoke hook.
     """
 
     def tool_post_invoke_func(plugin: Plugin, payload: ToolPostInvokePayload, context: PluginContext) -> ToolPostInvokeResult:
+        """Wrapper function to invoke tool post-invoke on a plugin instance.
+
+        Args:
+            plugin: The plugin instance to execute.
+            payload: The tool post-invoke payload.
+            context: The plugin context.
+
+        Returns:
+            Result from the plugin's tool_post_invoke method.
+        """
         return plugin.tool_post_invoke(payload, context)
 
     return await SERVER.invoke_hook(ToolPostInvokePayload, tool_post_invoke_func, plugin_name, payload, context)
@@ -139,9 +198,22 @@ async def resource_pre_fetch(plugin_name: str, payload: Dict[str, Any], context:
         plugin_name: The name of the plugin to execute
         payload: The resource name and arguments to be analyzed
         context: Contextual information
+
+    Returns:
+        Result dictionary from the resource prefetch hook.
     """
 
     def resource_pre_fetch_func(plugin: Plugin, payload: ResourcePreFetchPayload, context: PluginContext) -> ResourcePreFetchResult:
+        """Wrapper function to invoke resource prefetch on a plugin instance.
+
+        Args:
+            plugin: The plugin instance to execute.
+            payload: The resource prefetch payload.
+            context: The plugin context.
+
+        Returns:
+            Result from the plugin's resource_pre_fetch method.
+        """
         return plugin.resource_pre_fetch(payload, context)
 
     return await SERVER.invoke_hook(ResourcePreFetchPayload, resource_pre_fetch_func, plugin_name, payload, context)
@@ -154,9 +226,22 @@ async def resource_post_fetch(plugin_name: str, payload: Dict[str, Any], context
         plugin_name: The name of the plugin to execute
         payload: The resource payload to be analyzed
         context: Contextual information
+
+    Returns:
+        Result dictionary from the resource postfetch hook.
     """
 
     def resource_post_fetch_func(plugin: Plugin, payload: ResourcePostFetchPayload, context: PluginContext) -> ResourcePostFetchResult:
+        """Wrapper function to invoke resource postfetch on a plugin instance.
+
+        Args:
+            plugin: The plugin instance to execute.
+            payload: The resource postfetch payload.
+            context: The plugin context.
+
+        Returns:
+            Result from the plugin's resource_post_fetch method.
+        """
         return plugin.resource_post_fetch(payload, context)
 
     return await SERVER.invoke_hook(ResourcePostFetchPayload, resource_post_fetch_func, plugin_name, payload, context)
@@ -170,6 +255,8 @@ class SSLCapableFastMCP(FastMCP):
 
         Args:
             server_config: the MCP server configuration including mTLS information.
+            *args: Additional positional arguments passed to FastMCP.
+            **kwargs: Additional keyword arguments passed to FastMCP.
         """
         # Load server config from environment
 
@@ -183,7 +270,11 @@ class SSLCapableFastMCP(FastMCP):
         super().__init__(*args, **kwargs)
 
     def _get_ssl_config(self) -> dict:
-        """Build SSL configuration for uvicorn from MCPServerConfig."""
+        """Build SSL configuration for uvicorn from MCPServerConfig.
+
+        Returns:
+            Dictionary of SSL configuration parameters for uvicorn.
+        """
         ssl_config = {}
 
         if self.server_config.tls:
@@ -217,6 +308,9 @@ class SSLCapableFastMCP(FastMCP):
         """Start a simple HTTP-only health check server on a separate port.
 
         This allows health checks to work even when the main server uses HTTPS/mTLS.
+
+        Args:
+            health_port: Port number for the health check server.
         """
         # Third-Party
         from starlette.applications import Starlette
@@ -229,6 +323,9 @@ class SSLCapableFastMCP(FastMCP):
 
             Args:
                 request: the http request from which the health check occurs.
+
+            Returns:
+                JSON response with health status.
             """
             return JSONResponse({"status": "healthy"})
 
@@ -260,6 +357,9 @@ class SSLCapableFastMCP(FastMCP):
 
             Args:
                 request: the http request from which the health check occurs.
+
+            Returns:
+                JSON response with health status.
             """
             return JSONResponse({"status": "healthy"})
 
@@ -302,6 +402,9 @@ async def run():
         - PLUGINS_SERVER_SSL_CERTFILE: Path to server certificate
         - PLUGINS_SERVER_SSL_CA_CERTS: Path to CA bundle for client verification
         - PLUGINS_SERVER_SSL_CERT_REQS: Client cert requirement (0=NONE, 1=OPTIONAL, 2=REQUIRED)
+
+    Raises:
+        Exception: If plugin server initialization or execution fails.
     """
     global SERVER
 
