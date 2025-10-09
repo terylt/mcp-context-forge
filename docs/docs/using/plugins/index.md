@@ -16,11 +16,27 @@ The MCP Context Forge Plugin Framework provides a comprehensive, production-grad
 - **Operational Excellence** - Health‑oriented design, clear errors, sensible defaults
 - **Enterprise Features** - Multi-tenant isolation, conditional execution, sophisticated context management
 
+## Enabling Plugins
+
+### Environment Configuration
+
+Enable the plugin framework in your `.env` file:
+
+```bash
+# Enable plugin framework
+PLUGINS_ENABLED=true
+
+# Optional: Custom plugin config path
+PLUGIN_CONFIG_FILE=plugins/config.yaml
+```
+
+If deploying the gateway as a container, set these environment variables in your compose file or in the container's `run` command.
+
 ## Architecture
 
 !!! details "Plugin Framework Specification"
     Check the [specification](https://ibm.github.io/mcp-context-forge/architecture/plugins/) docs for a detailed design of the plugin system.
-    
+
 The plugin framework implements a **hybrid architecture** supporting both native and external service integrations:
 
 ### Native Plugins
@@ -58,20 +74,6 @@ class Plugin:
     # ... additional hook methods
 ```
 
-## Enabling Plugins
-
-### Environment Configuration
-
-Enable the plugin framework in your `.env` file:
-
-```bash
-# Enable plugin framework
-PLUGINS_ENABLED=true
-
-# Optional: Custom plugin config path
-PLUGIN_CONFIG_FILE=plugins/config.yaml
-```
-
 ## Build Your First Plugin (Quickstart)
 
 Decide between a native (in‑process) or external (MCP) plugin:
@@ -92,9 +94,9 @@ class MyPlugin(Plugin):
         super().__init__(config)
 
     async def prompt_pre_fetch(self, payload: PromptPrehookPayload, context: PluginContext) -> PromptPrehookResult:
-        # modify         
+        # modify
         return PromptPrehookResult(modified_payload=payload)
-        
+
         # or block
         # return PromptPrehookResult(
         #     continue_processing=False,
@@ -118,7 +120,7 @@ plugins:
     priority: 120
 ```
 
-**External plugin quickstart:** 
+**External plugin quickstart:**
 
 !!! details "Plugins Lifecycle Guide"
     See the [plugin lifecycle guide](https://ibm.github.io/mcp-context-forge/using/plugins/lifecycle/) for building, testing, and serving extenal plugins.
@@ -278,7 +280,7 @@ Available hook values for the `hooks` field:
 
 #### Condition Fields
 
-Users may only want plugins to be invoked on specific servers, tools, and prompts. To address this, a set of conditionals can be applied to a plugin. The attributes in a conditional combine together in as a set of `and` operations, while each attribute list item is `or`ed with other items in the list. 
+Users may only want plugins to be invoked on specific servers, tools, and prompts. To address this, a set of conditionals can be applied to a plugin. The attributes in a conditional combine together in as a set of `and` operations, while each attribute list item is `or`ed with other items in the list.
 
 The `conditions` array contains objects that specify when plugins should execute:
 

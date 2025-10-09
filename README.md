@@ -123,9 +123,7 @@ ContextForge MCP Gateway is a feature-rich gateway, proxy and MCP Registry that 
 
 ## 🚀 Overview & Goals
 
-**ContextForge** is a gateway, registry, and proxy that sits in front of any [Model Context Protocol](https://modelcontextprotocol.io) (MCP) server or REST API-exposing a unified endpoint for all your AI clients.
-
-**⚠️ Caution**: The current release (0.7.0) is considered alpha / early beta. It is not production-ready and should only be used for local development, testing, or experimentation. Features, APIs, and behaviors are subject to change without notice. **Do not** deploy in production environments without thorough security review, validation and additional security mechanisms.  Many of the features required for secure, large-scale, or multi-tenant production deployments are still on the [project roadmap](https://ibm.github.io/mcp-context-forge/architecture/roadmap/) - which is itself evolving.
+**ContextForge** is a gateway, registry, and proxy that sits in front of any [Model Context Protocol](https://modelcontextprotocol.io) (MCP) server, A2A server or REST API-exposing a unified endpoint for all your AI clients. See the [project roadmap](https://ibm.github.io/mcp-context-forge/architecture/roadmap/) for more details.
 
 It currently supports:
 
@@ -142,9 +140,9 @@ It currently supports:
 
 For a list of upcoming features, check out the [ContextForge Roadmap](https://ibm.github.io/mcp-context-forge/architecture/roadmap/)
 
-> Note on Multi‑Tenancy (v0.7.0): A comprehensive multi‑tenant architecture with email authentication, teams, RBAC, and resource visibility is landing in v0.7.0. See the [Migration Guide](https://github.com/IBM/mcp-context-forge/blob/main/MIGRATION-0.7.0.md) and [Changelog](https://github.com/IBM/mcp-context-forge/blob/main/CHANGELOG.md) for details.
+> Note on Multi‑Tenancy (v0.7.0): A comprehensive multi‑tenant architecture with email authentication, teams, RBAC, and resource visibility is available since v0.7.0. If upgrading from an older version, see the [Migration Guide](https://github.com/IBM/mcp-context-forge/blob/main/MIGRATION-0.7.0.md) and [Changelog](https://github.com/IBM/mcp-context-forge/blob/main/CHANGELOG.md) for details.
 
-**⚠️ Important**: MCP Gateway is not a standalone product - it is an open source component with **NO OFFICIAL SUPPORT** from IBM or its affiliates that can be integrated into your own solution architecture. If you choose to use it, you are responsible for evaluating its fit, securing the deployment, and managing its lifecycle. See [SECURITY.md](./SECURITY.md) for more details.
+**⚠️ Important**: See [SECURITY.md](./SECURITY.md) for more details.
 
 ---
 
@@ -379,7 +377,7 @@ python3 -m mcpgateway.translate \
 # 2️⃣  Register it with the gateway
 curl -s -X POST -H "Authorization: Bearer $MCPGATEWAY_BEARER_TOKEN" \
      -H "Content-Type: application/json" \
-     -d '{"name":"fast_time","url":"http://localhost:9000/sse"}' \
+     -d '{"name":"fast_time","url":"http://localhost:8003/sse"}' \
      http://localhost:4444/gateways
 
 # 3️⃣  Verify tool catalog
@@ -462,6 +460,7 @@ When using a MCP Client such as Claude with stdio:
 ## Quick Start - Containers
 
 Use the official OCI image from GHCR with **Docker** *or* **Podman**.
+Please note: Currently, arm64 is not supported. If you are e.g. running on MacOS, install via PyPi.
 
 ---
 
@@ -483,13 +482,13 @@ docker run -d --name mcpgateway \
   -e PLATFORM_ADMIN_PASSWORD=changeme \
   -e PLATFORM_ADMIN_FULL_NAME="Platform Administrator" \
   -e DATABASE_URL=sqlite:///./mcp.db \
-  ghcr.io/ibm/mcp-context-forge:0.7.0
+  ghcr.io/ibm/mcp-context-forge:0.8.0
 
 # Tail logs (Ctrl+C to quit)
 docker logs -f mcpgateway
 
 # Generating an API key
-docker run --rm -it ghcr.io/ibm/mcp-context-forge:0.7.0 \
+docker run --rm -it ghcr.io/ibm/mcp-context-forge:0.8.0 \
   python3 -m mcpgateway.utils.create_jwt_token --username admin@example.com --exp 0 --secret my-test-key
 ```
 
@@ -520,7 +519,7 @@ docker run -d --name mcpgateway \
   -e PLATFORM_ADMIN_EMAIL=admin@example.com \
   -e PLATFORM_ADMIN_PASSWORD=changeme \
   -e PLATFORM_ADMIN_FULL_NAME="Platform Administrator" \
-  ghcr.io/ibm/mcp-context-forge:0.7.0
+  ghcr.io/ibm/mcp-context-forge:0.8.0
 ```
 
 SQLite now lives on the host at `./data/mcp.db`.
@@ -547,7 +546,7 @@ docker run -d --name mcpgateway \
   -e PLATFORM_ADMIN_PASSWORD=changeme \
   -e PLATFORM_ADMIN_FULL_NAME="Platform Administrator" \
   -v $(pwd)/data:/data \
-  ghcr.io/ibm/mcp-context-forge:0.7.0
+  ghcr.io/ibm/mcp-context-forge:0.8.0
 ```
 
 Using `--network=host` allows Docker to access the local network, allowing you to add MCP servers running on your host. See [Docker Host network driver documentation](https://docs.docker.com/engine/network/drivers/host/) for more details.
@@ -563,7 +562,7 @@ podman run -d --name mcpgateway \
   -p 4444:4444 \
   -e HOST=0.0.0.0 \
   -e DATABASE_URL=sqlite:///./mcp.db \
-  ghcr.io/ibm/mcp-context-forge:0.7.0
+  ghcr.io/ibm/mcp-context-forge:0.8.0
 ```
 
 #### 2 - Persist SQLite
@@ -582,7 +581,7 @@ podman run -d --name mcpgateway \
   -p 4444:4444 \
   -v $(pwd)/data:/data \
   -e DATABASE_URL=sqlite:////data/mcp.db \
-  ghcr.io/ibm/mcp-context-forge:0.7.0
+  ghcr.io/ibm/mcp-context-forge:0.8.0
 ```
 
 #### 3 - Host networking (rootless)
@@ -600,7 +599,7 @@ podman run -d --name mcpgateway \
   --network=host \
   -v $(pwd)/data:/data \
   -e DATABASE_URL=sqlite:////data/mcp.db \
-  ghcr.io/ibm/mcp-context-forge:0.7.0
+  ghcr.io/ibm/mcp-context-forge:0.8.0
 ```
 
 ---
@@ -609,7 +608,7 @@ podman run -d --name mcpgateway \
 <summary><strong>✏️ Docker/Podman tips</strong></summary>
 
 * **.env files** - Put all the `-e FOO=` lines into a file and replace them with `--env-file .env`. See the provided [.env.example](https://github.com/IBM/mcp-context-forge/blob/main/.env.example) for reference.
-* **Pinned tags** - Use an explicit version (e.g. `v0.7.0`) instead of `latest` for reproducible builds.
+* **Pinned tags** - Use an explicit version (e.g. `v0.8.0`) instead of `latest` for reproducible builds.
 * **JWT tokens** - Generate one in the running container:
 
   ```bash
@@ -655,7 +654,7 @@ docker run --rm -i \
   -e MCP_SERVER_URL=http://host.docker.internal:4444/servers/UUID_OF_SERVER_1/mcp \
   -e MCP_TOOL_CALL_TIMEOUT=120 \
   -e MCP_WRAPPER_LOG_LEVEL=DEBUG \
-  ghcr.io/ibm/mcp-context-forge:0.7.0 \
+  ghcr.io/ibm/mcp-context-forge:0.8.0 \
   python3 -m mcpgateway.wrapper
 ```
 
@@ -703,7 +702,7 @@ python3 -m mcpgateway.wrapper
 <summary><strong>Expected responses from mcpgateway.wrapper</strong></summary>
 
 ```json
-{"jsonrpc":"2.0","id":1,"result":{"protocolVersion":"2025-03-26","capabilities":{"experimental":{},"prompts":{"listChanged":false},"resources":{"subscribe":false,"listChanged":false},"tools":{"listChanged":false}},"serverInfo":{"name":"mcpgateway-wrapper","version":"0.7.0"}}}
+{"jsonrpc":"2.0","id":1,"result":{"protocolVersion":"2025-03-26","capabilities":{"experimental":{},"prompts":{"listChanged":false},"resources":{"subscribe":false,"listChanged":false},"tools":{"listChanged":false}},"serverInfo":{"name":"mcpgateway-wrapper","version":"0.8.0"}}}
 
 # When there's no tools
 {"jsonrpc":"2.0","id":2,"result":{"tools":[]}}
@@ -737,7 +736,7 @@ docker run -i --rm \
   -e MCP_SERVER_URL=http://localhost:4444/servers/UUID_OF_SERVER_1/mcp \
   -e MCP_AUTH=${MCP_AUTH} \
   -e MCP_TOOL_CALL_TIMEOUT=120 \
-  ghcr.io/ibm/mcp-context-forge:0.7.0 \
+  ghcr.io/ibm/mcp-context-forge:0.8.0 \
   python3 -m mcpgateway.wrapper
 ```
 
@@ -1255,20 +1254,35 @@ You can get started by copying the provided [.env.example](https://github.com/IB
 | ------------------------------ | ------------------------------------------------ | --------------------- | ------- |
 | `SSO_AUTO_ADMIN_DOMAINS`      | Email domains that automatically get admin privileges | `[]`             | JSON array |
 
-### Dynamic Client Registration & Virtual MCP Server Authentication
+### OAuth 2.0 Dynamic Client Registration (DCR) & PKCE
 
-ContextForge supports OAuth2 with Dynamic Client Registration (DCR)
-for streamable HTTP servers through integration with an upstream API gateway,
-such as HyperMCP gateway, enabling automatic OAuth2 client provisioning for MCP servers
-without manual configuration.
+ContextForge implements **OAuth 2.0 Dynamic Client Registration (RFC 7591)** and **PKCE (RFC 7636)** for seamless integration with OAuth-protected MCP servers and upstream API gateways like HyperMCP.
 
-| Setting                     | Description                                            | Default | Options |
-|-----------------------------|--------------------------------------------------------|---------|---------|
-| `JWT_AUDIENCE_VERIFICATION` | JWT audience verification needs to be disabled for DCR | `true`  | bool    |
+**Key Features:**
+- ✅ Automatic client registration with Authorization Servers (no manual credential configuration)
+- ✅ Authorization Server metadata discovery (RFC 8414)
+- ✅ PKCE (Proof Key for Code Exchange) enabled for all Authorization Code flows
+- ✅ Support for public clients (PKCE-only, no client secret)
+- ✅ Encrypted credential storage with Fernet encryption
+- ✅ Configurable issuer allowlist for security
 
-You can find an example for using dynamic client registration (DCR) with [HyprMCP Gateway (`hyprmcp/mcp-gateway`)](https://github.com/hyprmcp/mcp-gateway).
+| Setting                                                | Description                                                    | Default                        | Options       |
+|-------------------------------------------------------|----------------------------------------------------------------|--------------------------------|---------------|
+| `MCPGATEWAY_DCR_ENABLED`                              | Enable Dynamic Client Registration (RFC 7591)                  | `true`                         | bool          |
+| `MCPGATEWAY_DCR_AUTO_REGISTER_ON_MISSING_CREDENTIALS` | Auto-register when gateway has issuer but no client_id         | `true`                         | bool          |
+| `MCPGATEWAY_DCR_DEFAULT_SCOPES`                       | Default OAuth scopes to request during DCR                     | `mcp:read`                     | string        |
+| `MCPGATEWAY_DCR_ALLOWED_ISSUERS`                      | Allowlist of trusted issuer URLs (empty = allow any)           | `[]`                           | JSON array    |
+| `MCPGATEWAY_DCR_TOKEN_ENDPOINT_AUTH_METHOD`           | Token endpoint auth method                                     | `client_secret_basic`          | `client_secret_basic`, `client_secret_post`, `none` |
+| `MCPGATEWAY_DCR_METADATA_CACHE_TTL`                   | AS metadata cache TTL in seconds                               | `3600`                         | int           |
+| `MCPGATEWAY_DCR_CLIENT_NAME_TEMPLATE`                 | Template for client_name in DCR requests                       | `MCP Gateway ({gateway_name})` | string        |
+| `MCPGATEWAY_OAUTH_DISCOVERY_ENABLED`                  | Enable AS metadata discovery (RFC 8414)                        | `true`                         | bool          |
+| `MCPGATEWAY_OAUTH_PREFERRED_CODE_CHALLENGE_METHOD`    | PKCE code challenge method                                     | `S256`                         | `S256`, `plain` |
+| `JWT_AUDIENCE_VERIFICATION`                           | JWT audience verification (disable for DCR)                    | `true`                         | bool          |
 
-Follow the tutorial at https://ibm.github.io/mcp-context-forge/tutorials/dcr-hyprmcp/ to get started.
+**Documentation:**
+- [DCR Configuration Guide](https://ibm.github.io/mcp-context-forge/manage/dcr/) - Complete DCR setup and troubleshooting
+- [OAuth 2.0 Integration](https://ibm.github.io/mcp-context-forge/manage/oauth/) - OAuth configuration and PKCE details
+- [HyperMCP Tutorial](https://ibm.github.io/mcp-context-forge/tutorials/dcr-hyprmcp/) - End-to-end DCR setup with HyperMCP gateway
 
 ### Personal Teams Configuration
 
@@ -1280,6 +1294,29 @@ Follow the tutorial at https://ibm.github.io/mcp-context-forge/tutorials/dcr-hyp
 | `MAX_MEMBERS_PER_TEAM`                   | Maximum number of members per team               | `100`      | int > 0 |
 | `INVITATION_EXPIRY_DAYS`                 | Number of days before team invitations expire   | `7`        | int > 0 |
 | `REQUIRE_EMAIL_VERIFICATION_FOR_INVITES` | Require email verification for team invitations | `true`     | bool    |
+
+### MCP Server Catalog
+
+> 🆕 **New in v0.7.0**: The MCP Server Catalog allows you to define a catalog of pre-configured MCP servers in a YAML file for easy discovery and management via the Admin UI.
+
+| Setting                              | Description                                      | Default            | Options |
+| ------------------------------------ | ------------------------------------------------ | ------------------ | ------- |
+| `MCPGATEWAY_CATALOG_ENABLED`        | Enable MCP server catalog feature                | `true`             | bool    |
+| `MCPGATEWAY_CATALOG_FILE`           | Path to catalog configuration file               | `mcp-catalog.yml`  | string  |
+| `MCPGATEWAY_CATALOG_AUTO_HEALTH_CHECK` | Automatically health check catalog servers    | `true`             | bool    |
+| `MCPGATEWAY_CATALOG_CACHE_TTL`      | Catalog cache TTL in seconds                     | `3600`             | int > 0 |
+| `MCPGATEWAY_CATALOG_PAGE_SIZE`      | Number of catalog servers per page               | `12`               | int > 0 |
+
+**Key Features:**
+- 🔄 Refresh Button - Manually refresh catalog without page reload
+- 🔍 Debounced Search - Optimized search with 300ms debounce
+- 📝 Custom Server Names - Specify custom names when registering
+- 🔌 Transport Detection - Auto-detect SSE, WebSocket, or HTTP transports
+- 🔐 OAuth Support - Register OAuth servers and configure later
+- ⚡ Better Error Messages - User-friendly errors for common issues
+
+**Documentation:**
+- [MCP Server Catalog Guide](https://ibm.github.io/mcp-context-forge/manage/catalog/) - Complete catalog setup and configuration
 
 ### Security
 
@@ -1383,7 +1420,7 @@ MCP Gateway includes **vendor-agnostic OpenTelemetry support** for distributed t
 | ------------------------------- | ---------------------------------------------- | --------------------- | ------------------------------------------ |
 | `OTEL_ENABLE_OBSERVABILITY`     | Master switch for observability               | `true`                | `true`, `false`                           |
 | `OTEL_SERVICE_NAME`             | Service identifier in traces                   | `mcp-gateway`         | string                                     |
-| `OTEL_SERVICE_VERSION`          | Service version in traces                      | `0.7.0`               | string                                     |
+| `OTEL_SERVICE_VERSION`          | Service version in traces                      | `0.8.0`               | string                                     |
 | `OTEL_DEPLOYMENT_ENVIRONMENT`   | Environment tag (dev/staging/prod)            | `development`         | string                                     |
 | `OTEL_TRACES_EXPORTER`          | Trace exporter backend                         | `otlp`                | `otlp`, `jaeger`, `zipkin`, `console`, `none` |
 | `OTEL_RESOURCE_ATTRIBUTES`      | Custom resource attributes                     | (empty)               | `key=value,key2=value2`                   |

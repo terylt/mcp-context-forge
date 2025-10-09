@@ -6,8 +6,8 @@ Whether you're self-hosting, running in the cloud, or deploying to Kubernetes, t
 
 ---
 
-!!! tip "What's new in 0.7.0 (preview)"
-    The upcoming v0.7.0 introduces multi‑tenancy: email authentication, teams, RBAC, and resource visibility (private/team/public).
+!!! tip "What's new in 0.8.0"
+    Version v0.8.0 includes multi‑tenancy: email authentication, teams, RBAC, and resource visibility (private/team/public).
 
     - See the [Migration Guide](https://github.com/IBM/mcp-context-forge/blob/main/MIGRATION-0.7.0.md) and [Changelog](https://github.com/IBM/mcp-context-forge/blob/main/CHANGELOG.md)
     - Quick enablement (excerpt): `EMAIL_AUTH_ENABLED=true`, `PLATFORM_ADMIN_EMAIL=...`, `AUTO_CREATE_PERSONAL_TEAMS=true`
@@ -20,6 +20,8 @@ Whether you're self-hosting, running in the cloud, or deploying to Kubernetes, t
 | Page | Description |
 |------|-------------|
 | [Configuration](configuration.md) | **Complete configuration reference** - databases, environment variables, and deployment settings |
+| [Scaling Guide](scale.md) | 📈 **Production Scaling** - Horizontal/vertical scaling, Kubernetes HPA, connection pooling, and performance tuning |
+| [Performance Tuning](tuning.md) | Optimize Gunicorn workers, database connections, and container resources |
 | [Dynamic Client Registration](dcr.md) | 🔐 **OAuth2 DCR** - Automatic client provisioning for streamable HTTP servers |
 | [Backups](backup.md) | How to persist and restore your database, configs, and resource state |
 | [Export & Import](export-import.md) | Complete configuration management with CLI, API, and Admin UI |
