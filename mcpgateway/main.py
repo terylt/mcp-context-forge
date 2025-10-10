@@ -702,7 +702,7 @@ async def plugin_violation_exception_handler(_request: Request, exc: PluginViola
              violation details.
 
     Returns:
-        JSONResponse: A 403 response with access forbidden.
+        JSONResponse: A -32602 response which indicates invalid parameters.
 
     Examples:
         >>> from mcpgateway.plugins.framework import PluginViolationError
@@ -719,11 +719,12 @@ async def plugin_violation_exception_handler(_request: Request, exc: PluginViola
         ... ))
         >>> result = asyncio.run(plugin_violation_exception_handler(None, mock_error))
         >>> result.status_code
-        403
+        -32602
     """
     policy_violation = exc.violation.model_dump() if exc.violation else {}
     policy_violation["message"] = exc.message
-    return JSONResponse(status_code=403, content=policy_violation)
+    status_code = exc.violation.mcp_error_code if exc.violation and exc.violation.mcp_error_code else -32602
+    return JSONResponse(status_code=status_code, content=policy_violation)
 
 
 @app.exception_handler(PluginError)
@@ -757,10 +758,11 @@ async def plugin_exception_handler(_request: Request, exc: PluginError):
         ... ))
         >>> result = asyncio.run(plugin_exception_handler(None, mock_error))
         >>> result.status_code
-        500
+        -32603
     """
     error_obj = exc.error.model_dump() if exc.error else {}
-    return JSONResponse(status_code=500, content=error_obj)
+    status_code = exc.error.mcp_error_code if exc.error else -32603
+    return JSONResponse(status_code=status_code, content=error_obj)
 
 
 class DocsAuthMiddleware(BaseHTTPMiddleware):
