@@ -18,6 +18,8 @@ This runtime does the following:
 # Standard
 import asyncio
 import logging
+import os
+import sys
 from typing import Any, Dict
 
 # Third-Party
@@ -62,7 +64,7 @@ async def get_plugin_configs() -> list[dict]:
     """Get the plugin configurations installed on the server.
 
     Returns:
-        List of plugin configuration dictionaries.
+        JSON string containing list of plugin configuration dictionaries.
     """
     return await SERVER.get_plugin_configs()
 
@@ -74,7 +76,7 @@ async def get_plugin_config(name: str) -> dict:
         name: The name of the plugin
 
     Returns:
-        Plugin configuration dictionary.
+        JSON string containing plugin configuration dictionary.
     """
     return await SERVER.get_plugin_config(name)
 
@@ -394,14 +396,18 @@ class SSLCapableFastMCP(FastMCP):
 async def run():
     """Run the external plugin server with FastMCP.
 
+    Supports both stdio and HTTP transports. Auto-detects transport based on stdin
+    (if stdin is not a TTY, uses stdio mode), or you can explicitly set PLUGINS_TRANSPORT.
+
     Reads configuration from PLUGINS_SERVER_* environment variables:
-        - PLUGINS_SERVER_HOST: Server host (default: 0.0.0.0)
-        - PLUGINS_SERVER_PORT: Server port (default: 8000)
-        - PLUGINS_SERVER_SSL_ENABLED: Enable SSL/TLS (true/false)
-        - PLUGINS_SERVER_SSL_KEYFILE: Path to server private key
-        - PLUGINS_SERVER_SSL_CERTFILE: Path to server certificate
-        - PLUGINS_SERVER_SSL_CA_CERTS: Path to CA bundle for client verification
-        - PLUGINS_SERVER_SSL_CERT_REQS: Client cert requirement (0=NONE, 1=OPTIONAL, 2=REQUIRED)
+        - PLUGINS_TRANSPORT: Transport type - 'stdio' or 'http' (default: auto-detect)
+        - PLUGINS_SERVER_HOST: Server host (default: 0.0.0.0) - HTTP mode only
+        - PLUGINS_SERVER_PORT: Server port (default: 8000) - HTTP mode only
+        - PLUGINS_SERVER_SSL_ENABLED: Enable SSL/TLS (true/false) - HTTP mode only
+        - PLUGINS_SERVER_SSL_KEYFILE: Path to server private key - HTTP mode only
+        - PLUGINS_SERVER_SSL_CERTFILE: Path to server certificate - HTTP mode only
+        - PLUGINS_SERVER_SSL_CA_CERTS: Path to CA bundle for client verification - HTTP mode only
+        - PLUGINS_SERVER_SSL_CERT_REQS: Client cert requirement (0=NONE, 1=OPTIONAL, 2=REQUIRED) - HTTP mode only
 
     Raises:
         Exception: If plugin server initialization or execution fails.
@@ -415,28 +421,62 @@ async def run():
         logger.error("Failed to initialize plugin server")
         return
 
+    # Determine transport type from environment variable or auto-detect
+    # Auto-detect: if stdin is not a TTY (i.e., it's being piped), use stdio mode
+    transport = os.environ.get("PLUGINS_TRANSPORT", None)
+    if transport is None:
+        # Auto-detect based on stdin
+        if not sys.stdin.isatty():
+            transport = "stdio"
+            logger.info("Auto-detected stdio transport (stdin is not a TTY)")
+        else:
+            transport = "http"
+    else:
+        transport = transport.lower()
+
     try:
-        # Create FastMCP server with SSL support
-        mcp = SSLCapableFastMCP(
-            server_config=SERVER.get_server_config(),
-            name=MCP_SERVER_NAME,
-            instructions=MCP_SERVER_INSTRUCTIONS,
-        )
+        if transport == "stdio":
+            # Create basic FastMCP server for stdio (no SSL support needed for stdio)
+            mcp = FastMCP(
+                name=MCP_SERVER_NAME,
+                instructions=MCP_SERVER_INSTRUCTIONS,
+            )
 
-        # Register module-level tool functions with FastMCP
-        # These are defined at module level for testability
-        mcp.tool(name=GET_PLUGIN_CONFIGS)(get_plugin_configs)
-        mcp.tool(name=GET_PLUGIN_CONFIG)(get_plugin_config)
-        mcp.tool(name=HookType.PROMPT_PRE_FETCH.value)(prompt_pre_fetch)
-        mcp.tool(name=HookType.PROMPT_POST_FETCH.value)(prompt_post_fetch)
-        mcp.tool(name=HookType.TOOL_PRE_INVOKE.value)(tool_pre_invoke)
-        mcp.tool(name=HookType.TOOL_POST_INVOKE.value)(tool_post_invoke)
-        mcp.tool(name=HookType.RESOURCE_PRE_FETCH.value)(resource_pre_fetch)
-        mcp.tool(name=HookType.RESOURCE_POST_FETCH.value)(resource_post_fetch)
+            # Register module-level tool functions with FastMCP
+            mcp.tool(name=GET_PLUGIN_CONFIGS)(get_plugin_configs)
+            mcp.tool(name=GET_PLUGIN_CONFIG)(get_plugin_config)
+            mcp.tool(name=HookType.PROMPT_PRE_FETCH.value)(prompt_pre_fetch)
+            mcp.tool(name=HookType.PROMPT_POST_FETCH.value)(prompt_post_fetch)
+            mcp.tool(name=HookType.TOOL_PRE_INVOKE.value)(tool_pre_invoke)
+            mcp.tool(name=HookType.TOOL_POST_INVOKE.value)(tool_post_invoke)
+            mcp.tool(name=HookType.RESOURCE_PRE_FETCH.value)(resource_pre_fetch)
+            mcp.tool(name=HookType.RESOURCE_POST_FETCH.value)(resource_post_fetch)
 
-        # Run with streamable-http transport
-        logger.info("Starting MCP plugin server with FastMCP")
-        await mcp.run_streamable_http_async()
+            # Run with stdio transport
+            logger.info("Starting MCP plugin server with FastMCP (stdio transport)")
+            await mcp.run_stdio_async()
+
+        else:  # http or streamablehttp
+            # Create FastMCP server with SSL support
+            mcp = SSLCapableFastMCP(
+                server_config=SERVER.get_server_config(),
+                name=MCP_SERVER_NAME,
+                instructions=MCP_SERVER_INSTRUCTIONS,
+            )
+
+            # Register module-level tool functions with FastMCP
+            mcp.tool(name=GET_PLUGIN_CONFIGS)(get_plugin_configs)
+            mcp.tool(name=GET_PLUGIN_CONFIG)(get_plugin_config)
+            mcp.tool(name=HookType.PROMPT_PRE_FETCH.value)(prompt_pre_fetch)
+            mcp.tool(name=HookType.PROMPT_POST_FETCH.value)(prompt_post_fetch)
+            mcp.tool(name=HookType.TOOL_PRE_INVOKE.value)(tool_pre_invoke)
+            mcp.tool(name=HookType.TOOL_POST_INVOKE.value)(tool_post_invoke)
+            mcp.tool(name=HookType.RESOURCE_PRE_FETCH.value)(resource_pre_fetch)
+            mcp.tool(name=HookType.RESOURCE_POST_FETCH.value)(resource_post_fetch)
+
+            # Run with streamable-http transport
+            logger.info("Starting MCP plugin server with FastMCP (HTTP transport)")
+            await mcp.run_streamable_http_async()
 
     except Exception:
         logger.exception("Caught error while executing plugin server")
