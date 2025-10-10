@@ -741,7 +741,7 @@ async def plugin_exception_handler(_request: Request, exc: PluginError):
              violation details.
 
     Returns:
-        JSONResponse: A 500 response with internal server error.
+        JSONResponse: A -32603 response with internal server error.
 
     Examples:
         >>> from mcpgateway.plugins.framework import PluginViolationError
