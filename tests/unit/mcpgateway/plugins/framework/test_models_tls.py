@@ -34,7 +34,7 @@ def test_plugin_config_supports_tls_block(tmp_path, verify):
             "url": "https://plugins.internal.example.com/mcp",
             "tls": {
                 "ca_bundle": str(ca_path),
-                "client_cert": str(client_bundle),
+                "certfile": str(client_bundle),
                 "verify": verify,
             },
         },
@@ -42,7 +42,7 @@ def test_plugin_config_supports_tls_block(tmp_path, verify):
 
     assert config.mcp is not None
     assert config.mcp.tls is not None
-    assert config.mcp.tls.client_cert == str(client_bundle)
+    assert config.mcp.tls.certfile == str(client_bundle)
     assert config.mcp.tls.verify == verify
 
 
@@ -59,7 +59,7 @@ def test_plugin_config_tls_missing_cert_raises(tmp_path):
                 "proto": "STREAMABLEHTTP",
                 "url": "https://plugins.internal.example.com/mcp",
                 "tls": {
-                    "client_key": str(ca_path),
+                    "keyfile": str(ca_path),
                 },
             },
         )
@@ -89,16 +89,16 @@ def test_tls_config_from_env_defaults(monkeypatch, tmp_path):
     _write_pem(ca_path)
     _write_pem(client_cert)
 
-    monkeypatch.setenv("PLUGINS_MTLS_CA_BUNDLE", str(ca_path))
-    monkeypatch.setenv("PLUGINS_MTLS_CLIENT_CERT", str(client_cert))
-    monkeypatch.setenv("PLUGINS_MTLS_VERIFY", "true")
-    monkeypatch.setenv("PLUGINS_MTLS_CHECK_HOSTNAME", "true")
+    monkeypatch.setenv("PLUGINS_CLIENT_MTLS_CA_BUNDLE", str(ca_path))
+    monkeypatch.setenv("PLUGINS_CLIENT_MTLS_CERTFILE", str(client_cert))
+    monkeypatch.setenv("PLUGINS_CLIENT_MTLS_VERIFY", "true")
+    monkeypatch.setenv("PLUGINS_CLIENT_MTLS_CHECK_HOSTNAME", "true")
 
     tls_config = MCPClientTLSConfig.from_env()
 
     assert tls_config is not None
     assert tls_config.ca_bundle == str(ca_path)
-    assert tls_config.client_cert == str(client_cert)
+    assert tls_config.certfile == str(client_cert)
     assert tls_config.verify is True
     assert tls_config.check_hostname is True
 

@@ -9,6 +9,7 @@ Tests for external client on stdio.
 
 # Standard
 import asyncio
+import json
 
 # Third-Party
 import pytest
@@ -42,6 +43,7 @@ def server():
 async def test_get_plugin_configs(monkeypatch, server):
     monkeypatch.setattr(runtime, "SERVER", server)
     configs = await runtime.get_plugin_configs()
+    #configs = json.loads(confstr)
     assert len(configs) > 0
 
 
