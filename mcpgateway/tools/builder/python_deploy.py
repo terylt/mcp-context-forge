@@ -59,6 +59,9 @@ class MCPStackPython(CICDModule):
             specific_plugins: List of specific plugin names to build
             no_cache: Disable build cache
             copy_env_templates: Copy .env.template files from cloned repos
+
+        Raises:
+            Exception: If build fails for any component
         """
         config = load_config(config_file)
 
@@ -128,6 +131,9 @@ class MCPStackPython(CICDModule):
 
         Args:
             config_file: Path to mcp-stack.yaml
+
+        Raises:
+            RuntimeError: If make command not found
         """
         config = load_config(config_file)
 
@@ -162,6 +168,9 @@ class MCPStackPython(CICDModule):
             skip_build: Skip building containers
             skip_certs: Skip certificate generation
             output_dir: Output directory for manifests (default: ./deploy)
+
+        Raises:
+            ValueError: If unsupported deployment type specified
         """
         config = load_config(config_file)
 
@@ -242,6 +251,9 @@ class MCPStackPython(CICDModule):
 
         Returns:
             Path to generated manifests directory
+
+        Raises:
+            ValueError: If unsupported deployment type specified
         """
         config = load_config(config_file)
         deployment_type = config["deployment"]["type"]
@@ -273,7 +285,14 @@ class MCPStackPython(CICDModule):
     # Private helper methods
 
     def _detect_container_runtime(self) -> str:
-        """Detect available container runtime (docker or podman)."""
+        """Detect available container runtime (docker or podman).
+
+        Returns:
+            Name of available runtime "docker" or "podman"
+
+        Raises:
+            RuntimeError: If no container runtime found
+        """
         if shutil.which("docker"):
             return "docker"
         elif shutil.which("podman"):
@@ -310,6 +329,10 @@ class MCPStackPython(CICDModule):
             component_name: Name of the component (gateway or plugin name)
             no_cache: Disable cache
             copy_env_templates: Copy .env.template from repo if it exists
+
+        Raises:
+            ValueError: If component has no repo field
+            FileNotFoundError: If build context or containerfile not found
         """
         repo = component.get("repo")
 
@@ -381,6 +404,9 @@ class MCPStackPython(CICDModule):
         """Deploy to Kubernetes using kubectl.
 
         Uses shared deploy_kubernetes() from common.py to avoid code duplication.
+
+        Args:
+            manifests_dir: Path to directory containing Kubernetes manifests
         """
         deploy_kubernetes(manifests_dir, verbose=self.verbose)
 
@@ -388,6 +414,9 @@ class MCPStackPython(CICDModule):
         """Deploy using Docker Compose.
 
         Uses shared deploy_compose() from common.py to avoid code duplication.
+
+        Args:
+            manifests_dir: Path to directory containing compose manifest
         """
         compose_file = manifests_dir / "docker-compose.yaml"
         deploy_compose(compose_file, verbose=self.verbose)
@@ -396,6 +425,11 @@ class MCPStackPython(CICDModule):
         """Verify Kubernetes deployment health.
 
         Uses shared verify_kubernetes() from common.py to avoid code duplication.
+
+        Args:
+            config: Parsed configuration dict
+            wait: Wait for pods to be ready
+            timeout: Wait timeout in seconds
         """
         namespace = config["deployment"].get("namespace", "mcp-gateway")
         output = verify_kubernetes(namespace, wait=wait, timeout=timeout, verbose=self.verbose)
@@ -405,6 +439,11 @@ class MCPStackPython(CICDModule):
         """Verify Docker Compose deployment health.
 
         Uses shared verify_compose() from common.py to avoid code duplication.
+
+        Args:
+            config: Parsed configuration dict
+            wait: Wait for containers to be ready
+            timeout: Wait timeout in seconds
         """
         _ = config, wait, timeout  # Reserved for future use
         # Use the same manifests directory as generate_manifests
@@ -418,6 +457,9 @@ class MCPStackPython(CICDModule):
         """Destroy Kubernetes deployment.
 
         Uses shared destroy_kubernetes() from common.py to avoid code duplication.
+
+        Args:
+            config: Parsed configuration dict
         """
         _ = config  # Reserved for future use (namespace, labels, etc.)
         # Use the same manifests directory as generate_manifests
@@ -429,6 +471,9 @@ class MCPStackPython(CICDModule):
         """Destroy Docker Compose deployment.
 
         Uses shared destroy_compose() from common.py to avoid code duplication.
+
+        Args:
+            config: Parsed configuration dict
         """
         _ = config  # Reserved for future use (project name, networks, etc.)
         # Use the same manifests directory as generate_manifests

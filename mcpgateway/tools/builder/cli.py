@@ -67,6 +67,11 @@ def cli(
     """MCP Stack deployment tool
 
     Deploys MCP Gateway + external plugins from a single YAML configuration.
+
+    Args:
+        ctx: Typer context object
+        no_dagger: Force plain Python mode instead of Dagger
+        verbose: Enable verbose output
     """
     ctx.ensure_object(dict)
     ctx.obj["verbose"] = verbose
@@ -85,7 +90,12 @@ def cli(
 
 @app.command()
 def validate(ctx: typer.Context, config_file: Annotated[Path, typer.Argument(help="The deployment configuration file.")]):
-    """Validate mcp-stack.yaml configuration"""
+    """Validate mcp-stack.yaml configuration
+
+    Args:
+        ctx: Typer context object
+        config_file: Path to the deployment configuration file
+    """
     impl = ctx.obj["deployer"]
 
     try:
@@ -105,7 +115,16 @@ def build(
     no_cache: Annotated[bool, typer.Option("--no-cache", help="Disable build cache")] = False,
     copy_env_templates: Annotated[bool, typer.Option("--copy-env-templates", help="Copy .env.template files from plugin repos")] = True,
 ):
-    """Build containers"""
+    """Build containers
+
+    Args:
+        ctx: Typer context object
+        config_file: Path to the deployment configuration file
+        plugins_only: Only build plugin containers, skip gateway
+        plugin: List of specific plugin names to build
+        no_cache: Disable build cache
+        copy_env_templates: Copy .env.template files from plugin repos
+    """
     impl = ctx.obj["deployer"]
 
     try:
@@ -122,7 +141,12 @@ def build(
 
 @app.command()
 def certs(ctx: typer.Context, config_file: Annotated[Path, typer.Argument(help="The deployment configuration file")]):
-    """Generate mTLS certificates"""
+    """Generate mTLS certificates
+
+    Args:
+        ctx: Typer context object
+        config_file: Path to the deployment configuration file
+    """
     impl = ctx.obj["deployer"]
 
     try:
@@ -142,7 +166,16 @@ def deploy(
     skip_build: Annotated[bool, typer.Option("--skip-build", help="Skip building containers")] = False,
     skip_certs: Annotated[bool, typer.Option("--skip-certs", help="Skip certificate generation")] = False,
 ):
-    """Deploy MCP stack"""
+    """Deploy MCP stack
+
+    Args:
+        ctx: Typer context object
+        config_file: Path to the deployment configuration file
+        output_dir: Custom output directory for manifests
+        dry_run: Generate manifests without deploying
+        skip_build: Skip building containers
+        skip_certs: Skip certificate generation
+    """
     impl = ctx.obj["deployer"]
 
     try:
@@ -163,7 +196,14 @@ def verify(
     wait: Annotated[bool, typer.Option("--wait", help="Wait for deployment to be ready")] = True,
     timeout: Annotated[int, typer.Option("--timeout", help="Wait timeout in seconds")] = 300,
 ):
-    """Verify deployment health"""
+    """Verify deployment health
+
+    Args:
+        ctx: Typer context object
+        config_file: Path to the deployment configuration file
+        wait: Wait for deployment to be ready
+        timeout: Wait timeout in seconds
+    """
     impl = ctx.obj["deployer"]
 
     try:
@@ -180,7 +220,13 @@ def destroy(
     config_file: Annotated[Path, typer.Argument(help="The deployment configuration file")],
     force: Annotated[bool, typer.Option("--force", help="Force destruction without confirmation")] = False,
 ):
-    """Destroy deployed MCP stack"""
+    """Destroy deployed MCP stack
+
+    Args:
+        ctx: Typer context object
+        config_file: Path to the deployment configuration file
+        force: Force destruction without confirmation
+    """
     impl = ctx.obj["deployer"]
 
     if not force:
@@ -210,7 +256,13 @@ def generate(
     config_file: Annotated[Path, typer.Argument(help="The deployment configuration file")],
     output: Annotated[Optional[Path], typer.Option("--output", "-o", help="Output directory for manifests")] = None,
 ):
-    """Generate deployment manifests (k8s or compose)"""
+    """Generate deployment manifests (k8s or compose)
+
+    Args:
+        ctx: Typer context object
+        config_file: Path to the deployment configuration file
+        output: Output directory for manifests
+    """
     impl = ctx.obj["deployer"]
 
     try:
@@ -222,7 +274,11 @@ def generate(
 
 
 def main():
-    """Main entry point"""
+    """Main entry point
+
+    Raises:
+        Exception: Any unhandled exception from subcommands (re-raised in debug mode)
+    """
     try:
         app(obj={})
     except KeyboardInterrupt:

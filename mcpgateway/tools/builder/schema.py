@@ -54,7 +54,11 @@ class BuildableConfig(BaseModel):
     mtls_enabled: Optional[bool] = Field(True, description="Enable mTLS")
 
     def model_post_init(self, __context: Any) -> None:
-        """Validate that either image or repo is specified"""
+        """Validate that either image or repo is specified
+
+        Raises:
+            ValueError: If neither image nor repo is specified
+        """
         if not self.image and not self.repo:
             component_type = self.__class__.__name__.replace("Config", "")
             raise ValueError(f"{component_type} must specify either 'image' or 'repo'")
@@ -94,7 +98,17 @@ class PluginConfig(BuildableConfig):
     @field_validator("name")
     @classmethod
     def validate_name(cls, v: str) -> str:
-        """Validate plugin name is non-empty"""
+        """Validate plugin name is non-empty
+
+        Args:
+            v: Plugin name value to validate
+
+        Returns:
+            Validated plugin name
+
+        Raises:
+            ValueError: If plugin name is empty or whitespace only
+        """
         if not v or not v.strip():
             raise ValueError("Plugin name cannot be empty")
         return v
@@ -148,7 +162,17 @@ class MCPStackConfig(BaseModel):
     @field_validator("plugins")
     @classmethod
     def validate_plugin_names_unique(cls, v: List[PluginConfig]) -> List[PluginConfig]:
-        """Ensure plugin names are unique"""
+        """Ensure plugin names are unique
+
+        Args:
+            v: List of plugin configurations to validate
+
+        Returns:
+            Validated list of plugin configurations
+
+        Raises:
+            ValueError: If duplicate plugin names are found
+        """
         names = [p.name for p in v]
         if len(names) != len(set(names)):
             duplicates = [name for name in names if names.count(name) > 1]

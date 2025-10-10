@@ -86,6 +86,9 @@ def generate_plugin_config(config: Dict[str, Any], output_dir: Path, verbose: bo
 
     Returns:
         Path to generated plugins-config.yaml file
+
+    Raises:
+        FileNotFoundError: If template directory not found
     """
 
     deployment_type = config["deployment"]["type"]
@@ -157,6 +160,9 @@ def generate_kubernetes_manifests(config: Dict[str, Any], output_dir: Path, verb
         config: Parsed mcp-stack.yaml configuration
         output_dir: Output directory for manifests
         verbose: Print verbose output
+
+    Raises:
+        FileNotFoundError: If template directory not found
     """
 
     # Load templates
@@ -307,6 +313,9 @@ def generate_compose_manifests(config: Dict[str, Any], output_dir: Path, verbose
         config: Parsed mcp-stack.yaml configuration
         output_dir: Output directory for manifests
         verbose: Print verbose output
+
+    Raises:
+        FileNotFoundError: If template directory not found
     """
 
     # Load templates
