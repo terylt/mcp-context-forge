@@ -45,6 +45,11 @@ class MCPStackPython(CICDModule):
     """Plain Python implementation of MCP Stack deployment."""
 
     def __init__(self, verbose: bool = False):
+        """Initialize MCPStackPython instance.
+
+        Args:
+            verbose: Enable verbose output
+        """
         super().__init__(verbose)
 
         # Detect container runtime (docker or podman)

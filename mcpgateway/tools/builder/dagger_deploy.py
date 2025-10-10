@@ -48,6 +48,11 @@ class MCPStackDagger(CICDModule):
     """Dagger-based implementation of MCP Stack deployment."""
 
     def __init__(self, verbose: bool = False):
+        """Initialize MCPStackDagger instance.
+
+        Args:
+            verbose: Enable verbose output
+        """
         super().__init__(verbose)
 
     async def build(self, config_file: str, plugins_only: bool = False, specific_plugins: Optional[List[str]] = None, no_cache: bool = False, copy_env_templates: bool = False) -> None:
