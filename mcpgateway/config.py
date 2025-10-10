@@ -225,6 +225,7 @@ class Settings(BaseSettings):
     # OAuth Configuration
     oauth_request_timeout: int = Field(default=30, description="OAuth request timeout in seconds")
     oauth_max_retries: int = Field(default=3, description="Maximum retries for OAuth token requests")
+    oauth_default_timeout: int = Field(default=3600, description="Default OAuth token timeout in seconds")
 
     # ===================================
     # Dynamic Client Registration (DCR) - Client Mode
@@ -626,7 +627,7 @@ class Settings(BaseSettings):
         return set(v)
 
     # Logging
-    log_level: Literal["DEBUG", "INFO", "WARNING", "ERROR", "CRITICAL"] = Field(default="INFO", env="LOG_LEVEL")
+    log_level: Literal["DEBUG", "INFO", "WARNING", "ERROR", "CRITICAL"] = Field(default="ERROR", env="LOG_LEVEL")
     log_format: Literal["json", "text"] = "json"  # json or text
     log_to_file: bool = False  # Enable file logging (default: stdout/stderr only)
     log_filemode: str = "a+"  # append or overwrite

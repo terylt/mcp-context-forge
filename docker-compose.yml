@@ -72,10 +72,17 @@ services:
       # - CERT_FILE=/app/certs/cert.pem
       # - KEY_FILE=/app/certs/key.pem
       # Uncomment to enable plugins
-      # - PLUGINS_ENABLED=true
+      - PLUGINS_ENABLED=true
       # Uncomment to enable catalog
-      # - MCPGATEWAY_CATALOG_ENABLED=true
-      # - MCPGATEWAY_CATALOG_FILE=/app/mcp-catalog.yml
+      - MCPGATEWAY_CATALOG_ENABLED=true
+      - MCPGATEWAY_CATALOG_FILE=/app/mcp-catalog.yml
+      # Authentication configuration
+      - AUTH_REQUIRED=true
+      - MCP_CLIENT_AUTH_ENABLED=true
+      - TRUST_PROXY_AUTH=false
+      # Logging configuration
+      - LOG_LEVEL=ERROR  # Default to ERROR for production performance
+      - DISABLE_ACCESS_LOG=true  # Disable uvicorn access logs for performance (massive I/O overhead)
 
       # Phoenix Observability Integration (uncomment when using Phoenix)
       # - PHOENIX_ENDPOINT=${PHOENIX_ENDPOINT:-http://phoenix:6006}
@@ -115,7 +122,7 @@ services:
 ###############################################################################
 
   postgres:              # Official image - easy defaults
-    image: postgres:17
+    image: postgres:18
     environment:
       - POSTGRES_USER=postgres
       - POSTGRES_PASSWORD=mysecretpassword
