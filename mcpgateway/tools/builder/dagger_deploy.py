@@ -38,6 +38,7 @@ from mcpgateway.tools.builder.common import (
     verify_compose,
     verify_kubernetes,
 )
+from mcpgateway.tools.builder.common import copy_env_template as copy_template
 from mcpgateway.tools.builder.pipeline import CICDModule
 
 console = Console()
@@ -350,9 +351,6 @@ class MCPStackDagger(CICDModule):
         if copy_env_templates:
             # Standard
             import subprocess
-
-            # Third-Party
-            from common import copy_env_template as copy_template
 
             clone_dir.mkdir(parents=True, exist_ok=True)
 

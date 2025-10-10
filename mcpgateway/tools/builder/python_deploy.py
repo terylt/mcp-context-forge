@@ -35,6 +35,7 @@ from mcpgateway.tools.builder.common import (
     verify_compose,
     verify_kubernetes,
 )
+from mcpgateway.tools.builder.common import copy_env_template as copy_template
 from mcpgateway.tools.builder.pipeline import CICDModule
 
 console = Console()
@@ -371,9 +372,6 @@ class MCPStackPython(CICDModule):
 
         # Copy .env.template if requested and exists
         if copy_env_templates:
-            # Third-Party
-            from common import copy_env_template as copy_template
-
             copy_template(component_name, build_dir, verbose=self.verbose)
 
         if self.verbose:

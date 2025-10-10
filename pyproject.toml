@@ -269,6 +269,9 @@ exclude = ["tests*"]
 #  - templates -> Jinja2 templates shipped at runtime
 [tool.setuptools.package-data]
 mcpgateway = [
+  "tools/builder/templates/*.yaml.j2",
+  "tools/builder/templates/compose/*.yaml.j2",
+  "tools/builder/templates/kubernetes/*.yaml.j2",
   "py.typed",
   "static/*.css",
   "static/*.js",

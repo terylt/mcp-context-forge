@@ -87,10 +87,9 @@ class DeployFactory:
 
                 return (MCPStackDagger(verbose), CICDTypes.DAGGER)
 
-            except ImportError as e:
+            except ImportError:
                 # Dagger dependencies not available, fall back to Python
-                console.print(f"[yellow]⚠ Dagger import failed: {e}[/yellow]")
-                console.print("[yellow]→ Falling back to plain Python implementation[/yellow]")
+                console.print("[yellow]⚠ Dagger not installed. Using plain python.[/yellow]")
 
         # Load plain Python implementation (fallback or explicitly requested)
         try:

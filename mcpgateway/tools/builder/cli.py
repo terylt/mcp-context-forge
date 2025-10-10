@@ -105,16 +105,11 @@ def build(
     no_cache: Annotated[bool, typer.Option("--no-cache", help="Disable build cache")] = False,
     copy_env_templates: Annotated[bool, typer.Option("--copy-env-templates", help="Copy .env.template files from plugin repos")] = True,
 ):
-    """Build plugin containers"""
+    """Build containers"""
     impl = ctx.obj["deployer"]
 
     try:
-        if IMPL_MODE == "dagger":
-            # Use asyncio for Dagger implementation
-            asyncio.run(impl.build(config_file, plugins_only=plugins_only, specific_plugins=list(plugin) if plugin else None, no_cache=no_cache, copy_env_templates=copy_env_templates))
-        else:
-            # Plain Python implementation is synchronous
-            impl.build(config_file, plugins_only=plugins_only, specific_plugins=list(plugin) if plugin else None, no_cache=no_cache, copy_env_templates=copy_env_templates)
+        asyncio.run(impl.build(config_file, plugins_only=plugins_only, specific_plugins=list(plugin) if plugin else None, no_cache=no_cache, copy_env_templates=copy_env_templates))
         console.print("[green]✓ Build complete[/green]")
 
         if copy_env_templates:
@@ -142,7 +137,7 @@ def certs(ctx: typer.Context, config_file: Annotated[Path, typer.Argument(help="
 def deploy(
     ctx: typer.Context,
     config_file: Annotated[Path, typer.Argument(help="The deployment configuration file")],
-    output_dir: Annotated[Path, typer.Option("--output-dir", "-o", help="The deployment configuration file")],
+    output_dir: Annotated[Optional[Path], typer.Option("--output-dir", "-o", help="The deployment configuration file")] = None,
     dry_run: Annotated[bool, typer.Option("--dry-run", help="Generate manifests without deploying")] = False,
     skip_build: Annotated[bool, typer.Option("--skip-build", help="Skip building containers")] = False,
     skip_certs: Annotated[bool, typer.Option("--skip-certs", help="Skip certificate generation")] = False,
