@@ -99,7 +99,7 @@ def generate_plugin_config(config: Dict[str, Any], output_dir: Path, verbose: bo
     if not template_dir.exists():
         raise FileNotFoundError(f"Template directory not found: {template_dir}")
 
-    env = Environment(loader=FileSystemLoader(str(template_dir)))
+    env = Environment(loader=FileSystemLoader(str(template_dir)), autoescape=True)  # nosec B701
     template = env.get_template("plugins-config.yaml.j2")
 
     # Prepare plugin data with computed URLs
@@ -173,7 +173,7 @@ def generate_kubernetes_manifests(config: Dict[str, Any], output_dir: Path, verb
     # Auto-detect and assign env files if not specified
     _auto_detect_env_files(config, output_dir, verbose=verbose)
 
-    env = Environment(loader=FileSystemLoader(str(template_dir)))
+    env = Environment(loader=FileSystemLoader(str(template_dir)), autoescape=True)  # nosec B701
 
     # Generate namespace
     namespace = config["deployment"].get("namespace", "mcp-gateway")
@@ -354,7 +354,7 @@ def generate_compose_manifests(config: Dict[str, Any], output_dir: Path, verbose
         "plugins_cert_base": os.path.join(certs_rel_base, "mcp/plugins"),
     }
 
-    env = Environment(loader=FileSystemLoader(str(template_dir)))
+    env = Environment(loader=FileSystemLoader(str(template_dir)), autoescape=True)  # nosec B701
 
     # Generate compose file
     compose_template = env.get_template("docker-compose.yaml.j2")
