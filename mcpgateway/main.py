@@ -701,8 +701,8 @@ async def plugin_violation_exception_handler(_request: Request, exc: PluginViola
         exc: The PluginViolationError exception containing constraint
              violation details.
 
-    Returns:
-        JSONResponse: A -32602 response which indicates invalid parameters.
+    Raises:
+        JSONRPCError: A -32602 JSON RPC error, which indicates invalid parameters.
 
     Examples:
         >>> from mcpgateway.plugins.framework import PluginViolationError
@@ -722,9 +722,10 @@ async def plugin_violation_exception_handler(_request: Request, exc: PluginViola
         -32602
     """
     policy_violation = exc.violation.model_dump() if exc.violation else {}
+    message = exc.violation.description if exc.violation else "A plugin violation occurred."
     policy_violation["message"] = exc.message
     status_code = exc.violation.mcp_error_code if exc.violation and exc.violation.mcp_error_code else -32602
-    return JSONResponse(status_code=status_code, content=policy_violation)
+    raise JSONRPCError(code=status_code, message=message, data=policy_violation)
 
 
 @app.exception_handler(PluginError)
@@ -740,8 +741,8 @@ async def plugin_exception_handler(_request: Request, exc: PluginError):
         exc: The PluginError exception containing constraint
              violation details.
 
-    Returns:
-        JSONResponse: A -32603 response with internal server error.
+    Raises:
+        JSONRPCError: A -32603 JSON RPC error internal server error.
 
     Examples:
         >>> from mcpgateway.plugins.framework import PluginViolationError
@@ -761,8 +762,9 @@ async def plugin_exception_handler(_request: Request, exc: PluginError):
         -32603
     """
     error_obj = exc.error.model_dump() if exc.error else {}
+    message = exc.error.message if exc.error else "A plugin error occurred."
     status_code = exc.error.mcp_error_code if exc.error else -32603
-    return JSONResponse(status_code=status_code, content=error_obj)
+    raise JSONRPCError(code=status_code, message=message, data=error_obj)
 
 
 class DocsAuthMiddleware(BaseHTTPMiddleware):
