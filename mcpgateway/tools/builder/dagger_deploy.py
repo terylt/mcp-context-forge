@@ -18,9 +18,18 @@ Features:
 from pathlib import Path
 from typing import Any, Dict, List, Optional
 
+try:
+    # Third-Party
+    import dagger
+    from dagger import dag
+
+    DAGGER_AVAILABLE = True
+except ImportError:
+    DAGGER_AVAILABLE = False
+    dagger = None  # type: ignore
+    dag = None  # type: ignore
+
 # Third-Party
-import dagger
-from dagger import dag
 from rich.console import Console
 from rich.progress import Progress, SpinnerColumn, TextColumn
 
@@ -52,7 +61,12 @@ class MCPStackDagger(CICDModule):
 
         Args:
             verbose: Enable verbose output
+
+        Raises:
+            ImportError: If dagger is not installed
         """
+        if not DAGGER_AVAILABLE:
+            raise ImportError("Dagger is not installed. Install with: pip install dagger-io\n" "Alternatively, use the plain Python deployer with --deployer=python")
         super().__init__(verbose)
 
     async def build(self, config_file: str, plugins_only: bool = False, specific_plugins: Optional[List[str]] = None, no_cache: bool = False, copy_env_templates: bool = False) -> None:

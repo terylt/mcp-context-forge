@@ -223,7 +223,7 @@ spec:
   type: {{ service_type | default('ClusterIP') }}
   ports:
   - name: http
-    port: {{ service_port | default(8000) }}
+    port: {{ port | default(8000) }}
     targetPort: http
     protocol: TCP
     {% if service_type == 'NodePort' and node_port is defined %}

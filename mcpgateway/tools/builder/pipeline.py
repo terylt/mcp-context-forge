@@ -18,11 +18,10 @@ Design Pattern:
 
 Example:
     >>> from mcpgateway.tools.builder.factory import DeployFactory
-    >>> deployer, mode = DeployFactory.create_deployer("dagger", verbose=True)
-    >>> deployer.validate("mcp-stack.yaml")
-    ✓ Configuration valid
-    >>> await deployer.build("mcp-stack.yaml")
-    ✓ Built OPAPluginFilter
+    >>> deployer, mode = DeployFactory.create_deployer("dagger", verbose=False)
+    >>> # Validate configuration (output varies by config)
+    >>> # deployer.validate("mcp-stack.yaml")
+    >>> # Async methods must be called with await (see method examples below)
 """
 
 # Standard
@@ -93,13 +92,13 @@ class CICDModule(ABC):
             FileNotFoundError: If config_file does not exist
 
         Example:
-            >>> deployer.validate("mcp-stack-local.yaml")
-            ✓ Configuration valid
+            # deployer.validate("mcp-stack-local.yaml")
+            # ✓ Configuration valid
 
-            >>> deployer.validate("invalid.yaml")
-            ValueError: Configuration validation failed:
-              • plugins -> 0 -> name: Field required
-              • gateway -> image: Field required
+            # deployer.validate("invalid.yaml")
+            # ValueError: Configuration validation failed:
+            #   • plugins -> 0 -> name: Field required
+            #   • gateway -> image: Field required
         """
         if self.verbose:
             self.console.print(f"[blue]Validating {config_file}...[/blue]")
@@ -144,9 +143,9 @@ class CICDModule(ABC):
             ValueError: If plugin configuration is invalid
 
         Example:
-            >>> await deployer.build("mcp-stack.yaml", plugins_only=True)
-            ✓ Built OPAPluginFilter
-            ✓ Built LLMGuardPlugin
+            # await deployer.build("mcp-stack.yaml", plugins_only=True)
+            # ✓ Built OPAPluginFilter
+            # ✓ Built LLMGuardPlugin
         """
         pass
 
@@ -169,8 +168,8 @@ class CICDModule(ABC):
             FileNotFoundError: If required tools (openssl) are not available
 
         Example:
-            >>> await deployer.generate_certificates("mcp-stack.yaml")
-            ✓ Certificates generated
+            # await deployer.generate_certificates("mcp-stack.yaml")
+            # ✓ Certificates generated
         """
         pass
 
@@ -195,15 +194,15 @@ class CICDModule(ABC):
             ValueError: If configuration is invalid
 
         Example:
-            >>> # Full deployment
-            >>> await deployer.deploy("mcp-stack.yaml")
-            ✓ Build complete
-            ✓ Certificates generated
-            ✓ Deployment complete
+            # Full deployment
+            # await deployer.deploy("mcp-stack.yaml")
+            # ✓ Build complete
+            # ✓ Certificates generated
+            # ✓ Deployment complete
 
-            >>> # Dry run (generate manifests only)
-            >>> await deployer.deploy("mcp-stack.yaml", dry_run=True)
-            ✓ Dry-run complete (no changes made)
+            # Dry run (generate manifests only)
+            # await deployer.deploy("mcp-stack.yaml", dry_run=True)
+            # ✓ Dry-run complete (no changes made)
         """
         pass
 
@@ -225,15 +224,15 @@ class CICDModule(ABC):
             TimeoutError: If wait=True and deployment doesn't become ready
 
         Example:
-            >>> # Quick health check
-            >>> await deployer.verify("mcp-stack.yaml")
-            NAME                    READY   STATUS    RESTARTS   AGE
-            mcpgateway-xxx          1/1     Running   0          2m
-            mcp-plugin-opa-xxx      1/1     Running   0          2m
+            # Quick health check
+            # await deployer.verify("mcp-stack.yaml")
+            # NAME                    READY   STATUS    RESTARTS   AGE
+            # mcpgateway-xxx          1/1     Running   0          2m
+            # mcp-plugin-opa-xxx      1/1     Running   0          2m
 
-            >>> # Wait for ready state
-            >>> await deployer.verify("mcp-stack.yaml", wait=True, timeout=600)
-            ✓ Deployment healthy
+            # Wait for ready state
+            # await deployer.verify("mcp-stack.yaml", wait=True, timeout=600)
+            # ✓ Deployment healthy
         """
         pass
 
@@ -254,8 +253,8 @@ class CICDModule(ABC):
             RuntimeError: If destruction fails
 
         Example:
-            >>> await deployer.destroy("mcp-stack.yaml")
-            ✓ Deployment destroyed
+            # await deployer.destroy("mcp-stack.yaml")
+            # ✓ Deployment destroyed
         """
         pass
 
@@ -283,12 +282,12 @@ class CICDModule(ABC):
             OSError: If output directory cannot be created
 
         Example:
-            >>> manifests_path = deployer.generate_manifests("mcp-stack.yaml")
-            >>> print(f"Manifests generated in: {manifests_path}")
-            Manifests generated in: /path/to/deploy/manifests
+            # manifests_path = deployer.generate_manifests("mcp-stack.yaml")
+            # print(f"Manifests generated in: {manifests_path}")
+            # Manifests generated in: /path/to/deploy/manifests
 
-            >>> # Custom output directory
-            >>> deployer.generate_manifests("mcp-stack.yaml", output_dir="./my-manifests")
-            ✓ Manifests generated: ./my-manifests
+            # Custom output directory
+            # deployer.generate_manifests("mcp-stack.yaml", output_dir="./my-manifests")
+            # ✓ Manifests generated: ./my-manifests
         """
         pass
