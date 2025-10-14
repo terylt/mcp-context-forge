@@ -467,19 +467,22 @@ These options apply to all commands:
 
 | Option | Description | Default |
 |--------|-------------|---------|
-| `--no-dagger` | Force plain Python mode (skip Dagger) | Auto-detect |
+| `--dagger` | Enable Dagger mode (auto-downloads CLI if needed) | `false` (uses plain Python) |
 | `--verbose`, `-v` | Verbose output | `false` |
 
 **Examples:**
 ```bash
-# Use plain Python instead of Dagger
-cforge gateway --no-dagger deploy deploy.yaml
+# Use plain Python mode (default)
+cforge gateway deploy deploy.yaml
+
+# Enable Dagger mode for optimized builds
+cforge gateway --dagger deploy deploy.yaml
 
 # Verbose mode
 cforge gateway -v build deploy.yaml
 
 # Combine options
-cforge gateway --no-dagger -v deploy deploy.yaml
+cforge gateway --dagger -v deploy deploy.yaml
 ```
 
 ---
@@ -1053,7 +1056,38 @@ Then redeploy to distribute new certificates.
 
 ## Deployment Modes
 
-### Dagger Mode (Recommended)
+### Plain Python Mode (Default)
+
+**What is it?**
+Pure Python implementation using standard tools (`docker`, `kubectl`, `git`, etc.). This is the **default mode** to avoid automatic downloads.
+
+**When to use:**
+- ✅ Default choice (no surprises)
+- ✅ Environments without Dagger support
+- ✅ Air-gapped networks
+- ✅ Simple deployments
+- ✅ Debugging/troubleshooting
+
+**Requirements:**
+- Python 3.11+
+- Docker CLI
+- `kubectl` (for Kubernetes deployments)
+- `git` (for building from source)
+
+**Usage:**
+```bash
+# Plain Python mode (default, no flag needed)
+cforge gateway deploy deploy.yaml
+```
+
+**Characteristics:**
+- Sequential builds
+- Standard caching
+- No external dependencies beyond Docker/kubectl
+
+---
+
+### Dagger Mode (Opt-in)
 
 **What is Dagger?**
 Dagger is a programmable CI/CD engine that runs pipelines in containers. It provides:
@@ -1066,20 +1100,20 @@ Dagger is a programmable CI/CD engine that runs pipelines in containers. It prov
 - ✅ Local development (fastest builds)
 - ✅ CI/CD pipelines (GitHub Actions, GitLab CI, etc.)
 - ✅ Team environments (consistent results)
+- ✅ When you want optimized build performance
 
 **Requirements:**
 - Docker or compatible container runtime
-- Dagger CLI (auto-installed with pip package)
-- Internet connection (for first run)
+- `dagger-io` Python package (optional, installed separately)
+- **Note**: First use will auto-download the Dagger CLI (~100MB)
 
 **Enable:**
 ```bash
-# Auto-detected by default
-cforge gateway deploy deploy.yaml
+# Install dagger-io package first
+pip install dagger-io
 
-# Or explicitly
-export USE_DAGGER=true
-cforge gateway deploy deploy.yaml
+# Use Dagger mode (opt-in with --dagger flag)
+cforge gateway --dagger deploy deploy.yaml
 ```
 
 **Performance benefits:**
@@ -1087,35 +1121,7 @@ cforge gateway deploy deploy.yaml
 - Parallel plugin builds
 - Efficient layer reuse
 
----
-
-### Plain Python Mode (Fallback)
-
-**What is it?**
-Pure Python implementation using standard tools (`docker`, `kubectl`, `git`, etc.)
-
-**When to use:**
-- ✅ Environments without Dagger support
-- ✅ Air-gapped networks
-- ✅ Simple deployments
-- ✅ Debugging/troubleshooting
-
-**Requirements:**
-- Python 3.11+
-- Docker CLI
-- `kubectl` (for Kubernetes deployments)
-- `git` (for building from source)
-
-**Enable:**
-```bash
-# Force plain Python mode
-cforge gateway --no-dagger deploy deploy.yaml
-```
-
-**Limitations:**
-- Sequential builds (slower)
-- Less sophisticated caching
-- No parallel execution
+**Important**: Using `--dagger` will automatically download the Dagger CLI binary on first use if not already present. Use plain Python mode if you want to avoid automatic downloads
 
 ---
 
@@ -1451,12 +1457,14 @@ A: Absolutely! See [CI/CD Integration](#cicd-integration) section above.
 
 A:
 ```bash
-# Force plain Python
-cforge gateway --no-dagger deploy deploy.yaml
-
-# Use Dagger (default if available)
+# Plain Python mode (default)
 cforge gateway deploy deploy.yaml
+
+# Dagger mode (opt-in, requires dagger-io package)
+cforge gateway --dagger deploy deploy.yaml
 ```
+
+**Note**: Dagger mode requires installing the `dagger-io` package and will auto-download the Dagger CLI (~100MB) on first use
 
 ---
 

@@ -6,17 +6,16 @@ Authors: Teryl Taylor
 
 MCP Stack Deployment Tool - Hybrid Dagger/Python Implementation
 
-This script can run in three modes:
-1. Local with Dagger (optimal performance)
-2. Local without Dagger (plain Python fallback)
-3. Inside builder container (all tools included)
+This script can run in two modes:
+1. Plain Python mode (default) - No external dependencies
+2. Dagger mode (opt-in) - Requires dagger-io package, auto-downloads CLI
 
 Usage:
-    # Local execution (auto-detects Dagger)
+    # Local execution (plain Python mode)
     cforge deploy deploy.yaml
 
-    # Force plain Python mode
-    cforge --no-dagger deploy deploy.yaml
+    # Use Dagger mode for optimization (requires dagger-io, auto-downloads CLI)
+    cforge --dagger deploy deploy.yaml
 
     # Inside container
     docker run -v $PWD:/workspace mcpgateway/mcp-builder:latest deploy deploy.yaml
@@ -61,25 +60,27 @@ IMPL_MODE = "plain"
 @app.callback()
 def cli(
     ctx: typer.Context,
-    no_dagger: Annotated[bool, typer.Option("--no-dagger", help="Force plain Python mode (skip Dagger)")] = False,
+    dagger: Annotated[bool, typer.Option("--dagger", help="Use Dagger mode (requires dagger-io package)")] = False,
     verbose: Annotated[bool, typer.Option("--verbose", "-v", help="Verbose output")] = False,
 ):
     """MCP Stack deployment tool
 
     Deploys MCP Gateway + external plugins from a single YAML configuration.
 
+    By default, uses plain Python mode. Use --dagger to enable Dagger optimization.
+
     Args:
         ctx: Typer context object
-        no_dagger: Force plain Python mode instead of Dagger
+        dagger: Enable Dagger mode (requires dagger-io package and auto-downloads CLI)
         verbose: Enable verbose output
     """
     ctx.ensure_object(dict)
     ctx.obj["verbose"] = verbose
-    ctx.obj["no_dagger"] = no_dagger
+    ctx.obj["dagger"] = dagger
 
     if ctx.invoked_subcommand != "version":
-        # Show execution mode
-        mode = "python" if no_dagger else "dagger"
+        # Show execution mode - default to Python, opt-in to Dagger
+        mode = "dagger" if dagger else "python"
         ctx.obj["deployer"], ctx.obj["mode"] = DeployFactory.create_deployer(mode, verbose)
         mode_color = "green" if ctx.obj["mode"] == "dagger" else "yellow"
         env_text = "container" if IN_CONTAINER else "local"

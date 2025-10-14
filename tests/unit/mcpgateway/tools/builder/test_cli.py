@@ -46,34 +46,53 @@ class TestCLICallback:
 
     @patch("mcpgateway.tools.builder.cli.DeployFactory.create_deployer")
     def test_cli_callback_default(self, mock_factory, runner):
-        """Test CLI callback with default options."""
+        """Test CLI callback with default options (Python mode by default)."""
         mock_deployer = MagicMock()
-        mock_factory.return_value = (mock_deployer, "dagger")
+        mock_factory.return_value = (mock_deployer, "python")
 
         result = runner.invoke(app, ["--help"])
         assert result.exit_code == 0
 
     @patch("mcpgateway.tools.builder.cli.DeployFactory.create_deployer")
     def test_cli_callback_verbose(self, mock_factory, runner):
-        """Test CLI callback with verbose flag."""
+        """Test CLI callback with verbose flag (Python mode by default)."""
         mock_deployer = MagicMock()
-        mock_factory.return_value = (mock_deployer, "dagger")
+        mock_factory.return_value = (mock_deployer, "python")
 
         result = runner.invoke(app, ["--verbose", "--help"])
         assert result.exit_code == 0
 
     @patch("mcpgateway.tools.builder.cli.DeployFactory.create_deployer")
-    def test_cli_callback_no_dagger(self, mock_factory, runner, tmp_path):
-        """Test CLI callback with --no-dagger flag."""
+    def test_cli_callback_with_dagger(self, mock_factory, runner, tmp_path):
+        """Test CLI callback with --dagger flag (opt-in)."""
         mock_deployer = MagicMock()
+        mock_deployer.validate = MagicMock()
+        mock_factory.return_value = (mock_deployer, "dagger")
+
+        config_file = tmp_path / "test-config.yaml"
+        config_file.write_text("deployment:\n  type: compose\n")
+
+        # Use validate command which invokes the callback
+        result = runner.invoke(app, ["--dagger", "validate", str(config_file)])
+        assert result.exit_code == 0
+        # Verify dagger mode was requested
+        mock_factory.assert_called_once_with("dagger", False)
+
+    @patch("mcpgateway.tools.builder.cli.DeployFactory.create_deployer")
+    def test_cli_callback_default_python(self, mock_factory, runner, tmp_path):
+        """Test CLI callback defaults to Python mode."""
+        mock_deployer = MagicMock()
+        mock_deployer.validate = MagicMock()
         mock_factory.return_value = (mock_deployer, "python")
 
         config_file = tmp_path / "test-config.yaml"
         config_file.write_text("deployment:\n  type: compose\n")
 
-        # Use a command that actually invokes the callback (not --help)
-        result = runner.invoke(app, ["--no-dagger", "version"])
+        # Use validate command without --dagger flag to test default
+        result = runner.invoke(app, ["validate", str(config_file)])
         assert result.exit_code == 0
+        # Verify python mode was requested (default)
+        mock_factory.assert_called_once_with("python", False)
 
 
 class TestValidateCommand:

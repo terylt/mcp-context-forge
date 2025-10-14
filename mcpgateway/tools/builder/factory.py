@@ -81,7 +81,11 @@ class DeployFactory:
         if deployer == "dagger":
             try:
                 # First-Party
-                from mcpgateway.tools.builder.dagger_deploy import MCPStackDagger
+                from mcpgateway.tools.builder.dagger_deploy import DAGGER_AVAILABLE, MCPStackDagger
+
+                # Check if dagger is actually available (not just the module)
+                if not DAGGER_AVAILABLE:
+                    raise ImportError("Dagger SDK not installed")
 
                 if verbose:
                     console.print("[green]✓ Dagger module loaded[/green]")
