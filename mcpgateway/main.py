@@ -717,9 +717,10 @@ async def plugin_violation_exception_handler(_request: Request, exc: PluginViola
         ...     code="PROHIBITED_CONTENT",
         ...     details={"field": "message", "value": "test"}
         ... ))
-        >>> result = asyncio.run(plugin_violation_exception_handler(None, mock_error))
-        >>> result.status_code
-        -32602
+        >>> asyncio.run(plugin_violation_exception_handler(None, mock_error))
+        Traceback (most recent call last):
+        ...
+        mcpgateway.validation.jsonrpc.JSONRPCError: The input contains prohibited content
     """
     policy_violation = exc.violation.model_dump() if exc.violation else {}
     message = exc.violation.description if exc.violation else "A plugin violation occurred."
@@ -757,9 +758,10 @@ async def plugin_exception_handler(_request: Request, exc: PluginError):
         ...     plugin_name="abc",
         ...     details={"field": "message", "value": "test"}
         ... ))
-        >>> result = asyncio.run(plugin_exception_handler(None, mock_error))
-        >>> result.status_code
-        -32603
+        >>> asyncio.run(plugin_exception_handler(None, mock_error))
+        Traceback (most recent call last):
+        ...
+        mcpgateway.validation.jsonrpc.JSONRPCError: plugin error
     """
     error_obj = exc.error.model_dump() if exc.error else {}
     message = exc.error.message if exc.error else "A plugin error occurred."
