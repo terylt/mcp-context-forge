@@ -117,7 +117,7 @@ Generate the gateway client certificate used by the MCP Gateway to authenticate 
 
 **What it does**:
 - Depends on `certs-mcp-ca` (creates CA if needed)
-- Creates `certs/mcp/gateway/client.key` (2048-bit RSA private key)
+- Creates `certs/mcp/gateway/client.key` (4096-bit RSA private key)
 - Creates `certs/mcp/gateway/client.crt` (client certificate signed by CA)
 - Copies `ca.crt` to `certs/mcp/gateway/`
 
@@ -191,7 +191,7 @@ make certs-mcp-check
 All certificates generated include:
 - **Algorithm**: RSA with SHA-256
 - **CA Key Size**: 4096 bits
-- **Client/Server Key Size**: 2048 bits
+- **Client/Server Key Size**: 4096 bits
 - **Default Validity**: 825 days
 - **Subject Alternative Names** (plugins): DNS entries for plugin name and localhost
 

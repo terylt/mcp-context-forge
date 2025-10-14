@@ -262,7 +262,7 @@ certs-mcp-gateway: certs-mcp-ca  ## Generate gateway client certificate
 	else \
 		echo "🔐  Generating gateway client certificate ($(MCP_CERT_DAYS) days)..."; \
 		mkdir -p certs/mcp/gateway; \
-		openssl genrsa -out certs/mcp/gateway/client.key 2048; \
+		openssl genrsa -out certs/mcp/gateway/client.key 4096; \
 		openssl req -new -key certs/mcp/gateway/client.key \
 			-out certs/mcp/gateway/client.csr \
 			-subj "/CN=mcp-gateway-client/O=MCPGateway/OU=Gateway"; \
@@ -290,7 +290,7 @@ certs-mcp-plugin: certs-mcp-ca   ## Generate plugin server certificate (PLUGIN_N
 	else \
 		echo "🔐  Generating server certificate for plugin '$(PLUGIN_NAME)' ($(MCP_CERT_DAYS) days)..."; \
 		mkdir -p certs/mcp/plugins/$(PLUGIN_NAME); \
-		openssl genrsa -out certs/mcp/plugins/$(PLUGIN_NAME)/server.key 2048; \
+		openssl genrsa -out certs/mcp/plugins/$(PLUGIN_NAME)/server.key 4096; \
 		openssl req -new -key certs/mcp/plugins/$(PLUGIN_NAME)/server.key \
 			-out certs/mcp/plugins/$(PLUGIN_NAME)/server.csr \
 			-subj "/CN=mcp-plugin-$(PLUGIN_NAME)/O=MCPGateway/OU=Plugins"; \
