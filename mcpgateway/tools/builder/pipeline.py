@@ -19,6 +19,7 @@ Design Pattern:
 Example:
     >>> from mcpgateway.tools.builder.factory import DeployFactory
     >>> deployer, mode = DeployFactory.create_deployer("dagger", verbose=False)
+    ⚠ Dagger not installed. Using plain python.
     >>> # Validate configuration (output varies by config)
     >>> # deployer.validate("mcp-stack.yaml")
     >>> # Async methods must be called with await (see method examples below)

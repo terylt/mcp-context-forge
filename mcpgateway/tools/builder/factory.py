@@ -13,6 +13,7 @@ unavailable, ensuring the deployment system works in various environments.
 
 Example:
     >>> deployer, mode = DeployFactory.create_deployer("dagger", verbose=False)
+    ⚠ Dagger not installed. Using plain python.
     >>> # Validate configuration (output varies by config)
     >>> # deployer.validate("mcp-stack.yaml")
 """
@@ -71,11 +72,12 @@ class DeployFactory:
         Example:
             >>> # Try to load Dagger, fall back to Python if unavailable
             >>> deployer, mode = DeployFactory.create_deployer("dagger", verbose=False)
+            ⚠ Dagger not installed. Using plain python.
             >>> if mode == CICDTypes.DAGGER:
             ...     print("Using optimized Dagger implementation")
             ... else:
             ...     print("Using fallback Python implementation")
-            Using optimized Dagger implementation
+            Using fallback Python implementation
         """
         # Attempt to load Dagger implementation first if requested
         if deployer == "dagger":
