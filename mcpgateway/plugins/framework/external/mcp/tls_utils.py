@@ -58,14 +58,14 @@ def create_ssl_context(tls_config: MCPClientTLSConfig, plugin_name: str) -> ssl.
         PluginError: If SSL context configuration fails
 
     Example:
-        >>> tls_config = MCPClientTLSConfig(
+        >>> tls_config = MCPClientTLSConfig(  # doctest: +SKIP
         ...     ca_bundle="/path/to/ca.crt",
         ...     certfile="/path/to/client.crt",
         ...     keyfile="/path/to/client.key",
         ...     verify=True,
         ...     check_hostname=True
         ... )
-        >>> ssl_context = create_ssl_context(tls_config, "MyPlugin")
+        >>> ssl_context = create_ssl_context(tls_config, "MyPlugin")  # doctest: +SKIP
         >>> # Use ssl_context with httpx or other SSL connections
     """
     try:
