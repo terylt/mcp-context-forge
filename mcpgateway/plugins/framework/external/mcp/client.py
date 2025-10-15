@@ -14,7 +14,6 @@ from contextlib import AsyncExitStack
 import json
 import logging
 import os
-import ssl
 from typing import Any, Optional, Type, TypeVar
 
 # Third-Party
