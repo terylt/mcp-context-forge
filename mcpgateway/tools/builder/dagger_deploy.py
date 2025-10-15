@@ -149,17 +149,34 @@ class MCPStackDagger(CICDModule):
     async def generate_certificates(self, config_file: str) -> None:
         """Generate mTLS certificates for plugins.
 
+        Supports two modes:
+        1. Local generation (use_cert_manager=false): Uses Dagger to generate certificates locally
+        2. cert-manager (use_cert_manager=true): Skips local generation, cert-manager will create certificates
+
         Args:
             config_file: Path to mcp-stack.yaml
 
         Raises:
-            dagger.ExecError: If certificate generation command fails
-            dagger.QueryError: If Dagger query fails
+            dagger.ExecError: If certificate generation command fails (when using local generation)
+            dagger.QueryError: If Dagger query fails (when using local generation)
         """
         config = load_config(config_file)
 
+        # Check if using cert-manager
+        cert_config = config.get("certificates", {})
+        use_cert_manager = cert_config.get("use_cert_manager", False)
+        validity_days = cert_config.get("validity_days", 825)
+
+        if use_cert_manager:
+            # Skip local generation - cert-manager will handle certificate creation
+            if self.verbose:
+                self.console.print("[blue]Using cert-manager for certificate management[/blue]")
+                self.console.print("[dim]Skipping local certificate generation (cert-manager will create certificates)[/dim]")
+            return
+
+        # Local certificate generation (backward compatibility)
         if self.verbose:
-            self.console.print("[blue]Generating mTLS certificates...[/blue]")
+            self.console.print("[blue]Generating mTLS certificates locally...[/blue]")
 
         # Use Dagger container to run certificate generation
         async with dagger.connection(dagger.Config(workdir=str(Path.cwd()))):
@@ -179,16 +196,16 @@ class MCPStackDagger(CICDModule):
                 )
 
                 # Generate CA
-                container = container.with_exec(["sh", "-c", "make certs-mcp-ca MCP_CERT_DAYS=825"])
+                container = container.with_exec(["sh", "-c", f"make certs-mcp-ca MCP_CERT_DAYS={validity_days}"])
 
                 # Generate gateway cert
-                container = container.with_exec(["sh", "-c", "make certs-mcp-gateway MCP_CERT_DAYS=825"])
+                container = container.with_exec(["sh", "-c", f"make certs-mcp-gateway MCP_CERT_DAYS={validity_days}"])
 
                 # Generate plugin certificates
                 plugins = config.get("plugins", [])
                 for plugin in plugins:
                     plugin_name = plugin["name"]
-                    container = container.with_exec(["sh", "-c", f"make certs-mcp-plugin PLUGIN_NAME={plugin_name} MCP_CERT_DAYS=825"])
+                    container = container.with_exec(["sh", "-c", f"make certs-mcp-plugin PLUGIN_NAME={plugin_name} MCP_CERT_DAYS={validity_days}"])
 
                 # Export certificates back to host
                 output = container.directory("/workspace/certs")
@@ -207,7 +224,7 @@ class MCPStackDagger(CICDModule):
                 raise
 
         if self.verbose:
-            self.console.print("[green]✓ Certificates generated[/green]")
+            self.console.print("[green]✓ Certificates generated locally[/green]")
 
     async def deploy(self, config_file: str, dry_run: bool = False, skip_build: bool = False, skip_certs: bool = False, output_dir: Optional[str] = None) -> None:
         """Deploy MCP stack.

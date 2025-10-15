@@ -674,20 +674,71 @@ mTLS certificate generation settings:
 
 ```yaml
 certificates:
+  # Local certificate generation (default)
   validity_days: 825                     # Certificate validity period
   auto_generate: true                    # Auto-generate if missing
   ca_path: ./certs/mcp/ca               # CA certificate directory
   gateway_path: ./certs/mcp/gateway     # Gateway cert directory
   plugins_path: ./certs/mcp/plugins     # Plugins cert directory
+
+  # OR use cert-manager (Kubernetes only)
+  use_cert_manager: true                 # Use cert-manager for certificates
+  cert_manager_issuer: mcp-ca-issuer    # Issuer/ClusterIssuer name
+  cert_manager_kind: Issuer              # Issuer or ClusterIssuer
 ```
 
 | Field | Type | Required | Description | Default |
 |-------|------|----------|-------------|---------|
 | `validity_days` | integer | ❌ | Certificate validity in days | `825` |
-| `auto_generate` | boolean | ❌ | Auto-generate certificates if missing | `true` |
-| `ca_path` | string | ❌ | CA certificate directory | `./certs/mcp/ca` |
-| `gateway_path` | string | ❌ | Gateway client cert directory | `./certs/mcp/gateway` |
-| `plugins_path` | string | ❌ | Plugin server certs base directory | `./certs/mcp/plugins` |
+| `auto_generate` | boolean | ❌ | Auto-generate certificates locally if missing | `true` |
+| `ca_path` | string | ❌ | CA certificate directory (local mode) | `./certs/mcp/ca` |
+| `gateway_path` | string | ❌ | Gateway client cert directory (local mode) | `./certs/mcp/gateway` |
+| `plugins_path` | string | ❌ | Plugin server certs base directory (local mode) | `./certs/mcp/plugins` |
+| `use_cert_manager` | boolean | ❌ | Use cert-manager for certificate management (Kubernetes only) | `false` |
+| `cert_manager_issuer` | string | ❌ | cert-manager Issuer/ClusterIssuer name | `mcp-ca-issuer` |
+| `cert_manager_kind` | string | ❌ | cert-manager issuer kind: `Issuer` or `ClusterIssuer` | `Issuer` |
+
+#### cert-manager Integration (Kubernetes Only)
+
+[cert-manager](https://cert-manager.io) is a Kubernetes-native certificate management controller that automates certificate issuance and renewal.
+
+**Benefits:**
+- ✅ **Automatic Renewal**: Certificates renewed before expiry (default: at 2/3 of lifetime)
+- ✅ **Native Kubernetes**: Certificates defined as Kubernetes Custom Resources
+- ✅ **Simplified Operations**: No manual certificate generation or rotation
+- ✅ **GitOps Friendly**: Certificate definitions version-controlled
+
+**Prerequisites:**
+1. Install cert-manager in your cluster:
+   ```bash
+   kubectl apply -f https://github.com/cert-manager/cert-manager/releases/download/v1.13.0/cert-manager.yaml
+   ```
+
+2. Create namespace and CA Issuer (one-time setup):
+   ```bash
+   # Create namespace first
+   kubectl create namespace mcp-gateway-test
+
+   # Apply CA Issuer
+   kubectl apply -f examples/deployment-configs/cert-manager-issuer-example.yaml
+   ```
+
+**Configuration:**
+```yaml
+certificates:
+  use_cert_manager: true
+  cert_manager_issuer: mcp-ca-issuer
+  cert_manager_kind: Issuer
+  validity_days: 825
+```
+
+When `use_cert_manager: true`:
+- Local certificate generation is skipped
+- cert-manager Certificate CRDs are generated for gateway and plugins
+- cert-manager automatically creates Kubernetes TLS secrets
+- Certificates are auto-renewed before expiry
+
+**Important**: The cert-manager Issuer and CA certificate are long-lived infrastructure. When you destroy your MCP deployment, the Issuer remains (by design) for reuse across deployments.
 
 ---
 
@@ -944,6 +995,114 @@ cforge gateway build deploy-k8s-build.yaml
 # Deploy to Kubernetes
 cforge gateway deploy deploy-k8s-build.yaml --skip-build
 ```
+
+---
+
+### Example 5: Kubernetes with cert-manager
+
+**File:** `examples/deployment-configs/deploy-k8s-cert-manager.yaml`
+
+Production deployment using cert-manager for automated certificate management:
+
+```yaml
+deployment:
+  type: kubernetes
+  namespace: mcp-gateway-test
+
+gateway:
+  image: mcpgateway/mcpgateway:latest
+  image_pull_policy: IfNotPresent
+
+  port: 4444
+  service_type: ClusterIP
+  service_port: 4444
+
+  replicas: 1
+  memory_request: 256Mi
+  memory_limit: 512Mi
+  cpu_request: 100m
+  cpu_limit: 500m
+
+  env_vars:
+    LOG_LEVEL: DEBUG
+    MCPGATEWAY_UI_ENABLED: "true"
+
+  mtls_enabled: true
+  mtls_verify: true
+  mtls_check_hostname: false
+
+plugins:
+  - name: OPAPluginFilter
+    image: mcpgateway-opapluginfilter:latest
+    image_pull_policy: IfNotPresent
+
+    port: 8000
+    service_type: ClusterIP
+
+    replicas: 1
+    memory_request: 128Mi
+    memory_limit: 256Mi
+
+    mtls_enabled: true
+
+    plugin_overrides:
+      priority: 10
+      mode: "enforce"
+
+# cert-manager configuration
+certificates:
+  # Use cert-manager for automatic certificate management
+  use_cert_manager: true
+
+  # Reference the Issuer created in prerequisites
+  cert_manager_issuer: mcp-ca-issuer
+  cert_manager_kind: Issuer
+
+  # Certificate validity (auto-renewed at 2/3 of lifetime)
+  validity_days: 825
+
+  # Local paths not used when use_cert_manager=true
+  auto_generate: false
+```
+
+**Prerequisites:**
+
+1. Install cert-manager:
+   ```bash
+   kubectl apply -f https://github.com/cert-manager/cert-manager/releases/download/v1.13.0/cert-manager.yaml
+   ```
+
+2. Create namespace and CA Issuer (one-time setup):
+   ```bash
+   # Create namespace first
+   kubectl create namespace mcp-gateway-test
+
+   # Apply CA Issuer
+   kubectl apply -f examples/deployment-configs/cert-manager-issuer-example.yaml
+   ```
+
+**Deploy:**
+```bash
+# Deploy (no need to generate certificates manually)
+cforge gateway deploy examples/deployment-configs/deploy-k8s-cert-manager.yaml
+
+# Verify cert-manager created certificates
+kubectl get certificates -n mcp-gateway-test
+kubectl get secrets -n mcp-gateway-test | grep mcp-
+```
+
+**How it works:**
+1. `cforge gateway deploy` skips local certificate generation
+2. Generates cert-manager Certificate CRDs for gateway and plugins
+3. Applies Certificate CRDs to Kubernetes
+4. cert-manager automatically creates TLS secrets
+5. Pods use the secrets created by cert-manager
+6. cert-manager auto-renews certificates before expiry
+
+**Certificate lifecycle:**
+- **Creation**: cert-manager generates certificates when CRDs are applied
+- **Renewal**: Automatic renewal at 2/3 of lifetime (550 days for 825-day cert)
+- **Deletion**: Certificates deleted when stack is destroyed, Issuer remains
 
 ---
 

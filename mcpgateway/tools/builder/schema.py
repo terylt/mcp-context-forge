@@ -115,10 +115,39 @@ class PluginConfig(BuildableConfig):
 
 
 class CertificatesConfig(BaseModel):
-    """Certificate configuration"""
+    """Certificate configuration.
+
+    Supports two modes:
+    1. Local certificate generation (use_cert_manager=false, default):
+       - Certificates generated locally using OpenSSL (via Makefile)
+       - Deployed to Kubernetes as secrets via kubectl
+       - Manual rotation required before expiry
+
+    2. cert-manager integration (use_cert_manager=true, Kubernetes only):
+       - Certificates managed by cert-manager controller
+       - Automatic renewal before expiry (default: at 2/3 of lifetime)
+       - Native Kubernetes Certificate resources
+       - Requires cert-manager to be installed in cluster
+
+    Attributes:
+        validity_days: Certificate validity period in days (default: 825 ≈ 2.25 years)
+        auto_generate: Auto-generate certificates locally (default: True)
+        use_cert_manager: Use cert-manager for certificate management (default: False, Kubernetes only)
+        cert_manager_issuer: Name of cert-manager Issuer/ClusterIssuer (default: "mcp-ca-issuer")
+        cert_manager_kind: Type of issuer - Issuer or ClusterIssuer (default: "Issuer")
+        ca_path: Path to CA certificates for local generation (default: "./certs/mcp/ca")
+        gateway_path: Path to gateway certificates for local generation (default: "./certs/mcp/gateway")
+        plugins_path: Path to plugin certificates for local generation (default: "./certs/mcp/plugins")
+    """
 
     validity_days: Optional[int] = Field(825, description="Certificate validity in days")
-    auto_generate: Optional[bool] = Field(True, description="Auto-generate certificates")
+    auto_generate: Optional[bool] = Field(True, description="Auto-generate certificates locally")
+
+    # cert-manager integration (Kubernetes only)
+    use_cert_manager: Optional[bool] = Field(False, description="Use cert-manager for certificate management (Kubernetes only)")
+    cert_manager_issuer: Optional[str] = Field("mcp-ca-issuer", description="cert-manager Issuer/ClusterIssuer name")
+    cert_manager_kind: Optional[Literal["Issuer", "ClusterIssuer"]] = Field("Issuer", description="cert-manager issuer kind")
+
     ca_path: Optional[str] = Field("./certs/mcp/ca", description="CA certificate path")
     gateway_path: Optional[str] = Field("./certs/mcp/gateway", description="Gateway cert path")
     plugins_path: Optional[str] = Field("./certs/mcp/plugins", description="Plugins cert path")

@@ -178,58 +178,94 @@ def generate_kubernetes_manifests(config: Dict[str, Any], output_dir: Path, verb
     # Generate namespace
     namespace = config["deployment"].get("namespace", "mcp-gateway")
 
-    # Generate mTLS certificate secrets if enabled
+    # Generate mTLS certificate resources if enabled
     gateway_mtls = config.get("gateway", {}).get("mtls_enabled", True)
+    cert_config = config.get("certificates", {})
+    use_cert_manager = cert_config.get("use_cert_manager", False)
+
     if gateway_mtls:
+        if use_cert_manager:
+            # Generate cert-manager Certificate CRDs
+            cert_manager_template = env.get_template("cert-manager-certificates.yaml.j2")
 
-        cert_secrets_template = env.get_template("cert-secrets.yaml.j2")
+            # Calculate duration and renewBefore in hours
+            validity_days = cert_config.get("validity_days", 825)
+            duration_hours = validity_days * 24
+            # Renew at 2/3 of lifetime (cert-manager default)
+            renew_before_hours = int(duration_hours * 2 / 3)
 
-        # Prepare certificate data
-        cert_data = {"namespace": namespace, "gateway_name": "mcpgateway", "plugins": []}
+            # Prepare certificate data
+            cert_data = {
+                "namespace": namespace,
+                "gateway_name": "mcpgateway",
+                "issuer_name": cert_config.get("cert_manager_issuer", "mcp-ca-issuer"),
+                "issuer_kind": cert_config.get("cert_manager_kind", "Issuer"),
+                "duration": duration_hours,
+                "renew_before": renew_before_hours,
+                "plugins": [],
+            }
 
-        # Read and encode CA certificate
-        ca_cert_path = Path("certs/mcp/ca/ca.crt")
-        if ca_cert_path.exists():
-            cert_data["ca_cert_b64"] = base64.b64encode(ca_cert_path.read_bytes()).decode("utf-8")
+            # Add plugins with mTLS enabled
+            for plugin in config.get("plugins", []):
+                if plugin.get("mtls_enabled", True):
+                    cert_data["plugins"].append({"name": f"mcp-plugin-{plugin['name'].lower()}"})
+
+            # Generate cert-manager certificates manifest
+            cert_manager_manifest = cert_manager_template.render(**cert_data)
+            (output_dir / "cert-manager-certificates.yaml").write_text(cert_manager_manifest)
+            if verbose:
+                print("  ✓ cert-manager Certificate CRDs manifest generated")
+
         else:
-            if verbose:
-                print(f"[yellow]Warning: CA certificate not found at {ca_cert_path}[/yellow]")
+            # Generate traditional certificate secrets (backward compatibility)
+            cert_secrets_template = env.get_template("cert-secrets.yaml.j2")
 
-        # Read and encode gateway certificates
-        gateway_cert_path = Path("certs/mcp/gateway/client.crt")
-        gateway_key_path = Path("certs/mcp/gateway/client.key")
-        if gateway_cert_path.exists() and gateway_key_path.exists():
-            cert_data["gateway_cert_b64"] = base64.b64encode(gateway_cert_path.read_bytes()).decode("utf-8")
-            cert_data["gateway_key_b64"] = base64.b64encode(gateway_key_path.read_bytes()).decode("utf-8")
-        else:
-            if verbose:
-                print("[yellow]Warning: Gateway certificates not found[/yellow]")
+            # Prepare certificate data
+            cert_data = {"namespace": namespace, "gateway_name": "mcpgateway", "plugins": []}
 
-        # Read and encode plugin certificates
-        for plugin in config.get("plugins", []):
-            if plugin.get("mtls_enabled", True):
-                plugin_name = plugin["name"]
-                plugin_cert_path = Path(f"certs/mcp/plugins/{plugin_name}/server.crt")
-                plugin_key_path = Path(f"certs/mcp/plugins/{plugin_name}/server.key")
+            # Read and encode CA certificate
+            ca_cert_path = Path("certs/mcp/ca/ca.crt")
+            if ca_cert_path.exists():
+                cert_data["ca_cert_b64"] = base64.b64encode(ca_cert_path.read_bytes()).decode("utf-8")
+            else:
+                if verbose:
+                    print(f"[yellow]Warning: CA certificate not found at {ca_cert_path}[/yellow]")
 
-                if plugin_cert_path.exists() and plugin_key_path.exists():
-                    cert_data["plugins"].append(
-                        {
-                            "name": f"mcp-plugin-{plugin_name.lower()}",
-                            "cert_b64": base64.b64encode(plugin_cert_path.read_bytes()).decode("utf-8"),
-                            "key_b64": base64.b64encode(plugin_key_path.read_bytes()).decode("utf-8"),
-                        }
-                    )
-                else:
-                    if verbose:
-                        print(f"[yellow]Warning: Plugin {plugin_name} certificates not found[/yellow]")
+            # Read and encode gateway certificates
+            gateway_cert_path = Path("certs/mcp/gateway/client.crt")
+            gateway_key_path = Path("certs/mcp/gateway/client.key")
+            if gateway_cert_path.exists() and gateway_key_path.exists():
+                cert_data["gateway_cert_b64"] = base64.b64encode(gateway_cert_path.read_bytes()).decode("utf-8")
+                cert_data["gateway_key_b64"] = base64.b64encode(gateway_key_path.read_bytes()).decode("utf-8")
+            else:
+                if verbose:
+                    print("[yellow]Warning: Gateway certificates not found[/yellow]")
 
-        # Generate certificate secrets manifest
-        if "ca_cert_b64" in cert_data:
-            cert_secrets_manifest = cert_secrets_template.render(**cert_data)
-            (output_dir / "cert-secrets.yaml").write_text(cert_secrets_manifest)
-            if verbose:
-                print("  ✓ mTLS certificate secrets manifest generated")
+            # Read and encode plugin certificates
+            for plugin in config.get("plugins", []):
+                if plugin.get("mtls_enabled", True):
+                    plugin_name = plugin["name"]
+                    plugin_cert_path = Path(f"certs/mcp/plugins/{plugin_name}/server.crt")
+                    plugin_key_path = Path(f"certs/mcp/plugins/{plugin_name}/server.key")
+
+                    if plugin_cert_path.exists() and plugin_key_path.exists():
+                        cert_data["plugins"].append(
+                            {
+                                "name": f"mcp-plugin-{plugin_name.lower()}",
+                                "cert_b64": base64.b64encode(plugin_cert_path.read_bytes()).decode("utf-8"),
+                                "key_b64": base64.b64encode(plugin_key_path.read_bytes()).decode("utf-8"),
+                            }
+                        )
+                    else:
+                        if verbose:
+                            print(f"[yellow]Warning: Plugin {plugin_name} certificates not found[/yellow]")
+
+            # Generate certificate secrets manifest
+            if "ca_cert_b64" in cert_data:
+                cert_secrets_manifest = cert_secrets_template.render(**cert_data)
+                (output_dir / "cert-secrets.yaml").write_text(cert_secrets_manifest)
+                if verbose:
+                    print("  ✓ mTLS certificate secrets manifest generated")
 
     # Generate infrastructure manifests (postgres, redis) if enabled
     infrastructure = config.get("infrastructure", {})

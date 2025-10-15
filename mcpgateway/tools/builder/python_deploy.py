@@ -134,35 +134,52 @@ class MCPStackPython(CICDModule):
     async def generate_certificates(self, config_file: str) -> None:
         """Generate mTLS certificates for plugins.
 
+        Supports two modes:
+        1. Local generation (use_cert_manager=false): Uses Makefile to generate certificates locally
+        2. cert-manager (use_cert_manager=true): Skips local generation, cert-manager will create certificates
+
         Args:
             config_file: Path to mcp-stack.yaml
 
         Raises:
-            RuntimeError: If make command not found
+            RuntimeError: If make command not found (when using local generation)
         """
         config = load_config(config_file)
 
+        # Check if using cert-manager
+        cert_config = config.get("certificates", {})
+        use_cert_manager = cert_config.get("use_cert_manager", False)
+        validity_days = cert_config.get("validity_days", 825)
+
+        if use_cert_manager:
+            # Skip local generation - cert-manager will handle certificate creation
+            if self.verbose:
+                self.console.print("[blue]Using cert-manager for certificate management[/blue]")
+                self.console.print("[dim]Skipping local certificate generation (cert-manager will create certificates)[/dim]")
+            return
+
+        # Local certificate generation (backward compatibility)
         if self.verbose:
-            self.console.print("[blue]Generating mTLS certificates...[/blue]")
+            self.console.print("[blue]Generating mTLS certificates locally...[/blue]")
 
         # Check if make is available
         if not shutil.which("make"):
             raise RuntimeError("'make' command not found. Cannot generate certificates.")
 
         # Generate CA
-        self._run_command(["make", "certs-mcp-ca", "MCP_CERT_DAYS=825"])
+        self._run_command(["make", "certs-mcp-ca", f"MCP_CERT_DAYS={validity_days}"])
 
         # Generate gateway cert
-        self._run_command(["make", "certs-mcp-gateway", "MCP_CERT_DAYS=825"])
+        self._run_command(["make", "certs-mcp-gateway", f"MCP_CERT_DAYS={validity_days}"])
 
         # Generate plugin certificates
         plugins = config.get("plugins", [])
         for plugin in plugins:
             plugin_name = plugin["name"]
-            self._run_command(["make", "certs-mcp-plugin", f"PLUGIN_NAME={plugin_name}", "MCP_CERT_DAYS=825"])
+            self._run_command(["make", "certs-mcp-plugin", f"PLUGIN_NAME={plugin_name}", f"MCP_CERT_DAYS={validity_days}"])
 
         if self.verbose:
-            self.console.print("[green]✓ Certificates generated[/green]")
+            self.console.print("[green]✓ Certificates generated locally[/green]")
 
     async def deploy(self, config_file: str, dry_run: bool = False, skip_build: bool = False, skip_certs: bool = False, output_dir: Optional[str] = None) -> None:
         """Deploy MCP stack.
