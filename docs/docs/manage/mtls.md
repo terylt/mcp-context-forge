@@ -638,115 +638,100 @@ Create a `ServiceAccount`, `Role`, and `RoleBinding` that grant `get` access to 
 
 ## mTLS for External MCP Plugins
 
-External plugins that use the `STREAMABLEHTTP` transport now support mutual TLS directly from the gateway. This is optional—if you skip the configuration below, the gateway continues to call plugins exactly as before. Enabling mTLS lets you restrict remote plugin servers so they only accept connections from gateways presenting a trusted client certificate.
+External plugins that use the `STREAMABLEHTTP` transport support mutual TLS authentication between the gateway and plugin servers. This is optional—if not configured, the gateway continues to call plugins over standard HTTP/HTTPS. Enabling mTLS lets you restrict remote plugin servers to only accept connections from gateways presenting a trusted client certificate.
 
-### 1. Issue Certificates for the Remote Plugin
+### Setup Options
 
-Reuse the same CA you generated earlier or provision a dedicated one. Create a **server** certificate for the remote plugin endpoint and a **client** certificate for the MCP Gateway:
+Choose the approach that best fits your deployment:
 
-```bash
-# Server cert for the remote plugin (served by your reverse proxy/mcp server)
-openssl req -newkey rsa:4096 -nodes \
-  -keyout certs/plugins/remote.key -out certs/plugins/remote.csr \
-  -subj "/CN=plugins.internal.example.com"
+#### **Automated Deployment (Recommended for Kubernetes)**
 
-openssl x509 -req -in certs/plugins/remote.csr \
-  -CA certs/mtls/ca.crt -CAkey certs/mtls/ca.key \
-  -CAcreateserial -out certs/plugins/remote.crt -days 365 \
-  -extfile <(echo "subjectAltName=DNS:plugins.internal.example.com")
+For production Kubernetes deployments, use the `cforge gateway` tool with cert-manager integration for automated certificate lifecycle management:
 
-# Client cert for the gateway
-openssl req -newkey rsa:4096 -nodes \
-  -keyout certs/plugins/gateway-client.key -out certs/plugins/gateway-client.csr \
-  -subj "/CN=mcpgateway"
+- **See**: [cforge gateway Deployment Guide](../deployment/cforge-gateway.md)
+- **Features**: Automated certificate generation, renewal, and distribution
+- **Best for**: Kubernetes production deployments, GitOps workflows
 
-openssl x509 -req -in certs/plugins/gateway-client.csr \
-  -CA certs/mtls/ca.crt -CAkey certs/mtls/ca.key \
-  -CAcreateserial -out certs/plugins/gateway-client.crt -days 365
-
-cat certs/plugins/gateway-client.crt certs/plugins/gateway-client.key > certs/plugins/gateway-client.pem
-```
-
-### 2. Protect the Remote Plugin with mTLS
-
-Front the remote MCP plugin with a reverse proxy (Nginx, Caddy, Envoy, etc.) that enforces client certificate verification using the CA above. Example Nginx snippet:
-
-```nginx
-server {
-    listen 9443 ssl;
-    server_name plugins.internal.example.com;
-
-    ssl_certificate     /etc/ssl/private/remote.crt;
-    ssl_certificate_key /etc/ssl/private/remote.key;
-    ssl_client_certificate /etc/ssl/private/ca.crt;
-    ssl_verify_client   on;
-
-    location /mcp {
-        proxy_pass http://plugin-runtime:8000/mcp;
-        proxy_set_header Host $host;
-        proxy_set_header X-Forwarded-Proto https;
-    }
-}
-```
-
-### 3. Mount Certificates into the Gateway
-
-Expose the CA bundle and gateway client certificate to the gateway container:
-
+Example deployment with cert-manager:
 ```yaml
-# docker-compose override
-  gateway:
-    volumes:
-      - ./certs/plugins:/app/certs/plugins:ro
+# mcp-stack.yaml
+deployment:
+  type: kubernetes
+  namespace: mcp-gateway-prod
 
-# Kubernetes deployment (snippet)
-volumeMounts:
-  - name: plugin-mtls
-    mountPath: /app/certs/plugins
-    readOnly: true
-volumes:
-  - name: plugin-mtls
-    secret:
-      secretName: gateway-plugin-mtls
+gateway:
+  image: mcpgateway/mcpgateway:latest
+  mtls_enabled: true
+
+plugins:
+  - name: OPAPluginFilter
+    image: mcpgateway-opapluginfilter:latest
+    mtls_enabled: true
+
+certificates:
+  use_cert_manager: true
+  cert_manager_issuer: mcp-ca-issuer
+  cert_manager_kind: Issuer
 ```
 
-### 4. Configure the Plugin Entry
+Deploy:
+```bash
+cforge gateway deploy mcp-stack.yaml
+```
 
-Use the new `mcp.tls` block in `plugins/config.yaml` (or the Admin UI) to point the gateway at the certificates. Example external plugin definition:
+#### **Manual Setup (Local Development & Testing)**
 
+For local development, Docker Compose, or manual certificate management:
+
+- **See**: [External Plugin mTLS Setup Guide](../using/plugins/mtls.md)
+- **Features**: `make` targets for certificate generation, manual configuration
+- **Best for**: Local development, Docker Compose deployments, custom setups
+
+Quick start:
+```bash
+# Generate complete mTLS infrastructure
+make certs-mcp-all
+
+# Configure plugin connection
+export PLUGINS_CLIENT_MTLS_CERTFILE="certs/mcp/gateway/client.crt"
+export PLUGINS_CLIENT_MTLS_KEYFILE="certs/mcp/gateway/client.key"
+export PLUGINS_CLIENT_MTLS_CA_BUNDLE="certs/mcp/gateway/ca.crt"
+```
+
+### Configuration Reference
+
+Both approaches support the same configuration format for plugin connections:
+
+**YAML Configuration** (`plugins/config.yaml`):
 ```yaml
 plugins:
-  - name: "LlamaGuardSafety"
+  - name: "MyExternalPlugin"
     kind: "external"
-    hooks: ["prompt_pre_fetch", "tool_pre_invoke"]
-    mode: "enforce"
-    priority: 20
     mcp:
       proto: STREAMABLEHTTP
-      url: https://plugins.internal.example.com:9443/mcp
+      url: https://plugin-server:8000/mcp
       tls:
         ca_bundle: /app/certs/plugins/ca.crt
-        client_cert: /app/certs/plugins/gateway-client.pem
-        client_key: /app/certs/plugins/gateway-client.key  # optional if PEM already bundles key
+        certfile: /app/certs/plugins/gateway-client.crt
+        keyfile: /app/certs/plugins/gateway-client.key
         verify: true
         check_hostname: true
-
-    config:
-      policy: strict
 ```
 
-**Key behavior**
-- `verify` controls whether the gateway validates the remote server certificate. Leave `true` in production; set `false` only for local debugging.
-- `ca_bundle` may point to a custom CA chain; omit it if the remote certificate chains to a system-trusted CA.
-- `client_cert` must reference the gateway certificate. Provide `client_key` only when the key is stored separately.
-- `check_hostname` defaults to `true`. Set it to `false` for scenarios where the certificate CN does not match the URL (not recommended outside testing).
+**Environment Variables** (gateway-wide defaults):
+```bash
+PLUGINS_CLIENT_MTLS_CA_BUNDLE=/app/certs/ca.crt
+PLUGINS_CLIENT_MTLS_CERTFILE=/app/certs/client.crt
+PLUGINS_CLIENT_MTLS_KEYFILE=/app/certs/client.key
+PLUGINS_CLIENT_MTLS_VERIFY=true
+PLUGINS_CLIENT_MTLS_CHECK_HOSTNAME=false
+```
 
-Restart the gateway after updating the config so the external plugin client reloads with the TLS settings. Watch the logs for `Connected to plugin MCP (http) server` to confirm a successful handshake; TLS errors will surface as plugin initialization failures.
-
-> 💡 **Tip:** You can set gateway-wide defaults via `PLUGINS_MTLS_CA_BUNDLE`,
-> `PLUGINS_MTLS_CLIENT_CERT`, `PLUGINS_MTLS_CLIENT_KEY`, and the other
-> `PLUGINS_MTLS_*` environment variables. Any plugin without an explicit
-> `tls` block will inherit these values automatically.
+**Key Options:**
+- `verify`: Validate server certificate (default: `true`, recommended for production)
+- `ca_bundle`: CA certificate for server validation (omit to use system CA)
+- `certfile`/`keyfile`: Client certificate and key for mTLS authentication
+- `check_hostname`: Verify hostname matches certificate (default: `true`)
 
 
 ## Security Best Practices
