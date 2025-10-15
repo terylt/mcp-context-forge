@@ -28,6 +28,7 @@ from pydantic import BaseModel
 from mcpgateway.plugins.framework.base import Plugin
 from mcpgateway.plugins.framework.constants import CONTEXT, ERROR, GET_PLUGIN_CONFIG, IGNORE_CONFIG_EXTERNAL, NAME, PAYLOAD, PLUGIN_NAME, PYTHON, PYTHON_SUFFIX, RESULT
 from mcpgateway.plugins.framework.errors import convert_exception_to_error, PluginError
+from mcpgateway.plugins.framework.external.mcp.tls_utils import create_ssl_context
 from mcpgateway.plugins.framework.models import (
     HookType,
     MCPClientTLSConfig,
@@ -181,27 +182,10 @@ class ExternalPlugin(Plugin):
             if not tls_config:
                 return httpx.AsyncClient(**kwargs)
 
-            try:
-                ssl_context = ssl.create_default_context()
-                if not tls_config.verify:
-                    ssl_context.check_hostname = False
-                    ssl_context.verify_mode = ssl.CERT_NONE  # noqa: DUO122
-                else:
-                    if tls_config.ca_bundle:
-                        ssl_context.load_verify_locations(cafile=tls_config.ca_bundle)
-                    if not tls_config.check_hostname:
-                        ssl_context.check_hostname = False
-
-                if tls_config.certfile:
-                    ssl_context.load_cert_chain(
-                        certfile=tls_config.certfile,
-                        keyfile=tls_config.keyfile,
-                        password=tls_config.keyfile_password,
-                    )
-
-                kwargs["verify"] = ssl_context
-            except Exception as exc:  # pylint: disable=broad-except
-                raise PluginError(error=PluginErrorModel(message=f"Failed configuring TLS for external plugin: {exc}", plugin_name=self.name)) from exc
+            # Create SSL context using the utility function
+            # This implements certificate validation per test_client_certificate_validation.py
+            ssl_context = create_ssl_context(tls_config, self.name)
+            kwargs["verify"] = ssl_context
 
             return httpx.AsyncClient(**kwargs)
 
