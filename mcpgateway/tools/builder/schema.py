@@ -9,7 +9,7 @@ Pydantic schemas for MCP Stack configuration validation"""
 from typing import Any, Dict, List, Literal, Optional
 
 # Third-Party
-from pydantic import BaseModel, Field, field_validator
+from pydantic import BaseModel, ConfigDict, Field, field_validator
 
 
 class DeploymentConfig(BaseModel):
@@ -18,6 +18,34 @@ class DeploymentConfig(BaseModel):
     type: Literal["kubernetes", "compose"] = Field(..., description="Deployment type")
     project_name: Optional[str] = Field(None, description="Project name for compose")
     namespace: Optional[str] = Field(None, description="Namespace for Kubernetes")
+
+
+class RegistryConfig(BaseModel):
+    """Container registry configuration.
+
+    Optional configuration for pushing built images to a container registry.
+    When enabled, images will be tagged with the full registry path and optionally pushed.
+
+    Authentication:
+        Users must authenticate to the registry before running the build:
+        - Docker Hub: `docker login`
+        - Quay.io: `podman login quay.io`
+        - OpenShift internal: `podman login $(oc registry info) -u $(oc whoami) -p $(oc whoami -t)`
+        - Private registry: `podman login your-registry.com -u username`
+
+    Attributes:
+        enabled: Enable registry integration (default: False)
+        url: Registry URL (e.g., "docker.io", "quay.io", "default-route-openshift-image-registry.apps-crc.testing")
+        namespace: Registry namespace/organization/project (e.g., "myorg", "mcp-gateway-test")
+        push: Push image after build (default: True)
+        image_pull_policy: Kubernetes imagePullPolicy (default: "IfNotPresent")
+    """
+
+    enabled: bool = Field(False, description="Enable registry push")
+    url: Optional[str] = Field(None, description="Registry URL (e.g., docker.io, quay.io, or internal registry)")
+    namespace: Optional[str] = Field(None, description="Registry namespace/organization/project")
+    push: bool = Field(True, description="Push image after build")
+    image_pull_policy: Optional[str] = Field("IfNotPresent", description="Kubernetes imagePullPolicy (IfNotPresent, Always, Never)")
 
 
 class BuildableConfig(BaseModel):
@@ -37,8 +65,12 @@ class BuildableConfig(BaseModel):
         target: Target stage for multi-stage builds (optional)
         host_port: Host port mapping for direct access (optional)
         env_vars: Environment variables for container
+        env_file: Path to environment file (.env)
         mtls_enabled: Enable mutual TLS authentication (default: True)
     """
+
+    # Allow attribute assignment after model creation (needed for auto-detection of env_file)
+    model_config = ConfigDict(validate_assignment=True)
 
     # Build configuration
     image: Optional[str] = Field(None, description="Pre-built Docker image")
@@ -51,7 +83,11 @@ class BuildableConfig(BaseModel):
     # Runtime configuration
     host_port: Optional[int] = Field(None, description="Host port mapping")
     env_vars: Optional[Dict[str, Any]] = Field(default_factory=dict, description="Environment variables")
+    env_file: Optional[str] = Field(None, description="Path to environment file (.env)")
     mtls_enabled: Optional[bool] = Field(True, description="Enable mTLS")
+
+    # Registry configuration
+    registry: Optional[RegistryConfig] = Field(None, description="Container registry configuration")
 
     def model_post_init(self, __context: Any) -> None:
         """Validate that either image or repo is specified
@@ -157,7 +193,7 @@ class PostgresConfig(BaseModel):
     """PostgreSQL database configuration"""
 
     enabled: Optional[bool] = Field(True, description="Enable PostgreSQL deployment")
-    image: Optional[str] = Field("postgres:17", description="PostgreSQL image")
+    image: Optional[str] = Field("quay.io/sclorg/postgresql-15-c9s:latest", description="PostgreSQL image (default is OpenShift-compatible)")
     database: Optional[str] = Field("mcp", description="Database name")
     user: Optional[str] = Field("postgres", description="Database user")
     password: Optional[str] = Field("mysecretpassword", description="Database password")

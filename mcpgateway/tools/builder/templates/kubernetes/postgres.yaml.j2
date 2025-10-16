@@ -25,9 +25,14 @@ metadata:
   namespace: {{ namespace }}
 type: Opaque
 stringData:
+  # Official PostgreSQL image variables
   POSTGRES_USER: {{ user }}
   POSTGRES_PASSWORD: {{ password }}
   POSTGRES_DB: {{ database }}
+  # Red Hat/SCL PostgreSQL image variables (OpenShift-compatible)
+  POSTGRESQL_USER: {{ user }}
+  POSTGRESQL_PASSWORD: {{ password }}
+  POSTGRESQL_DATABASE: {{ database }}
 ---
 apiVersion: apps/v1
 kind: Deployment

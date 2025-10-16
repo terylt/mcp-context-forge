@@ -16,7 +16,7 @@ Features:
 
 # Standard
 from pathlib import Path
-from typing import Any, Dict, List, Optional
+from typing import List, Optional
 
 try:
     # Third-Party
@@ -43,12 +43,14 @@ from mcpgateway.tools.builder.common import (
     generate_kubernetes_manifests,
     generate_plugin_config,
     get_deploy_dir,
+    handle_registry_operations,
     load_config,
     verify_compose,
     verify_kubernetes,
 )
 from mcpgateway.tools.builder.common import copy_env_template as copy_template
 from mcpgateway.tools.builder.pipeline import CICDModule
+from mcpgateway.tools.builder.schema import BuildableConfig, MCPStackConfig
 
 console = Console()
 
@@ -87,8 +89,8 @@ class MCPStackDagger(CICDModule):
         async with dagger.connection(dagger.Config(workdir=str(Path.cwd()))):
             # Build gateway (unless plugins_only=True)
             if not plugins_only:
-                gateway = config.get("gateway", {})
-                if gateway.get("repo"):
+                gateway = config.gateway
+                if gateway.repo:
                     with Progress(SpinnerColumn(), TextColumn("[progress.description]{task.description}"), console=self.console) as progress:
                         task = progress.add_task("Building gateway...", total=None)
                         try:
@@ -109,10 +111,10 @@ class MCPStackDagger(CICDModule):
                     self.console.print("[dim]Skipping gateway build (using pre-built image)[/dim]")
 
             # Build plugins
-            plugins = config.get("plugins", [])
+            plugins = config.plugins
 
             if specific_plugins:
-                plugins = [p for p in plugins if p["name"] in specific_plugins]
+                plugins = [p for p in plugins if p.name in specific_plugins]
 
             if not plugins:
                 self.console.print("[yellow]No plugins to build[/yellow]")
@@ -121,10 +123,10 @@ class MCPStackDagger(CICDModule):
             with Progress(SpinnerColumn(), TextColumn("[progress.description]{task.description}"), console=self.console) as progress:
 
                 for plugin in plugins:
-                    plugin_name = plugin["name"]
+                    plugin_name = plugin.name
 
                     # Skip if pre-built image specified
-                    if "image" in plugin and "repo" not in plugin:
+                    if plugin.image and not plugin.repo:
                         task = progress.add_task(f"Skipping {plugin_name} (using pre-built image)", total=1)
                         progress.update(task, completed=1)
                         continue
@@ -163,9 +165,9 @@ class MCPStackDagger(CICDModule):
         config = load_config(config_file)
 
         # Check if using cert-manager
-        cert_config = config.get("certificates", {})
-        use_cert_manager = cert_config.get("use_cert_manager", False)
-        validity_days = cert_config.get("validity_days", 825)
+        cert_config = config.certificates
+        use_cert_manager = cert_config.use_cert_manager if cert_config else False
+        validity_days = cert_config.validity_days if cert_config else 825
 
         if use_cert_manager:
             # Skip local generation - cert-manager will handle certificate creation
@@ -202,9 +204,9 @@ class MCPStackDagger(CICDModule):
                 container = container.with_exec(["sh", "-c", f"make certs-mcp-gateway MCP_CERT_DAYS={validity_days}"])
 
                 # Generate plugin certificates
-                plugins = config.get("plugins", [])
+                plugins = config.plugins
                 for plugin in plugins:
-                    plugin_name = plugin["name"]
+                    plugin_name = plugin.name
                     container = container.with_exec(["sh", "-c", f"make certs-mcp-plugin PLUGIN_NAME={plugin_name} MCP_CERT_DAYS={validity_days}"])
 
                 # Export certificates back to host
@@ -248,8 +250,8 @@ class MCPStackDagger(CICDModule):
             await self.build(config_file)
 
         # Generate certificates (only if mTLS is enabled)
-        gateway_mtls = config.get("gateway", {}).get("mtls_enabled", True)
-        plugin_mtls = any(p.get("mtls_enabled", True) for p in config.get("plugins", []))
+        gateway_mtls = config.gateway.mtls_enabled if config.gateway.mtls_enabled is not None else True
+        plugin_mtls = any((p.mtls_enabled if p.mtls_enabled is not None else True) for p in config.plugins)
         mtls_needed = gateway_mtls or plugin_mtls
 
         if not skip_certs and mtls_needed:
@@ -266,7 +268,7 @@ class MCPStackDagger(CICDModule):
             return
 
         # Apply deployment
-        deployment_type = config["deployment"]["type"]
+        deployment_type = config.deployment.type
 
         async with dagger.connection(dagger.Config(workdir=str(Path.cwd()))):
             try:
@@ -309,7 +311,7 @@ class MCPStackDagger(CICDModule):
             timeout: Wait timeout in seconds
         """
         config = load_config(config_file)
-        deployment_type = config["deployment"]["type"]
+        deployment_type = config.deployment.type
 
         if self.verbose:
             self.console.print("[blue]Verifying deployment...[/blue]")
@@ -327,7 +329,7 @@ class MCPStackDagger(CICDModule):
             config_file: Path to mcp-stack.yaml
         """
         config = load_config(config_file)
-        deployment_type = config["deployment"]["type"]
+        deployment_type = config.deployment.type
 
         if self.verbose:
             self.console.print("[blue]Destroying deployment...[/blue]")
@@ -352,7 +354,7 @@ class MCPStackDagger(CICDModule):
             ValueError: If unsupported deployment type specified
         """
         config = load_config(config_file)
-        deployment_type = config["deployment"]["type"]
+        deployment_type = config.deployment.type
 
         if output_dir is None:
             deploy_dir = get_deploy_dir()
@@ -380,11 +382,11 @@ class MCPStackDagger(CICDModule):
 
     # Private helper methods
 
-    async def _build_component_with_dagger(self, component: Dict[str, Any], component_name: str, no_cache: bool = False, copy_env_templates: bool = False) -> None:
+    async def _build_component_with_dagger(self, component: BuildableConfig, component_name: str, no_cache: bool = False, copy_env_templates: bool = False) -> None:
         """Build a component (gateway or plugin) container using Dagger.
 
         Args:
-            component: Component configuration dict
+            component: Component configuration (GatewayConfig or PluginConfig)
             component_name: Name of the component (gateway or plugin name)
             no_cache: Disable cache
             copy_env_templates: Copy .env.template from repo if it exists
@@ -393,13 +395,13 @@ class MCPStackDagger(CICDModule):
             ValueError: If component has no repo field
             Exception: If build or export fails
         """
-        repo = component.get("repo")
+        repo = component.repo
 
         if not repo:
             raise ValueError(f"Component '{component_name}' has no 'repo' field")
 
         # Clone repository to local directory for env template access
-        git_ref = component.get("ref", "main")
+        git_ref = component.ref or "main"
         clone_dir = Path(f"./build/{component_name}")
 
         # For Dagger, we still need local clone if copying env templates
@@ -411,12 +413,12 @@ class MCPStackDagger(CICDModule):
 
             if (clone_dir / ".git").exists():
                 subprocess.run(["git", "fetch", "origin", git_ref], cwd=clone_dir, check=True, capture_output=True)
-                subprocess.run(["git", "checkout", "-B", git_ref, f"origin/{git_ref}"], cwd=clone_dir, check=True, capture_output=True)
+                subprocess.run(["git", "checkout", git_ref], cwd=clone_dir, check=True, capture_output=True)
             else:
                 subprocess.run(["git", "clone", "--branch", git_ref, "--depth", "1", repo, str(clone_dir)], check=True, capture_output=True)
 
             # Determine build context
-            build_context = component.get("context", ".")
+            build_context = component.context or "."
             build_dir = clone_dir / build_context
 
             # Copy env template using shared function
@@ -426,25 +428,25 @@ class MCPStackDagger(CICDModule):
         source = dag.git(repo).branch(git_ref).tree()
 
         # If component has context subdirectory, navigate to it
-        build_context = component.get("context", ".")
+        build_context = component.context or "."
         if build_context != ".":
             source = source.directory(build_context)
 
         # Detect Containerfile/Dockerfile
-        containerfile = component.get("containerfile", "Containerfile")
+        containerfile = component.containerfile or "Containerfile"
 
         # Build container - determine image tag
-        if "image" in component:
+        if component.image:
             # Use explicitly specified image name
-            image_tag = component["image"]
+            image_tag = component.image
         else:
             # Generate default image name based on component type
             image_tag = f"mcpgateway-{component_name.lower()}:latest"
 
         # Build with optional target stage for multi-stage builds
         build_kwargs = {"dockerfile": containerfile}
-        if "target" in component:
-            build_kwargs["target"] = component["target"]
+        if component.target:
+            build_kwargs["target"] = component.target
 
         # Use docker_build on the directory
         container = source.docker_build(**build_kwargs)
@@ -458,6 +460,14 @@ class MCPStackDagger(CICDModule):
             # Ignore beartype validation error - the export actually succeeds
             if "BeartypeCallHintReturnViolation" not in str(type(e)):
                 raise
+
+        # Handle registry operations (tag and push if enabled)
+        # Note: Dagger exports to local docker/podman, so we need to detect which runtime to use
+        # Standard
+        import shutil
+
+        container_runtime = "docker" if shutil.which("docker") else "podman"
+        image_tag = handle_registry_operations(component, component_name, image_tag, container_runtime, verbose=self.verbose)
 
         if self.verbose:
             self.console.print(f"[green]✓ Built {component_name} -> {image_tag}[/green]")
@@ -483,27 +493,27 @@ class MCPStackDagger(CICDModule):
         compose_file = manifests_dir / "docker-compose.yaml"
         deploy_compose(compose_file, verbose=self.verbose)
 
-    async def _verify_kubernetes(self, config: Dict[str, Any], wait: bool = False, timeout: int = 300) -> None:
+    async def _verify_kubernetes(self, config: MCPStackConfig, wait: bool = False, timeout: int = 300) -> None:
         """Verify Kubernetes deployment health.
 
         Uses shared verify_kubernetes() from common.py to avoid code duplication.
 
         Args:
-            config: Parsed configuration dict
+            config: Parsed configuration Pydantic model
             wait: Wait for pods to be ready
             timeout: Wait timeout in seconds
         """
-        namespace = config["deployment"].get("namespace", "mcp-gateway")
+        namespace = config.deployment.namespace or "mcp-gateway"
         output = verify_kubernetes(namespace, wait=wait, timeout=timeout, verbose=self.verbose)
         self.console.print(output)
 
-    async def _verify_compose(self, config: Dict[str, Any], wait: bool = False, timeout: int = 300) -> None:
+    async def _verify_compose(self, config: MCPStackConfig, wait: bool = False, timeout: int = 300) -> None:
         """Verify Docker Compose deployment health.
 
         Uses shared verify_compose() from common.py to avoid code duplication.
 
         Args:
-            config: Parsed configuration dict
+            config: Parsed configuration Pydantic model
             wait: Wait for containers to be ready
             timeout: Wait timeout in seconds
         """
@@ -515,13 +525,13 @@ class MCPStackDagger(CICDModule):
         output = verify_compose(compose_file, verbose=self.verbose)
         self.console.print(output)
 
-    async def _destroy_kubernetes(self, config: Dict[str, Any]) -> None:
+    async def _destroy_kubernetes(self, config: MCPStackConfig) -> None:
         """Destroy Kubernetes deployment.
 
         Uses shared destroy_kubernetes() from common.py to avoid code duplication.
 
         Args:
-            config: Parsed configuration dict
+            config: Parsed configuration Pydantic model
         """
         _ = config  # Reserved for future use (namespace, labels, etc.)
         # Use the same manifests directory as generate_manifests
@@ -529,13 +539,13 @@ class MCPStackDagger(CICDModule):
         manifests_dir = getattr(self, "_last_output_dir", deploy_dir / "manifests" / "kubernetes")
         destroy_kubernetes(manifests_dir, verbose=self.verbose)
 
-    async def _destroy_compose(self, config: Dict[str, Any]) -> None:
+    async def _destroy_compose(self, config: MCPStackConfig) -> None:
         """Destroy Docker Compose deployment.
 
         Uses shared destroy_compose() from common.py to avoid code duplication.
 
         Args:
-            config: Parsed configuration dict
+            config: Parsed configuration Pydantic model
         """
         _ = config  # Reserved for future use (project name, networks, etc.)
         # Use the same manifests directory as generate_manifests

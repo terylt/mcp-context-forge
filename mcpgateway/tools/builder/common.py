@@ -15,6 +15,7 @@ Shared functions:
 - generate_kubernetes_manifests: Generate Kubernetes deployment manifests
 - generate_compose_manifests: Generate Docker Compose manifest
 - copy_env_template: Copy .env.template from plugin repo to env.d/ directory
+- handle_registry_operations: Tag and push images to container registry
 - get_docker_compose_command: Detect available docker compose command
 - run_compose: Run docker compose with error handling
 - deploy_compose: Deploy using docker compose up -d
@@ -38,6 +39,9 @@ from jinja2 import Environment, FileSystemLoader
 from rich.console import Console
 import yaml
 
+# First-Party
+from mcpgateway.tools.builder.schema import MCPStackConfig
+
 console = Console()
 
 
@@ -53,34 +57,38 @@ def get_deploy_dir() -> Path:
     return Path(deploy_dir)
 
 
-def load_config(config_file: str) -> Dict[str, Any]:
-    """Load and parse YAML configuration file.
+def load_config(config_file: str) -> MCPStackConfig:
+    """Load and parse YAML configuration file into validated Pydantic model.
 
     Args:
         config_file: Path to mcp-stack.yaml configuration file
 
     Returns:
-        Parsed configuration dictionary
+        Validated MCPStackConfig Pydantic model
 
     Raises:
         FileNotFoundError: If configuration file doesn't exist
+        ValidationError: If configuration validation fails
     """
     config_path = Path(config_file)
     if not config_path.exists():
         raise FileNotFoundError(f"Configuration file not found: {config_file}")
 
     with open(config_path, encoding="utf-8") as f:
-        return yaml.safe_load(f)
+        config_dict = yaml.safe_load(f)
+
+    # Validate and return Pydantic model
+    return MCPStackConfig.model_validate(config_dict)
 
 
-def generate_plugin_config(config: Dict[str, Any], output_dir: Path, verbose: bool = False) -> Path:
+def generate_plugin_config(config: MCPStackConfig, output_dir: Path, verbose: bool = False) -> Path:
     """Generate plugin config.yaml for gateway from mcp-stack.yaml.
 
     This function is shared between Dagger and plain Python implementations
     to avoid code duplication.
 
     Args:
-        config: Parsed mcp-stack.yaml configuration
+        config: Validated MCPStackConfig Pydantic model
         output_dir: Output directory for generated config
         verbose: Print verbose output
 
@@ -91,8 +99,8 @@ def generate_plugin_config(config: Dict[str, Any], output_dir: Path, verbose: bo
         FileNotFoundError: If template directory not found
     """
 
-    deployment_type = config["deployment"]["type"]
-    plugins = config.get("plugins", [])
+    deployment_type = config.deployment.type
+    plugins = config.plugins
 
     # Load template
     template_dir = Path(__file__).parent / "templates"
@@ -105,21 +113,21 @@ def generate_plugin_config(config: Dict[str, Any], output_dir: Path, verbose: bo
     # Prepare plugin data with computed URLs
     plugin_data = []
     for plugin in plugins:
-        plugin_name = plugin["name"]
-        port = plugin.get("port", 8000)
+        plugin_name = plugin.name
+        port = plugin.port or 8000
 
         # Determine URL based on deployment type
         if deployment_type == "compose":
             # Use container hostname (lowercase)
             hostname = plugin_name.lower()
             # Use HTTPS if mTLS is enabled
-            protocol = "https" if plugin.get("mtls_enabled", True) else "http"
+            protocol = "https" if plugin.mtls_enabled else "http"
             url = f"{protocol}://{hostname}:{port}/mcp"
         else:  # kubernetes
             # Use Kubernetes service DNS
-            namespace = config["deployment"].get("namespace", "mcp-gateway")
+            namespace = config.deployment.namespace or "mcp-gateway"
             service_name = f"mcp-plugin-{plugin_name.lower()}"
-            protocol = "https" if plugin.get("mtls_enabled", True) else "http"
+            protocol = "https" if plugin.mtls_enabled else "http"
             url = f"{protocol}://{service_name}.{namespace}.svc:{port}/mcp"
 
         # Build plugin entry with computed URL
@@ -131,8 +139,8 @@ def generate_plugin_config(config: Dict[str, Any], output_dir: Path, verbose: bo
 
         # Merge plugin_overrides (client-side config only, excludes 'config')
         # Allowed client-side fields that plugin manager uses
-        if "plugin_overrides" in plugin:
-            overrides = plugin["plugin_overrides"]
+        if plugin.plugin_overrides:
+            overrides = plugin.plugin_overrides
             allowed_fields = ["priority", "mode", "description", "version", "author", "hooks", "tags", "conditions"]
             for field in allowed_fields:
                 if field in overrides:
@@ -153,11 +161,11 @@ def generate_plugin_config(config: Dict[str, Any], output_dir: Path, verbose: bo
     return config_path
 
 
-def generate_kubernetes_manifests(config: Dict[str, Any], output_dir: Path, verbose: bool = False) -> None:
+def generate_kubernetes_manifests(config: MCPStackConfig, output_dir: Path, verbose: bool = False) -> None:
     """Generate Kubernetes manifests from configuration.
 
     Args:
-        config: Parsed mcp-stack.yaml configuration
+        config: Validated MCPStackConfig Pydantic model
         output_dir: Output directory for manifests
         verbose: Print verbose output
 
@@ -176,12 +184,12 @@ def generate_kubernetes_manifests(config: Dict[str, Any], output_dir: Path, verb
     env = Environment(loader=FileSystemLoader(str(template_dir)), autoescape=True)  # nosec B701
 
     # Generate namespace
-    namespace = config["deployment"].get("namespace", "mcp-gateway")
+    namespace = config.deployment.namespace or "mcp-gateway"
 
     # Generate mTLS certificate resources if enabled
-    gateway_mtls = config.get("gateway", {}).get("mtls_enabled", True)
-    cert_config = config.get("certificates", {})
-    use_cert_manager = cert_config.get("use_cert_manager", False)
+    gateway_mtls = config.gateway.mtls_enabled if config.gateway.mtls_enabled is not None else True
+    cert_config = config.certificates
+    use_cert_manager = cert_config.use_cert_manager if cert_config else False
 
     if gateway_mtls:
         if use_cert_manager:
@@ -189,7 +197,7 @@ def generate_kubernetes_manifests(config: Dict[str, Any], output_dir: Path, verb
             cert_manager_template = env.get_template("cert-manager-certificates.yaml.j2")
 
             # Calculate duration and renewBefore in hours
-            validity_days = cert_config.get("validity_days", 825)
+            validity_days = cert_config.validity_days or 825
             duration_hours = validity_days * 24
             # Renew at 2/3 of lifetime (cert-manager default)
             renew_before_hours = int(duration_hours * 2 / 3)
@@ -198,17 +206,17 @@ def generate_kubernetes_manifests(config: Dict[str, Any], output_dir: Path, verb
             cert_data = {
                 "namespace": namespace,
                 "gateway_name": "mcpgateway",
-                "issuer_name": cert_config.get("cert_manager_issuer", "mcp-ca-issuer"),
-                "issuer_kind": cert_config.get("cert_manager_kind", "Issuer"),
+                "issuer_name": cert_config.cert_manager_issuer or "mcp-ca-issuer",
+                "issuer_kind": cert_config.cert_manager_kind or "Issuer",
                 "duration": duration_hours,
                 "renew_before": renew_before_hours,
                 "plugins": [],
             }
 
             # Add plugins with mTLS enabled
-            for plugin in config.get("plugins", []):
-                if plugin.get("mtls_enabled", True):
-                    cert_data["plugins"].append({"name": f"mcp-plugin-{plugin['name'].lower()}"})
+            for plugin in config.plugins:
+                if plugin.mtls_enabled if plugin.mtls_enabled is not None else True:
+                    cert_data["plugins"].append({"name": f"mcp-plugin-{plugin.name.lower()}"})
 
             # Generate cert-manager certificates manifest
             cert_manager_manifest = cert_manager_template.render(**cert_data)
@@ -242,9 +250,9 @@ def generate_kubernetes_manifests(config: Dict[str, Any], output_dir: Path, verb
                     print("[yellow]Warning: Gateway certificates not found[/yellow]")
 
             # Read and encode plugin certificates
-            for plugin in config.get("plugins", []):
-                if plugin.get("mtls_enabled", True):
-                    plugin_name = plugin["name"]
+            for plugin in config.plugins:
+                if plugin.mtls_enabled if plugin.mtls_enabled is not None else True:
+                    plugin_name = plugin.name
                     plugin_cert_path = Path(f"certs/mcp/plugins/{plugin_name}/server.crt")
                     plugin_key_path = Path(f"certs/mcp/plugins/{plugin_name}/server.key")
 
@@ -268,85 +276,88 @@ def generate_kubernetes_manifests(config: Dict[str, Any], output_dir: Path, verb
                     print("  ✓ mTLS certificate secrets manifest generated")
 
     # Generate infrastructure manifests (postgres, redis) if enabled
-    infrastructure = config.get("infrastructure", {})
+    infrastructure = config.infrastructure
 
     # PostgreSQL
-    postgres_config = infrastructure.get("postgres", {})
-    if postgres_config.get("enabled", True):
+    if infrastructure and infrastructure.postgres and infrastructure.postgres.enabled:
+        postgres_config = infrastructure.postgres
         postgres_template = env.get_template("postgres.yaml.j2")
         postgres_manifest = postgres_template.render(
             namespace=namespace,
-            image=postgres_config.get("image", "postgres:17"),
-            database=postgres_config.get("database", "mcp"),
-            user=postgres_config.get("user", "postgres"),
-            password=postgres_config.get("password", "mysecretpassword"),
-            storage_size=postgres_config.get("storage_size", "10Gi"),
-            storage_class=postgres_config.get("storage_class"),
+            image=postgres_config.image or "quay.io/sclorg/postgresql-15-c9s:latest",
+            database=postgres_config.database or "mcp",
+            user=postgres_config.user or "postgres",
+            password=postgres_config.password or "mysecretpassword",
+            storage_size=postgres_config.storage_size or "10Gi",
+            storage_class=postgres_config.storage_class,
         )
         (output_dir / "postgres-deployment.yaml").write_text(postgres_manifest)
         if verbose:
             print("  ✓ PostgreSQL deployment manifest generated")
 
     # Redis
-    redis_config = infrastructure.get("redis", {})
-    if redis_config.get("enabled", True):
+    if infrastructure and infrastructure.redis and infrastructure.redis.enabled:
+        redis_config = infrastructure.redis
         redis_template = env.get_template("redis.yaml.j2")
-        redis_manifest = redis_template.render(namespace=namespace, image=redis_config.get("image", "redis:latest"))
+        redis_manifest = redis_template.render(namespace=namespace, image=redis_config.image or "redis:latest")
         (output_dir / "redis-deployment.yaml").write_text(redis_manifest)
         if verbose:
             print("  ✓ Redis deployment manifest generated")
 
     # Generate gateway deployment
     gateway_template = env.get_template("deployment.yaml.j2")
-    gateway_config = config["gateway"].copy()
-    gateway_config["name"] = "mcpgateway"
-    gateway_config["namespace"] = namespace
+    # Convert Pydantic model to dict for template rendering
+    gateway_dict = config.gateway.model_dump(exclude_none=True)
+    gateway_dict["name"] = "mcpgateway"
+    gateway_dict["namespace"] = namespace
 
     # Add DATABASE_URL and REDIS_URL to gateway environment if infrastructure is enabled
-    if "env_vars" not in gateway_config:
-        gateway_config["env_vars"] = {}
+    if "env_vars" not in gateway_dict:
+        gateway_dict["env_vars"] = {}
 
     # Add init containers to wait for infrastructure services
     init_containers = []
 
-    if postgres_config.get("enabled", True):
-        db_user = postgres_config.get("user", "postgres")
-        db_password = postgres_config.get("password", "mysecretpassword")
-        db_name = postgres_config.get("database", "mcp")
-        gateway_config["env_vars"]["DATABASE_URL"] = f"postgresql://{db_user}:{db_password}@postgres:5432/{db_name}"
+    if infrastructure and infrastructure.postgres and infrastructure.postgres.enabled:
+        postgres = infrastructure.postgres
+        db_user = postgres.user or "postgres"
+        db_password = postgres.password or "mysecretpassword"
+        db_name = postgres.database or "mcp"
+        gateway_dict["env_vars"]["DATABASE_URL"] = f"postgresql://{db_user}:{db_password}@postgres:5432/{db_name}"
 
         # Add init container to wait for PostgreSQL
         init_containers.append({"name": "wait-for-postgres", "image": "busybox:1.36", "command": ["sh", "-c", "until nc -z postgres 5432; do echo waiting for postgres; sleep 2; done"]})
 
-    if redis_config.get("enabled", True):
-        gateway_config["env_vars"]["REDIS_URL"] = "redis://redis:6379/0"
+    if infrastructure and infrastructure.redis and infrastructure.redis.enabled:
+        gateway_dict["env_vars"]["REDIS_URL"] = "redis://redis:6379/0"
 
         # Add init container to wait for Redis
         init_containers.append({"name": "wait-for-redis", "image": "busybox:1.36", "command": ["sh", "-c", "until nc -z redis 6379; do echo waiting for redis; sleep 2; done"]})
 
     if init_containers:
-        gateway_config["init_containers"] = init_containers
+        gateway_dict["init_containers"] = init_containers
 
-    gateway_manifest = gateway_template.render(**gateway_config)
+    gateway_manifest = gateway_template.render(**gateway_dict)
     (output_dir / "gateway-deployment.yaml").write_text(gateway_manifest)
 
     # Generate plugin deployments
-    for plugin in config.get("plugins", []):
-        plugin_config = plugin.copy()
-        plugin_config["name"] = f"mcp-plugin-{plugin['name'].lower()}"
-        plugin_config["namespace"] = namespace
-        plugin_manifest = gateway_template.render(**plugin_config)
-        (output_dir / f"plugin-{plugin['name'].lower()}-deployment.yaml").write_text(plugin_manifest)
+    for plugin in config.plugins:
+        # Convert Pydantic model to dict for template rendering
+        plugin_dict = plugin.model_dump(exclude_none=True)
+        plugin_dict["name"] = f"mcp-plugin-{plugin.name.lower()}"
+        plugin_dict["namespace"] = namespace
+        plugin_manifest = gateway_template.render(**plugin_dict)
+        (output_dir / f"plugin-{plugin.name.lower()}-deployment.yaml").write_text(plugin_manifest)
 
     if verbose:
         print(f"✓ Kubernetes manifests generated in {output_dir}")
 
 
-def generate_compose_manifests(config: Dict[str, Any], output_dir: Path, verbose: bool = False) -> None:
+def generate_compose_manifests(config: MCPStackConfig, output_dir: Path, verbose: bool = False) -> None:
     """Generate Docker Compose manifest from configuration.
 
     Args:
-        config: Parsed mcp-stack.yaml configuration
+        config: Validated MCPStackConfig Pydantic model
         output_dir: Output directory for manifests
         verbose: Print verbose output
 
@@ -363,16 +374,13 @@ def generate_compose_manifests(config: Dict[str, Any], output_dir: Path, verbose
     _auto_detect_env_files(config, output_dir, verbose=verbose)
 
     # Auto-assign host_ports if expose_port is true but host_port not specified
-    plugins = config.get("plugins", [])
     next_host_port = 8000
-    for plugin in plugins:
-        # Set default port if not specified
-        if "port" not in plugin:
-            plugin["port"] = 8000
+    for plugin in config.plugins:
+        # Port defaults are handled by Pydantic defaults in schema
 
         # Auto-assign host_port if expose_port is true
-        if plugin.get("expose_port", False) and "host_port" not in plugin:
-            plugin["host_port"] = next_host_port
+        if plugin.expose_port and not plugin.host_port:
+            plugin.host_port = next_host_port  # type: ignore
             next_host_port += 1
 
     # Compute relative certificate paths (from output_dir to project root certs/)
@@ -394,49 +402,50 @@ def generate_compose_manifests(config: Dict[str, Any], output_dir: Path, verbose
 
     # Generate compose file
     compose_template = env.get_template("docker-compose.yaml.j2")
-    compose_manifest = compose_template.render(**config, cert_paths=cert_paths)
+    # Convert Pydantic model to dict for template rendering
+    config_dict = config.model_dump(exclude_none=True)
+    compose_manifest = compose_template.render(**config_dict, cert_paths=cert_paths)
     (output_dir / "docker-compose.yaml").write_text(compose_manifest)
 
     if verbose:
         print(f"✓ Compose manifest generated in {output_dir}")
 
 
-def _auto_detect_env_files(config: Dict[str, Any], output_dir: Path, verbose: bool = False) -> None:
+def _auto_detect_env_files(config: MCPStackConfig, output_dir: Path, verbose: bool = False) -> None:
     """Auto-detect and assign env files if not explicitly specified.
 
     If env_file is not specified in the config, check if {deploy_dir}/env/.env.{name}
     exists and use it. Warn the user when auto-detection is used.
 
     Args:
-        config: Parsed mcp-stack.yaml configuration (modified in-place)
+        config: MCPStackConfig Pydantic model (modified in-place via attribute assignment)
         output_dir: Output directory where manifests will be generated (for relative paths)
         verbose: Print verbose output
     """
     deploy_dir = get_deploy_dir()
     env_dir = deploy_dir / "env"
 
-    # Check gateway
-    gateway = config.get("gateway", {})
-    if "env_file" not in gateway or not gateway["env_file"]:
+    # Check gateway - since we need to modify the model, we access env_file directly
+    # Note: Pydantic models allow attribute assignment after creation
+    if not hasattr(config.gateway, 'env_file') or not config.gateway.env_file:
         gateway_env = env_dir / ".env.gateway"
         if gateway_env.exists():
             # Make path relative to output_dir (where docker-compose.yaml will be)
             relative_path = os.path.relpath(gateway_env, output_dir)
-            gateway["env_file"] = relative_path
+            config.gateway.env_file = relative_path  # type: ignore
             print(f"⚠ Auto-detected env file: {gateway_env}")
             if verbose:
                 print("   (Gateway env_file not specified in config)")
 
     # Check plugins
-    plugins = config.get("plugins", [])
-    for plugin in plugins:
-        plugin_name = plugin["name"]
-        if "env_file" not in plugin or not plugin["env_file"]:
+    for plugin in config.plugins:
+        plugin_name = plugin.name
+        if not hasattr(plugin, 'env_file') or not plugin.env_file:
             plugin_env = env_dir / f".env.{plugin_name}"
             if plugin_env.exists():
                 # Make path relative to output_dir (where docker-compose.yaml will be)
                 relative_path = os.path.relpath(plugin_env, output_dir)
-                plugin["env_file"] = relative_path
+                plugin.env_file = relative_path  # type: ignore
                 print(f"⚠ Auto-detected env file: {plugin_env}")
                 if verbose:
                     print(f"   (Plugin {plugin_name} env_file not specified in config)")
@@ -478,6 +487,78 @@ def copy_env_template(plugin_name: str, plugin_build_dir: Path, verbose: bool = 
     shutil.copy2(template_file, target_file)
     if verbose:
         print(f"✓ Copied .env.template -> {target_file}")
+
+
+def handle_registry_operations(component, component_name: str, image_tag: str, container_runtime: str, verbose: bool = False) -> str:
+    """Handle registry tagging and pushing for a built component.
+
+    This function is shared between Dagger and plain Python implementations.
+    It tags the locally built image with the registry path and optionally pushes it.
+
+    Args:
+        component: BuildableConfig component (GatewayConfig or PluginConfig)
+        component_name: Name of the component (gateway or plugin name)
+        image_tag: Current local image tag
+        container_runtime: Container runtime to use ("docker" or "podman")
+        verbose: Print verbose output
+
+    Returns:
+        Final image tag (registry path if registry enabled, otherwise original tag)
+
+    Raises:
+        ValueError: If registry enabled but missing required configuration
+        subprocess.CalledProcessError: If tag or push command fails
+    """
+    from mcpgateway.tools.builder.schema import BuildableConfig
+
+    # Type check for better error messages
+    if not isinstance(component, BuildableConfig):
+        raise TypeError(f"Component must be a BuildableConfig instance, got {type(component)}")
+
+    # Check if registry is enabled
+    if not component.registry or not component.registry.enabled:
+        return image_tag
+
+    registry_config = component.registry
+
+    # Validate registry configuration
+    if not registry_config.url or not registry_config.namespace:
+        raise ValueError(f"Registry enabled for {component_name} but missing 'url' or 'namespace' configuration")
+
+    # Construct registry image path
+    # Format: {registry_url}/{namespace}/{image_name}:{tag}
+    base_image_name = image_tag.split(":")[0].split("/")[-1]  # Extract base name (e.g., "mcpgateway-gateway")
+    image_version = image_tag.split(":")[-1] if ":" in image_tag else "latest"  # Extract tag
+    registry_image = f"{registry_config.url}/{registry_config.namespace}/{base_image_name}:{image_version}"
+
+    # Tag image for registry
+    if verbose:
+        console.print(f"[dim]Tagging {image_tag} as {registry_image}[/dim]")
+    tag_cmd = [container_runtime, "tag", image_tag, registry_image]
+    result = subprocess.run(tag_cmd, capture_output=True, text=True, check=True)
+    if result.stdout and verbose:
+        console.print(result.stdout)
+
+    # Push to registry if enabled
+    if registry_config.push:
+        if verbose:
+            console.print(f"[blue]Pushing {registry_image} to registry...[/blue]")
+        push_cmd = [container_runtime, "push", registry_image]
+        try:
+            result = subprocess.run(push_cmd, capture_output=True, text=True, check=True)
+            if result.stdout and verbose:
+                console.print(result.stdout)
+            console.print(f"[green]✓ Pushed to registry: {registry_image}[/green]")
+        except subprocess.CalledProcessError as e:
+            console.print(f"[red]✗ Failed to push to registry: {e}[/red]")
+            console.print("[yellow]Tip: Authenticate to the registry first:[/yellow]")
+            console.print(f"  {container_runtime} login {registry_config.url}")
+            raise
+
+    # Update component image reference to use registry path for manifests
+    component.image = registry_image
+
+    return registry_image
 
 
 # Docker Compose Utilities
@@ -641,8 +722,16 @@ def deploy_kubernetes(manifests_dir: Path, verbose: bool = False) -> None:
         if result.returncode != 0:
             raise RuntimeError(f"kubectl apply failed: {result.stderr}")
 
-    # 2. Apply certificate secrets (now namespace exists)
-    if cert_secrets.exists():
+    # 2. Apply certificate resources (now namespace exists)
+    # Check for both cert-secrets.yaml (local mode) and cert-manager-certificates.yaml (cert-manager mode)
+    cert_manager_certs = manifests_dir / "cert-manager-certificates.yaml"
+    if cert_manager_certs.exists():
+        result = subprocess.run(["kubectl", "apply", "-f", str(cert_manager_certs)], capture_output=True, text=True, check=False)
+        if result.stdout and verbose:
+            console.print(result.stdout)
+        if result.returncode != 0:
+            raise RuntimeError(f"kubectl apply failed: {result.stderr}")
+    elif cert_secrets.exists():
         result = subprocess.run(["kubectl", "apply", "-f", str(cert_secrets)], capture_output=True, text=True, check=False)
         if result.stdout and verbose:
             console.print(result.stdout)

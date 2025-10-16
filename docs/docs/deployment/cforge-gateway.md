@@ -532,6 +532,14 @@ gateway:
   mtls_verify: true                      # Verify server certs
   mtls_check_hostname: false             # Verify hostname
 
+  # Container Registry Configuration (optional)
+  registry:
+    enabled: true                        # Enable registry push
+    url: registry.example.com            # Registry URL
+    namespace: myproject                 # Registry namespace/org
+    push: true                           # Push after build
+    image_pull_policy: IfNotPresent      # Kubernetes imagePullPolicy
+
   # Environment Variables
   env_vars:
     LOG_LEVEL: INFO
@@ -573,6 +581,19 @@ gateway:
 | `mtls_enabled` | boolean | ❌ | Enable mTLS client | `true` |
 | `mtls_verify` | boolean | ❌ | Verify server certificates | `true` |
 | `mtls_check_hostname` | boolean | ❌ | Verify hostname in cert | `false` |
+| `registry` | object | ❌ | Container registry configuration | - |
+
+**Container Registry Configuration Fields:**
+
+| Field | Type | Required | Description | Default |
+|-------|------|----------|-------------|---------|
+| `enabled` | boolean | ❌ | Enable registry integration | `false` |
+| `url` | string | ❌* | Registry URL (e.g., `docker.io`, `quay.io`, OpenShift registry) | - |
+| `namespace` | string | ❌* | Registry namespace/organization/project | - |
+| `push` | boolean | ❌ | Push image to registry after build | `true` |
+| `image_pull_policy` | string | ❌ | Kubernetes imagePullPolicy (`Always`, `IfNotPresent`, `Never`) | `IfNotPresent` |
+
+\* Required when `enabled: true`
 
 **Kubernetes-specific Fields:**
 
@@ -613,6 +634,14 @@ plugins:
     # mTLS Server Configuration (plugin server)
     mtls_enabled: true                   # Enable mTLS server
 
+    # Container Registry Configuration (optional)
+    registry:
+      enabled: true                      # Enable registry push
+      url: registry.example.com          # Registry URL
+      namespace: myproject               # Registry namespace/org
+      push: true                         # Push after build
+      image_pull_policy: IfNotPresent    # Kubernetes imagePullPolicy
+
     # Environment Variables
     env_vars:
       LOG_LEVEL: DEBUG
@@ -652,6 +681,7 @@ plugins:
 | `expose_port` | boolean | ❌ | Expose port on host (compose only) | `false` |
 | `env_vars` | object | ❌ | Environment variables | `{}` |
 | `mtls_enabled` | boolean | ❌ | Enable mTLS server | `true` |
+| `registry` | object | ❌ | Container registry configuration (same fields as gateway) | - |
 | `plugin_overrides` | object | ❌ | Plugin manager config overrides | `{}` |
 
 **Plugin Overrides:**
@@ -1210,6 +1240,360 @@ cforge gateway certs deploy.yaml
 ```
 
 Then redeploy to distribute new certificates.
+
+---
+
+## Container Registry Integration
+
+### Overview
+
+The container registry feature allows you to build images locally and automatically push them to container registries (Docker Hub, Quay.io, OpenShift internal registry, private registries, etc.). This is essential for:
+
+✅ **Kubernetes/OpenShift deployments** - Avoid ImagePullBackOff errors
+✅ **Team collaboration** - Share images across developers and environments
+✅ **CI/CD pipelines** - Build once, deploy everywhere
+✅ **Production deployments** - Use trusted registry sources
+
+### How It Works
+
+1. **Build**: Images are built locally using docker/podman
+2. **Tag**: Images are automatically tagged with the registry path
+3. **Push**: Images are pushed to the registry (if `push: true`)
+4. **Deploy**: Kubernetes manifests reference the registry images
+
+### Configuration
+
+Add a `registry` section to your gateway and/or plugin configurations:
+
+```yaml
+gateway:
+  repo: https://github.com/yourorg/yourrepo.git
+
+  # Container registry configuration
+  registry:
+    enabled: true                      # Enable registry integration
+    url: registry.example.com          # Registry URL
+    namespace: myproject                # Registry namespace/org/project
+    push: true                          # Push after build (default: true)
+    image_pull_policy: IfNotPresent    # Kubernetes imagePullPolicy
+```
+
+**Configuration Fields:**
+
+| Field | Required | Description | Example |
+|-------|----------|-------------|---------|
+| `enabled` | Yes | Enable registry push | `true` |
+| `url` | Yes* | Registry URL | `docker.io`, `quay.io`, `registry.mycompany.com` |
+| `namespace` | Yes* | Registry namespace/organization/project | `myusername`, `myorg`, `mcp-gateway-test` |
+| `push` | No | Push image after build | `true` (default) |
+| `image_pull_policy` | No | Kubernetes imagePullPolicy | `IfNotPresent` (default) |
+
+\* Required when `enabled: true`
+
+### Common Registry Examples
+
+#### Docker Hub
+
+```yaml
+registry:
+  enabled: true
+  url: docker.io
+  namespace: myusername
+  push: true
+  image_pull_policy: IfNotPresent
+```
+
+**Authentication:**
+```bash
+docker login
+```
+
+#### Quay.io
+
+```yaml
+registry:
+  enabled: true
+  url: quay.io
+  namespace: myorganization
+  push: true
+  image_pull_policy: IfNotPresent
+```
+
+**Authentication:**
+```bash
+podman login quay.io
+```
+
+#### OpenShift Internal Registry
+
+```yaml
+registry:
+  enabled: true
+  url: default-route-openshift-image-registry.apps-crc.testing
+  namespace: mcp-gateway-test
+  push: true
+  image_pull_policy: Always
+```
+
+**Authentication:**
+```bash
+# OpenShift Local (CRC)
+podman login $(oc registry info) -u $(oc whoami) -p $(oc whoami -t)
+
+# OpenShift on cloud
+oc registry login
+```
+
+#### Private Registry
+
+```yaml
+registry:
+  enabled: true
+  url: registry.mycompany.com
+  namespace: devteam
+  push: true
+  image_pull_policy: IfNotPresent
+```
+
+**Authentication:**
+```bash
+podman login registry.mycompany.com -u myusername
+```
+
+### Image Naming
+
+When registry is enabled, images are automatically tagged with the full registry path:
+
+**Local tag (without registry):**
+```
+mcpgateway-gateway:latest
+mcpgateway-opapluginfilter:latest
+```
+
+**Registry tag (with registry enabled):**
+```
+registry.example.com/myproject/mcpgateway-gateway:latest
+registry.example.com/myproject/mcpgateway-opapluginfilter:latest
+```
+
+### Image Pull Policies
+
+Choose the appropriate policy for your use case:
+
+| Policy | Description | Best For |
+|--------|-------------|----------|
+| `Always` | Pull image every time pod starts | Development, testing latest changes |
+| `IfNotPresent` | Pull only if image doesn't exist locally | Production, stable releases |
+| `Never` | Never pull, only use local images | Air-gapped environments |
+
+### Workflow Example
+
+#### OpenShift Local Deployment
+
+```bash
+# 1. Authenticate to OpenShift registry
+podman login $(oc registry info) -u $(oc whoami) -p $(oc whoami -t)
+
+# 2. Build and push images
+cforge gateway deploy examples/deployment-configs/deploy-openshift-local-registry.yaml
+
+# The tool will:
+# - Build images locally
+# - Tag with registry paths
+# - Push to OpenShift internal registry
+# - Generate manifests with registry image references
+# - Deploy to cluster
+
+# 3. Verify images were pushed
+oc get imagestreams -n mcp-gateway-test
+
+# Output:
+# NAME                          IMAGE REPOSITORY
+# mcpgateway-gateway           default-route-.../mcp-gateway-test/mcpgateway-gateway
+# mcpgateway-opapluginfilter   default-route-.../mcp-gateway-test/mcpgateway-opapluginfilter
+```
+
+#### CI/CD Pipeline Example
+
+```bash
+# In your CI/CD pipeline:
+
+# 1. Authenticate to registry
+echo "$REGISTRY_PASSWORD" | docker login $REGISTRY_URL -u $REGISTRY_USER --password-stdin
+
+# 2. Build and push
+cforge gateway build deploy-prod.yaml
+
+# 3. Images are automatically pushed to registry
+
+# 4. Deploy to Kubernetes (manifests already reference registry images)
+cforge gateway deploy deploy-prod.yaml --skip-build --skip-certs
+```
+
+### Per-Component Configuration
+
+Each component (gateway and plugins) can have different registry settings:
+
+```yaml
+gateway:
+  repo: https://github.com/myorg/gateway.git
+  registry:
+    enabled: true
+    url: quay.io
+    namespace: myorg
+    push: true
+
+plugins:
+  - name: MyPlugin
+    repo: https://github.com/myorg/plugin.git
+    registry:
+      enabled: true
+      url: docker.io              # Different registry
+      namespace: myusername        # Different namespace
+      push: true
+
+  - name: InternalPlugin
+    repo: https://github.com/myorg/internal-plugin.git
+    # No registry - use local image only
+    registry:
+      enabled: false
+```
+
+This allows you to:
+- Push gateway to one registry, plugins to another
+- Skip registry push for some components
+- Use different namespaces per component
+- Mix local and registry images
+
+### Tag-Only Mode
+
+To tag images without pushing (useful for testing):
+
+```yaml
+registry:
+  enabled: true
+  url: registry.example.com
+  namespace: myproject
+  push: false                    # Tag but don't push
+```
+
+**Use cases:**
+- Test registry configuration before pushing
+- Generate manifests with registry paths for GitOps
+- Manual push workflow
+
+### Troubleshooting
+
+#### Authentication Errors
+
+**Error:** `Failed to push to registry: unauthorized`
+
+**Solution:** Authenticate to the registry before building:
+```bash
+# Docker Hub
+docker login
+
+# Quay.io
+podman login quay.io
+
+# Private registry
+podman login registry.mycompany.com -u myusername
+
+# OpenShift
+podman login $(oc registry info) -u $(oc whoami) -p $(oc whoami -t)
+```
+
+#### ImagePullBackOff in Kubernetes
+
+**Error:** Pods show `ImagePullBackOff` status
+
+**Possible causes:**
+1. Image doesn't exist in registry (push failed)
+2. Registry authentication not configured in Kubernetes
+3. Network connectivity issues
+4. Wrong image path/tag
+
+**Solutions:**
+
+**1. Verify image exists:**
+```bash
+# OpenShift
+oc get imagestreams -n mcp-gateway-test
+
+# Docker Hub/Quay
+podman search your-registry.com/namespace/image-name
+```
+
+**2. Configure Kubernetes pull secrets:**
+```bash
+# Create docker-registry secret
+kubectl create secret docker-registry regcred \
+  --docker-server=registry.example.com \
+  --docker-username=myusername \
+  --docker-password=mypassword \
+  --docker-email=myemail@example.com \
+  -n mcp-gateway-test
+
+# Update deployment to use secret (manual step, or add to template)
+```
+
+**3. For OpenShift, grant pull permissions:**
+```bash
+# Allow default service account to pull from namespace
+oc policy add-role-to-user system:image-puller \
+  system:serviceaccount:mcp-gateway-test:default \
+  -n mcp-gateway-test
+```
+
+#### Push Failed: Too Large
+
+**Error:** `image push failed: blob upload exceeds max size`
+
+**Solution:** Some registries have size limits. Options:
+1. Use multi-stage builds to reduce image size
+2. Switch to a registry with larger limits
+3. Split into smaller images
+
+#### Registry URL Format
+
+**Correct formats:**
+```yaml
+url: docker.io                                    # Docker Hub
+url: quay.io                                      # Quay.io
+url: gcr.io                                       # Google Container Registry
+url: registry.mycompany.com                       # Private registry
+url: default-route-openshift-image-registry.apps-crc.testing  # OpenShift
+```
+
+**Incorrect formats:**
+```yaml
+url: https://docker.io                           # No protocol
+url: docker.io/myusername                        # No namespace in URL
+url: registry:5000                               # Include port in URL, not namespace
+```
+
+### Best Practices
+
+✅ **DO:**
+- Authenticate to registry before building
+- Use specific version tags in production (not `:latest`)
+- Test registry configuration with `push: false` first
+- Use `image_pull_policy: Always` for development
+- Use `image_pull_policy: IfNotPresent` for production
+- Organize images by namespace/project
+
+❌ **DON'T:**
+- Commit registry credentials to Git
+- Use `latest` tag in production
+- Mix local and registry images without testing
+- Skip authentication step
+- Use `push: true` for testing without verifying first
+
+### Example Configurations
+
+Full examples available in:
+- `examples/deployment-configs/deploy-openshift-local.yaml` - Registry config commented
+- `examples/deployment-configs/deploy-openshift-local-registry.yaml` - Full registry setup
 
 ---
 
