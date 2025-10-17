@@ -1,3 +1,4 @@
+# -*- coding: utf-8 -*-
 """Tests for TLS configuration on external MCP plugins."""
 
 # Standard

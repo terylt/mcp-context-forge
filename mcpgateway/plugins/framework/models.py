@@ -421,7 +421,7 @@ class MCPServerConfig(BaseModel):
         tls (Optional[MCPServerTLSConfig]): Server-side TLS configuration.
     """
 
-    host: str = Field(default="0.0.0.0", description="Server host to bind to")
+    host: str = Field(default="0.0.0.0", description="Server host to bind to")  # nosec B104
     port: int = Field(default=8000, description="Server port to bind to")
     tls: Optional[MCPServerTLSConfig] = Field(default=None, description="Server-side TLS configuration")
 
