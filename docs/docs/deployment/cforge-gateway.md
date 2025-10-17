@@ -498,6 +498,7 @@ deployment:
   type: kubernetes | compose        # Required: Deployment target
   project_name: my-project          # Docker Compose only
   namespace: mcp-gateway            # Kubernetes only
+  container_engine: podman | docker # Container runtime (auto-detected if not specified)
 ```
 
 | Field | Type | Required | Description | Default |
@@ -505,6 +506,7 @@ deployment:
 | `type` | string | ✅ | Deployment type: `kubernetes` or `compose` | - |
 | `project_name` | string | ❌ | Docker Compose project name | - |
 | `namespace` | string | ❌ | Kubernetes namespace | - |
+| `container_engine` | string | ❌ | Container runtime: `docker` or `podman` | Auto-detected |
 
 ---
 
@@ -1553,6 +1555,48 @@ oc policy add-role-to-user system:image-puller \
 1. Use multi-stage builds to reduce image size
 2. Switch to a registry with larger limits
 3. Split into smaller images
+
+#### Podman Trying HTTP Instead of HTTPS (OpenShift/CRC)
+
+**Error:** `pinging container registry ...: Get "http://...:  dial tcp 127.0.0.1:80: connection refused`
+
+**Cause:** Podman doesn't know the registry uses HTTPS and defaults to HTTP on port 80.
+
+**Solution:** Configure podman to use HTTPS for the registry:
+
+```bash
+# SSH into podman machine and configure registries.conf
+podman machine ssh -- "sudo bash -c '
+if ! grep -q \"default-route-openshift-image-registry.apps-crc.testing\" /etc/containers/registries.conf 2>/dev/null; then
+    echo \"\" >> /etc/containers/registries.conf
+    echo \"[[registry]]\" >> /etc/containers/registries.conf
+    echo \"location = \\\"default-route-openshift-image-registry.apps-crc.testing\\\"\" >> /etc/containers/registries.conf
+    echo \"insecure = true\" >> /etc/containers/registries.conf
+    echo \"Registry configuration added\"
+else
+    echo \"Registry already configured\"
+fi
+'"
+
+# Restart podman machine
+podman machine restart
+
+# Wait for restart
+sleep 10
+
+# Verify you can now push
+podman push default-route-openshift-image-registry.apps-crc.testing/namespace/image:tag
+```
+
+**Alternative solution:** Use the internal registry service name instead of the route:
+
+```yaml
+registry:
+  url: image-registry.openshift-image-registry.svc:5000
+  namespace: mcp-gateway-test
+```
+
+This bypasses the external route and connects directly to the internal service (HTTPS on port 5000).
 
 #### Registry URL Format
 

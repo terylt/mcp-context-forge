@@ -46,17 +46,6 @@ console = Console()
 class MCPStackPython(CICDModule):
     """Plain Python implementation of MCP Stack deployment."""
 
-    def __init__(self, verbose: bool = False):
-        """Initialize MCPStackPython instance.
-
-        Args:
-            verbose: Enable verbose output
-        """
-        super().__init__(verbose)
-
-        # Detect container runtime (docker or podman)
-        self.container_runtime = self._detect_container_runtime()
-
     async def build(self, config_file: str, plugins_only: bool = False, specific_plugins: Optional[List[str]] = None, no_cache: bool = False, copy_env_templates: bool = False) -> None:
         """Build gateway and plugin containers using docker/podman.
 
@@ -79,7 +68,7 @@ class MCPStackPython(CICDModule):
                 with Progress(SpinnerColumn(), TextColumn("[progress.description]{task.description}"), console=self.console) as progress:
                     task = progress.add_task("Building gateway...", total=None)
                     try:
-                        self._build_component(gateway, "gateway", no_cache=no_cache)
+                        self._build_component(gateway, config, "gateway", no_cache=no_cache)
                         progress.update(task, completed=1, description="[green]✓ Built gateway[/green]")
                     except Exception as e:
                         progress.update(task, completed=1, description="[red]✗ Failed gateway[/red]")
@@ -119,7 +108,7 @@ class MCPStackPython(CICDModule):
                 task = progress.add_task(f"Building {plugin_name}...", total=None)
 
                 try:
-                    self._build_component(plugin, plugin_name, no_cache=no_cache, copy_env_templates=copy_env_templates)
+                    self._build_component(plugin, config, plugin_name, no_cache=no_cache, copy_env_templates=copy_env_templates)
                     progress.update(task, completed=1, description=f"[green]✓ Built {plugin_name}[/green]")
                 except Exception as e:
                     progress.update(task, completed=1, description=f"[red]✗ Failed {plugin_name}[/red]")
@@ -308,21 +297,40 @@ class MCPStackPython(CICDModule):
 
     # Private helper methods
 
-    def _detect_container_runtime(self) -> str:
-        """Detect available container runtime (docker or podman).
+    def _detect_container_engine(self, config: MCPStackConfig) -> str:
+        """Detect available container engine (docker or podman).
+
+        Supports both engine names ("docker", "podman") and full paths ("/opt/podman/bin/podman").
 
         Returns:
-            Name of available runtime "docker" or "podman"
+            Name or full path to available engine
 
         Raises:
-            RuntimeError: If no container runtime found
+            RuntimeError: If no container engine found
         """
+        if config.deployment.container_engine:
+            engine = config.deployment.container_engine
+
+            # Check if it's a full path
+            if "/" in engine:
+                if Path(engine).exists() and Path(engine).is_file():
+                    return engine
+                else:
+                    raise RuntimeError(f"Specified container engine path does not exist: {engine}")
+
+            # Otherwise treat as command name and check PATH
+            if shutil.which(engine):
+                return engine
+            else:
+                raise RuntimeError(f"Unable to find specified container engine: {engine}")
+
+        # Auto-detect
         if shutil.which("docker"):
             return "docker"
         elif shutil.which("podman"):
             return "podman"
         else:
-            raise RuntimeError("No container runtime found. Install docker or podman.")
+            raise RuntimeError("No container engine found. Install docker or podman.")
 
     def _run_command(self, cmd: List[str], cwd: Optional[Path] = None, capture_output: bool = False) -> subprocess.CompletedProcess:
         """Run a shell command.
@@ -345,11 +353,12 @@ class MCPStackPython(CICDModule):
 
         return result
 
-    def _build_component(self, component: BuildableConfig, component_name: str, no_cache: bool = False, copy_env_templates: bool = False) -> None:
+    def _build_component(self, component: BuildableConfig, config: MCPStackConfig, component_name: str, no_cache: bool = False, copy_env_templates: bool = False) -> None:
         """Build a component (gateway or plugin) container using docker/podman.
 
         Args:
             component: Component configuration (GatewayConfig or PluginConfig)
+            config: Overall stack configuration
             component_name: Name of the component (gateway or plugin name)
             no_cache: Disable cache
             copy_env_templates: Copy .env.template from repo if it exists
@@ -359,6 +368,8 @@ class MCPStackPython(CICDModule):
             FileNotFoundError: If build context or containerfile not found
         """
         repo = component.repo
+
+        container_engine = self._detect_container_engine(config)
 
         if not repo:
             raise ValueError(f"Component '{component_name}' has no 'repo' field")
@@ -373,7 +384,8 @@ class MCPStackPython(CICDModule):
             if self.verbose:
                 self.console.print(f"[dim]Updating {component_name} repository...[/dim]")
             self._run_command(["git", "fetch", "origin", git_ref], cwd=clone_dir)
-            self._run_command(["git", "checkout", git_ref], cwd=clone_dir)
+            # Checkout what we just fetched (FETCH_HEAD)
+            self._run_command(["git", "checkout", "FETCH_HEAD"], cwd=clone_dir)
         else:
             if self.verbose:
                 self.console.print(f"[dim]Cloning {component_name} repository...[/dim]")
@@ -404,7 +416,7 @@ class MCPStackPython(CICDModule):
             # Generate default image name based on component type
             image_tag = f"mcpgateway-{component_name.lower()}:latest"
 
-        build_cmd = [self.container_runtime, "build", "-f", containerfile, "-t", image_tag]
+        build_cmd = [container_engine, "build", "-f", containerfile, "-t", image_tag]
 
         if no_cache:
             build_cmd.append("--no-cache")
@@ -415,7 +427,7 @@ class MCPStackPython(CICDModule):
 
         # For Docker, add --load to ensure image is loaded into daemon
         # (needed for buildx/docker-container driver)
-        if self.container_runtime == "docker":
+        if container_engine == "docker":
             build_cmd.append("--load")
 
         build_cmd.append(".")
@@ -423,7 +435,7 @@ class MCPStackPython(CICDModule):
         self._run_command(build_cmd, cwd=build_dir)
 
         # Handle registry operations (tag and push if enabled)
-        image_tag = handle_registry_operations(component, component_name, image_tag, self.container_runtime, verbose=self.verbose)
+        image_tag = handle_registry_operations(component, component_name, image_tag, container_engine, verbose=self.verbose)
 
         # Copy .env.template if requested and exists
         if copy_env_templates:

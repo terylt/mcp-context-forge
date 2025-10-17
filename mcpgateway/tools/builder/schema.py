@@ -16,6 +16,7 @@ class DeploymentConfig(BaseModel):
     """Deployment configuration"""
 
     type: Literal["kubernetes", "compose"] = Field(..., description="Deployment type")
+    container_engine: Optional[str] = Field(default=None, description="Container engine: 'podman', 'docker', or full path (e.g., '/opt/podman/bin/podman')")
     project_name: Optional[str] = Field(None, description="Project name for compose")
     namespace: Optional[str] = Field(None, description="Namespace for Kubernetes")
 

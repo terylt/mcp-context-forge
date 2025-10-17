@@ -17,6 +17,7 @@
 deployment:
   type: kubernetes
   namespace: mcp-gateway-test
+  container_engine: podman
 
 # MCP Gateway configuration
 gateway:
@@ -76,7 +77,7 @@ plugins:
 
     # Build from repository
     repo: https://github.com/terylt/mcp-context-forge.git
-    ref: feat/configurable_plugin_deployment
+    ref: feat/use_mtls_plugins 
     context: plugins/external/opa
     containerfile: Containerfile
     image: mcpgateway-opapluginfilter:latest

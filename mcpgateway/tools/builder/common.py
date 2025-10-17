@@ -32,7 +32,7 @@ import os
 from pathlib import Path
 import shutil
 import subprocess
-from typing import Any, Dict, List
+from typing import List
 
 # Third-Party
 from jinja2 import Environment, FileSystemLoader
@@ -107,7 +107,8 @@ def generate_plugin_config(config: MCPStackConfig, output_dir: Path, verbose: bo
     if not template_dir.exists():
         raise FileNotFoundError(f"Template directory not found: {template_dir}")
 
-    env = Environment(loader=FileSystemLoader(str(template_dir)), autoescape=True)  # nosec B701
+    # YAML files should not use HTML autoescape
+    env = Environment(loader=FileSystemLoader(str(template_dir)), autoescape=False)  # nosec B701
     template = env.get_template("plugins-config.yaml.j2")
 
     # Prepare plugin data with computed URLs
@@ -304,16 +305,43 @@ def generate_kubernetes_manifests(config: MCPStackConfig, output_dir: Path, verb
         if verbose:
             print("  ✓ Redis deployment manifest generated")
 
+    # Generate plugins ConfigMap if plugins are configured
+    if config.plugins and len(config.plugins) > 0:
+        configmap_template = env.get_template("plugins-configmap.yaml.j2")
+        # Read the generated plugins-config.yaml file
+        plugins_config_path = output_dir / "plugins-config.yaml"
+        if plugins_config_path.exists():
+            plugins_config_content = plugins_config_path.read_text()
+            configmap_manifest = configmap_template.render(namespace=namespace, plugins_config=plugins_config_content)
+            (output_dir / "plugins-configmap.yaml").write_text(configmap_manifest)
+            if verbose:
+                print("  ✓ Plugins ConfigMap manifest generated")
+
     # Generate gateway deployment
     gateway_template = env.get_template("deployment.yaml.j2")
     # Convert Pydantic model to dict for template rendering
     gateway_dict = config.gateway.model_dump(exclude_none=True)
     gateway_dict["name"] = "mcpgateway"
     gateway_dict["namespace"] = namespace
+    gateway_dict["has_plugins"] = config.plugins and len(config.plugins) > 0
+
+    # Update image to use full registry path if registry is enabled
+    if config.gateway.registry and config.gateway.registry.enabled:
+        base_image_name = config.gateway.image.split(":")[0].split("/")[-1]
+        image_version = config.gateway.image.split(":")[-1] if ":" in config.gateway.image else "latest"
+        gateway_dict["image"] = f"{config.gateway.registry.url}/{config.gateway.registry.namespace}/{base_image_name}:{image_version}"
+        # Set imagePullPolicy from registry config
+        if config.gateway.registry.image_pull_policy:
+            gateway_dict["image_pull_policy"] = config.gateway.registry.image_pull_policy
 
     # Add DATABASE_URL and REDIS_URL to gateway environment if infrastructure is enabled
     if "env_vars" not in gateway_dict:
         gateway_dict["env_vars"] = {}
+
+    # Enable plugins if any are configured
+    if config.plugins and len(config.plugins) > 0:
+        gateway_dict["env_vars"]["PLUGINS_ENABLED"] = "true"
+        gateway_dict["env_vars"]["PLUGIN_CONFIG_FILE"] = "/app/config/plugins.yaml"
 
     # Add init containers to wait for infrastructure services
     init_containers = []
@@ -334,6 +362,20 @@ def generate_kubernetes_manifests(config: MCPStackConfig, output_dir: Path, verb
         # Add init container to wait for Redis
         init_containers.append({"name": "wait-for-redis", "image": "busybox:1.36", "command": ["sh", "-c", "until nc -z redis 6379; do echo waiting for redis; sleep 2; done"]})
 
+    # Add init containers to wait for plugins to be ready
+    if config.plugins and len(config.plugins) > 0:
+        for plugin in config.plugins:
+            plugin_service_name = f"mcp-plugin-{plugin.name.lower()}"
+            plugin_port = plugin.port or 8000
+            # Wait for plugin service to be available
+            init_containers.append(
+                {
+                    "name": f"wait-for-{plugin.name.lower()}",
+                    "image": "busybox:1.36",
+                    "command": ["sh", "-c", f"until nc -z {plugin_service_name} {plugin_port}; do echo waiting for {plugin_service_name}; sleep 2; done"],
+                }
+            )
+
     if init_containers:
         gateway_dict["init_containers"] = init_containers
 
@@ -346,6 +388,16 @@ def generate_kubernetes_manifests(config: MCPStackConfig, output_dir: Path, verb
         plugin_dict = plugin.model_dump(exclude_none=True)
         plugin_dict["name"] = f"mcp-plugin-{plugin.name.lower()}"
         plugin_dict["namespace"] = namespace
+
+        # Update image to use full registry path if registry is enabled
+        if plugin.registry and plugin.registry.enabled:
+            base_image_name = plugin.image.split(":")[0].split("/")[-1]
+            image_version = plugin.image.split(":")[-1] if ":" in plugin.image else "latest"
+            plugin_dict["image"] = f"{plugin.registry.url}/{plugin.registry.namespace}/{base_image_name}:{image_version}"
+            # Set imagePullPolicy from registry config
+            if plugin.registry.image_pull_policy:
+                plugin_dict["image_pull_policy"] = plugin.registry.image_pull_policy
+
         plugin_manifest = gateway_template.render(**plugin_dict)
         (output_dir / f"plugin-{plugin.name.lower()}-deployment.yaml").write_text(plugin_manifest)
 
@@ -427,7 +479,7 @@ def _auto_detect_env_files(config: MCPStackConfig, output_dir: Path, verbose: bo
 
     # Check gateway - since we need to modify the model, we access env_file directly
     # Note: Pydantic models allow attribute assignment after creation
-    if not hasattr(config.gateway, 'env_file') or not config.gateway.env_file:
+    if not hasattr(config.gateway, "env_file") or not config.gateway.env_file:
         gateway_env = env_dir / ".env.gateway"
         if gateway_env.exists():
             # Make path relative to output_dir (where docker-compose.yaml will be)
@@ -440,7 +492,7 @@ def _auto_detect_env_files(config: MCPStackConfig, output_dir: Path, verbose: bo
     # Check plugins
     for plugin in config.plugins:
         plugin_name = plugin.name
-        if not hasattr(plugin, 'env_file') or not plugin.env_file:
+        if not hasattr(plugin, "env_file") or not plugin.env_file:
             plugin_env = env_dir / f".env.{plugin_name}"
             if plugin_env.exists():
                 # Make path relative to output_dir (where docker-compose.yaml will be)
@@ -509,6 +561,7 @@ def handle_registry_operations(component, component_name: str, image_tag: str, c
         ValueError: If registry enabled but missing required configuration
         subprocess.CalledProcessError: If tag or push command fails
     """
+    # First-Party
     from mcpgateway.tools.builder.schema import BuildableConfig
 
     # Type check for better error messages
@@ -543,7 +596,17 @@ def handle_registry_operations(component, component_name: str, image_tag: str, c
     if registry_config.push:
         if verbose:
             console.print(f"[blue]Pushing {registry_image} to registry...[/blue]")
-        push_cmd = [container_runtime, "push", registry_image]
+
+        # Build push command with TLS options
+        push_cmd = [container_runtime, "push"]
+
+        # For podman, add --tls-verify=false for registries with self-signed certs
+        # This is common for OpenShift internal registries and local development
+        if container_runtime == "podman":
+            push_cmd.append("--tls-verify=false")
+
+        push_cmd.append(registry_image)
+
         try:
             result = subprocess.run(push_cmd, capture_output=True, text=True, check=True)
             if result.stdout and verbose:
@@ -551,6 +614,8 @@ def handle_registry_operations(component, component_name: str, image_tag: str, c
             console.print(f"[green]✓ Pushed to registry: {registry_image}[/green]")
         except subprocess.CalledProcessError as e:
             console.print(f"[red]✗ Failed to push to registry: {e}[/red]")
+            if e.stderr:
+                console.print(f"[red]Error output: {e.stderr}[/red]")
             console.print("[yellow]Tip: Authenticate to the registry first:[/yellow]")
             console.print(f"  {container_runtime} login {registry_config.url}")
             raise
@@ -687,8 +752,9 @@ def deploy_kubernetes(manifests_dir: Path, verbose: bool = False) -> None:
 
     Applies manifests in correct order:
     1. Deployments (creates namespaces)
-    2. Certificate secrets
-    3. Infrastructure (PostgreSQL, Redis)
+    2. Certificate resources (secrets or cert-manager CRDs)
+    3. ConfigMaps (plugins configuration)
+    4. Infrastructure (PostgreSQL, Redis)
 
     Excludes plugins-config.yaml (not a Kubernetes resource).
 
@@ -702,19 +768,21 @@ def deploy_kubernetes(manifests_dir: Path, verbose: bool = False) -> None:
     if not shutil.which("kubectl"):
         raise RuntimeError("kubectl not found. Cannot deploy to Kubernetes.")
 
-    # Get all manifest files, excluding plugins-config.yaml
+    # Get all manifest files, excluding plugins-config.yaml (not a Kubernetes resource)
     all_manifests = sorted(manifests_dir.glob("*.yaml"))
     all_manifests = [m for m in all_manifests if m.name != "plugins-config.yaml"]
 
-    # Apply in order to handle dependencies
+    # Identify different types of manifests
     cert_secrets = manifests_dir / "cert-secrets.yaml"
+    cert_manager_certs = manifests_dir / "cert-manager-certificates.yaml"
     postgres_deploy = manifests_dir / "postgres-deployment.yaml"
     redis_deploy = manifests_dir / "redis-deployment.yaml"
+    plugins_configmap = manifests_dir / "plugins-configmap.yaml"
 
     # 1. Apply all deployments first (creates namespaces)
-    deployment_files = [m for m in all_manifests if m.name.endswith("-deployment.yaml") and m != cert_secrets and m != postgres_deploy and m != redis_deploy]
+    deployment_files = [m for m in all_manifests if m.name.endswith("-deployment.yaml") and m not in [cert_secrets, postgres_deploy, redis_deploy]]
 
-    # Apply deployment files
+    # Apply deployment files (this creates the namespace)
     for manifest in deployment_files:
         result = subprocess.run(["kubectl", "apply", "-f", str(manifest)], capture_output=True, text=True, check=False)
         if result.stdout and verbose:
@@ -724,7 +792,6 @@ def deploy_kubernetes(manifests_dir: Path, verbose: bool = False) -> None:
 
     # 2. Apply certificate resources (now namespace exists)
     # Check for both cert-secrets.yaml (local mode) and cert-manager-certificates.yaml (cert-manager mode)
-    cert_manager_certs = manifests_dir / "cert-manager-certificates.yaml"
     if cert_manager_certs.exists():
         result = subprocess.run(["kubectl", "apply", "-f", str(cert_manager_certs)], capture_output=True, text=True, check=False)
         if result.stdout and verbose:
@@ -738,7 +805,15 @@ def deploy_kubernetes(manifests_dir: Path, verbose: bool = False) -> None:
         if result.returncode != 0:
             raise RuntimeError(f"kubectl apply failed: {result.stderr}")
 
-    # 3. Apply infrastructure
+    # 3. Apply ConfigMaps (needed by deployments)
+    if plugins_configmap.exists():
+        result = subprocess.run(["kubectl", "apply", "-f", str(plugins_configmap)], capture_output=True, text=True, check=False)
+        if result.stdout and verbose:
+            console.print(result.stdout)
+        if result.returncode != 0:
+            raise RuntimeError(f"kubectl apply failed: {result.stderr}")
+
+    # 4. Apply infrastructure
     for infra_file in [postgres_deploy, redis_deploy]:
         if infra_file.exists():
             result = subprocess.run(["kubectl", "apply", "-f", str(infra_file)], capture_output=True, text=True, check=False)

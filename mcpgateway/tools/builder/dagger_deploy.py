@@ -413,7 +413,8 @@ class MCPStackDagger(CICDModule):
 
             if (clone_dir / ".git").exists():
                 subprocess.run(["git", "fetch", "origin", git_ref], cwd=clone_dir, check=True, capture_output=True)
-                subprocess.run(["git", "checkout", git_ref], cwd=clone_dir, check=True, capture_output=True)
+                # Checkout what we just fetched (FETCH_HEAD)
+                subprocess.run(["git", "checkout", "FETCH_HEAD"], cwd=clone_dir, check=True, capture_output=True)
             else:
                 subprocess.run(["git", "clone", "--branch", git_ref, "--depth", "1", repo, str(clone_dir)], check=True, capture_output=True)
 

@@ -30,7 +30,7 @@ metadata:
   namespace: {{ namespace }}
   labels:
     app: {{ name }}
-    component: {% if 'gateway' in name %}gateway{% else %}plugin{% endif %}
+    component: {% if name == 'mcpgateway' %}gateway{% else %}plugin{% endif %}
 spec:
   replicas: {{ replicas | default(1) }}
   selector:
@@ -40,7 +40,7 @@ spec:
     metadata:
       labels:
         app: {{ name }}
-        component: {% if 'gateway' in name %}gateway{% else %}plugin{% endif %}
+        component: {% if name == 'mcpgateway' %}gateway{% else %}plugin{% endif %}
     spec:
       {% if image_pull_secret is defined %}
       imagePullSecrets:
@@ -65,7 +65,7 @@ spec:
         - name: http
           containerPort: {{ port | default(8000) }}
           protocol: TCP
-        {% if mtls_enabled | default(true) and 'gateway' not in name %}
+        {% if mtls_enabled | default(true) and name != 'mcpgateway' %}
         - name: health
           containerPort: 9000
           protocol: TCP
@@ -73,7 +73,7 @@ spec:
 
         env:
         {% if mtls_enabled | default(true) %}
-        {% if 'gateway' in name %}
+        {% if name == 'mcpgateway' %}
         # mTLS client configuration (gateway connects to plugins)
         - name: PLUGINS_CLIENT_MTLS_CA_BUNDLE
           value: "/app/certs/ca/ca.crt"
@@ -87,6 +87,8 @@ spec:
           value: "{{ mtls_check_hostname | default('false') }}"
         {% else %}
         # mTLS server configuration (plugin accepts gateway connections)
+        - name: PLUGINS_TRANSPORT
+          value: "http"
         - name: PLUGINS_SERVER_HOST
           value: "0.0.0.0"
         - name: PLUGINS_SERVER_PORT
@@ -112,7 +114,7 @@ spec:
         livenessProbe:
           httpGet:
             path: /health
-            {% if mtls_enabled | default(true) and 'gateway' not in name %}
+            {% if mtls_enabled | default(true) and name != 'mcpgateway' %}
             # Plugin with mTLS: use separate health check server on port 9000
             port: health
             scheme: HTTP
@@ -129,7 +131,7 @@ spec:
         readinessProbe:
           httpGet:
             path: /health
-            {% if mtls_enabled | default(true) and 'gateway' not in name %}
+            {% if mtls_enabled | default(true) and name != 'mcpgateway' %}
             # Plugin with mTLS: use separate health check server on port 9000
             port: health
             scheme: HTTP
@@ -159,6 +161,11 @@ spec:
           readOnly: true
         - name: ca-cert
           mountPath: /app/certs/ca
+          readOnly: true
+        {% endif %}
+        {% if name == 'mcpgateway' and has_plugins | default(false) %}
+        - name: plugins-config
+          mountPath: /app/config
           readOnly: true
         {% endif %}
 
@@ -192,6 +199,12 @@ spec:
       - name: ca-cert
         secret:
           secretName: mcp-ca-secret
+          defaultMode: 0444
+      {% endif %}
+      {% if name == 'mcpgateway' and has_plugins | default(false) %}
+      - name: plugins-config
+        configMap:
+          name: plugins-config
           defaultMode: 0444
       {% endif %}
 

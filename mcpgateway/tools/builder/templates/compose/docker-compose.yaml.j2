@@ -106,6 +106,7 @@ services:
       {% endif %}
       {% if plugin.mtls_enabled | default(true) %}
       # mTLS server configuration (plugin accepts gateway connections)
+      - PLUGINS_TRANSPORT=http
       - PLUGINS_SERVER_HOST=0.0.0.0
       - PLUGINS_SERVER_PORT={{ plugin.port | default(8000) }}
       - PLUGINS_SERVER_SSL_ENABLED=true
