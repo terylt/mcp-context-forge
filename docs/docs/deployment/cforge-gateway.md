@@ -499,6 +499,12 @@ deployment:
   project_name: my-project          # Docker Compose only
   namespace: mcp-gateway            # Kubernetes only
   container_engine: podman | docker # Container runtime (auto-detected if not specified)
+
+  # OpenShift-specific configuration (optional)
+  openshift:
+    create_routes: true             # Create OpenShift Route resources
+    domain: apps-crc.testing        # OpenShift apps domain (auto-detected if omitted)
+    tls_termination: edge           # TLS termination mode: edge, passthrough, or reencrypt
 ```
 
 | Field | Type | Required | Description | Default |
@@ -507,6 +513,48 @@ deployment:
 | `project_name` | string | ❌ | Docker Compose project name | - |
 | `namespace` | string | ❌ | Kubernetes namespace | - |
 | `container_engine` | string | ❌ | Container runtime: `docker` or `podman` | Auto-detected |
+| `openshift` | object | ❌ | OpenShift-specific configuration (see below) | - |
+
+#### OpenShift Configuration
+
+OpenShift Routes provide native external access to services, with built-in TLS termination and integration with OpenShift's router/HAProxy infrastructure.
+
+| Field | Type | Required | Description | Default |
+|-------|------|----------|-------------|---------|
+| `create_routes` | boolean | ❌ | Create OpenShift Route resources for external access | `false` |
+| `domain` | string | ❌ | OpenShift apps domain for route hostnames | Auto-detected from cluster |
+| `tls_termination` | string | ❌ | TLS termination mode: `edge`, `passthrough`, or `reencrypt` | `edge` |
+
+**Example:**
+```yaml
+deployment:
+  type: kubernetes
+  namespace: mcp-gateway-test
+  openshift:
+    create_routes: true
+    domain: apps-crc.testing
+    tls_termination: edge
+```
+
+When `create_routes: true`, the tool generates an OpenShift Route for the gateway:
+- **Host**: `mcpgateway-admin-{namespace}.{domain}`
+- **Path**: `/`
+- **TLS**: Edge termination (default)
+- **Target**: Gateway service on HTTP port
+
+**Access the gateway:**
+```bash
+# OpenShift Local (CRC) example
+https://mcpgateway-admin-mcp-gateway-test.apps-crc.testing
+```
+
+**Domain auto-detection:**
+If `domain` is not specified, the tool attempts to auto-detect the OpenShift apps domain from the cluster:
+```bash
+kubectl get ingresses.config.openshift.io cluster -o jsonpath='{.spec.domain}'
+```
+
+If auto-detection fails, it defaults to `apps-crc.testing` (OpenShift Local).
 
 ---
 

@@ -12,6 +12,23 @@ from typing import Any, Dict, List, Literal, Optional
 from pydantic import BaseModel, ConfigDict, Field, field_validator
 
 
+class OpenShiftConfig(BaseModel):
+    """OpenShift-specific configuration.
+
+    Routes are OpenShift's native way of exposing services externally (predates Kubernetes Ingress).
+    They provide built-in TLS termination and are integrated with OpenShift's router/HAProxy infrastructure.
+
+    Attributes:
+        create_routes: Create OpenShift Route resources for external access (default: False)
+        domain: OpenShift apps domain for route hostnames (default: auto-detected from cluster)
+        tls_termination: TLS termination mode - edge, passthrough, or reencrypt (default: edge)
+    """
+
+    create_routes: bool = Field(False, description="Create OpenShift Route resources")
+    domain: Optional[str] = Field(None, description="OpenShift apps domain (e.g., apps-crc.testing)")
+    tls_termination: Literal["edge", "passthrough", "reencrypt"] = Field("edge", description="TLS termination mode")
+
+
 class DeploymentConfig(BaseModel):
     """Deployment configuration"""
 
@@ -19,6 +36,7 @@ class DeploymentConfig(BaseModel):
     container_engine: Optional[str] = Field(default=None, description="Container engine: 'podman', 'docker', or full path (e.g., '/opt/podman/bin/podman')")
     project_name: Optional[str] = Field(None, description="Project name for compose")
     namespace: Optional[str] = Field(None, description="Namespace for Kubernetes")
+    openshift: Optional[OpenShiftConfig] = Field(None, description="OpenShift-specific configuration")
 
 
 class RegistryConfig(BaseModel):

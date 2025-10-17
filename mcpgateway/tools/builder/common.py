@@ -382,6 +382,37 @@ def generate_kubernetes_manifests(config: MCPStackConfig, output_dir: Path, verb
     gateway_manifest = gateway_template.render(**gateway_dict)
     (output_dir / "gateway-deployment.yaml").write_text(gateway_manifest)
 
+    # Generate OpenShift Route if configured
+    if config.deployment.openshift and config.deployment.openshift.create_routes:
+        route_template = env.get_template("route.yaml.j2")
+        openshift_config = config.deployment.openshift
+
+        # Auto-detect OpenShift apps domain if not specified
+        openshift_domain = openshift_config.domain
+        if not openshift_domain:
+            try:
+                # Try to get domain from OpenShift cluster info
+                result = subprocess.run(["kubectl", "get", "ingresses.config.openshift.io", "cluster", "-o", "jsonpath={.spec.domain}"], capture_output=True, text=True, check=False)
+                if result.returncode == 0 and result.stdout.strip():
+                    openshift_domain = result.stdout.strip()
+                    if verbose:
+                        console.print(f"[dim]Auto-detected OpenShift domain: {openshift_domain}[/dim]")
+                else:
+                    # Fallback to common OpenShift Local domain
+                    openshift_domain = "apps-crc.testing"
+                    if verbose:
+                        console.print(f"[yellow]Could not auto-detect OpenShift domain, using default: {openshift_domain}[/yellow]")
+            except Exception:
+                # Fallback to common OpenShift Local domain
+                openshift_domain = "apps-crc.testing"
+                if verbose:
+                    console.print(f"[yellow]Could not auto-detect OpenShift domain, using default: {openshift_domain}[/yellow]")
+
+        route_manifest = route_template.render(namespace=namespace, openshift_domain=openshift_domain, tls_termination=openshift_config.tls_termination)
+        (output_dir / "gateway-route.yaml").write_text(route_manifest)
+        if verbose:
+            print("  ✓ OpenShift Route manifest generated")
+
     # Generate plugin deployments
     for plugin in config.plugins:
         # Convert Pydantic model to dict for template rendering
@@ -755,6 +786,7 @@ def deploy_kubernetes(manifests_dir: Path, verbose: bool = False) -> None:
     2. Certificate resources (secrets or cert-manager CRDs)
     3. ConfigMaps (plugins configuration)
     4. Infrastructure (PostgreSQL, Redis)
+    5. OpenShift Routes (if configured)
 
     Excludes plugins-config.yaml (not a Kubernetes resource).
 
@@ -821,6 +853,17 @@ def deploy_kubernetes(manifests_dir: Path, verbose: bool = False) -> None:
                 console.print(result.stdout)
             if result.returncode != 0:
                 raise RuntimeError(f"kubectl apply failed: {result.stderr}")
+
+    # 5. Apply OpenShift Routes (if configured)
+    gateway_route = manifests_dir / "gateway-route.yaml"
+    if gateway_route.exists():
+        result = subprocess.run(["kubectl", "apply", "-f", str(gateway_route)], capture_output=True, text=True, check=False)
+        if result.stdout and verbose:
+            console.print(result.stdout)
+        if result.returncode != 0:
+            # Don't fail on Route errors (may not be on OpenShift)
+            if verbose:
+                console.print(f"[yellow]Warning: Could not apply Route (may not be on OpenShift): {result.stderr}[/yellow]")
 
     console.print("[green]✓ Deployed to Kubernetes[/green]")
 

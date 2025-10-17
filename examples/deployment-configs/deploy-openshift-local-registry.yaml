@@ -18,6 +18,10 @@ deployment:
   type: kubernetes
   namespace: mcp-gateway-test
   container_engine: podman
+  openshift:
+    create_routes: true
+    domain: apps-crc.testing  # Optional, auto-detected if omitted
+    tls_termination: edge
 
 # MCP Gateway configuration
 gateway:
