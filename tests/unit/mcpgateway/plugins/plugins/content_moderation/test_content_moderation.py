@@ -11,12 +11,13 @@ from unittest.mock import AsyncMock, MagicMock, patch
 
 import pytest
 
-from mcpgateway.plugins.framework.models import (
+from mcpgateway.plugins.framework import (
     GlobalContext,
-    HookType,
     PluginConfig,
     PluginContext,
     PluginViolation,
+    PromptHookType,
+    ToolHookType,
     PromptPrehookPayload,
     ToolPreInvokePayload,
     ToolPostInvokePayload,
@@ -63,7 +64,7 @@ def _create_plugin(config_dict=None) -> ContentModerationPlugin:
         PluginConfig(
             name="content_moderation_test",
             kind="plugins.content_moderation.content_moderation.ContentModerationPlugin",
-            hooks=[HookType.PROMPT_PRE_FETCH, HookType.TOOL_PRE_INVOKE],
+            hooks=[PromptHookType.PROMPT_PRE_FETCH, ToolHookType.TOOL_PRE_INVOKE],
             config=default_config,
         )
     )
@@ -112,7 +113,7 @@ class TestContentModerationPlugin:
         plugin = _create_plugin()
 
         payload = PromptPrehookPayload(
-            name="test_prompt",
+            prompt_id="test_prompt",
             args={
                 "query": "This is a test query",
                 "context": "Additional context",
@@ -319,7 +320,7 @@ class TestContentModerationPlugin:
         ))
 
         payload = PromptPrehookPayload(
-            name="test_prompt",
+            prompt_id="test_prompt",
             args={"query": "hateful content here"}
         )
 
@@ -347,7 +348,7 @@ class TestContentModerationPlugin:
         ))
 
         payload = PromptPrehookPayload(
-            name="test_prompt",
+            prompt_id="test_prompt",
             args={"query": "some bad words"}
         )
 
@@ -454,7 +455,7 @@ class TestContentModerationPlugin:
         plugin._moderate_content = AsyncMock(side_effect=Exception("All services down"))
 
         payload = PromptPrehookPayload(
-            name="test_prompt",
+            prompt_id="test_prompt",
             args={"query": "test content"}
         )
 
@@ -502,7 +503,7 @@ class TestContentModerationPlugin:
         ))
 
         payload = PromptPrehookPayload(
-            name="test_prompt",
+            prompt_id="test_prompt",
             args={"query": "test content"}
         )
 
@@ -537,7 +538,7 @@ class TestContentModerationPlugin:
         context = _create_context()
 
         payload = PromptPrehookPayload(
-            name="test_prompt",
+            prompt_id="test_prompt",
             args={"query": "content with multiple violations"}
         )
 

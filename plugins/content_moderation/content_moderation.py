@@ -178,13 +178,26 @@ class ContentModerationPlugin(Plugin):
     """Plugin for advanced content moderation using multiple AI providers."""
 
     def __init__(self, config: PluginConfig) -> None:
+        """Initialize content moderation plugin with configuration.
+
+        Args:
+            config: Plugin configuration containing moderation settings.
+        """
         super().__init__(config)
         self._cfg = ContentModerationConfig(**(config.config or {}))
         self._client = httpx.AsyncClient()
         self._cache: Dict[str, ModerationResult] = {} if self._cfg.enable_caching else None
 
     async def _get_cache_key(self, text: str, provider: ModerationProvider) -> str:
-        """Generate cache key for content."""
+        """Generate cache key for content.
+
+        Args:
+            text: Content text to generate key for.
+            provider: Moderation provider being used.
+
+        Returns:
+            Cache key string.
+        """
         # Standard
         import hashlib
 
@@ -192,7 +205,15 @@ class ContentModerationPlugin(Plugin):
         return f"{provider.value}:{content_hash}"
 
     async def _get_cached_result(self, text: str, provider: ModerationProvider) -> Optional[ModerationResult]:
-        """Get cached moderation result."""
+        """Get cached moderation result.
+
+        Args:
+            text: Content text to check cache for.
+            provider: Moderation provider being used.
+
+        Returns:
+            Cached moderation result if available, None otherwise.
+        """
         if not self._cfg.enable_caching or not self._cache:
             return None
 
@@ -200,7 +221,13 @@ class ContentModerationPlugin(Plugin):
         return self._cache.get(cache_key)
 
     async def _cache_result(self, text: str, provider: ModerationProvider, result: ModerationResult) -> None:
-        """Cache moderation result."""
+        """Cache moderation result.
+
+        Args:
+            text: Content text being cached.
+            provider: Moderation provider being used.
+            result: Moderation result to cache.
+        """
         if not self._cfg.enable_caching or not self._cache:
             return
 
@@ -208,7 +235,18 @@ class ContentModerationPlugin(Plugin):
         self._cache[cache_key] = result
 
     async def _moderate_with_ibm_watson(self, text: str) -> ModerationResult:
-        """Moderate content using IBM Watson Natural Language Understanding."""
+        """Moderate content using IBM Watson Natural Language Understanding.
+
+        Args:
+            text: Content text to moderate.
+
+        Returns:
+            Moderation result from IBM Watson.
+
+        Raises:
+            ValueError: If IBM Watson configuration not provided.
+            Exception: If API call fails.
+        """
         if not self._cfg.ibm_watson:
             raise ValueError("IBM Watson configuration not provided")
 
@@ -279,7 +317,18 @@ class ContentModerationPlugin(Plugin):
             raise
 
     async def _moderate_with_ibm_granite(self, text: str) -> ModerationResult:
-        """Moderate content using IBM Granite Guardian via Ollama."""
+        """Moderate content using IBM Granite Guardian via Ollama.
+
+        Args:
+            text: Content text to moderate.
+
+        Returns:
+            Moderation result from IBM Granite.
+
+        Raises:
+            ValueError: If IBM Granite configuration not provided.
+            Exception: If API call fails.
+        """
         if not self._cfg.ibm_granite:
             raise ValueError("IBM Granite configuration not provided")
 
@@ -346,7 +395,18 @@ Respond with JSON format:
             raise
 
     async def _moderate_with_openai(self, text: str) -> ModerationResult:
-        """Moderate content using OpenAI Moderation API."""
+        """Moderate content using OpenAI Moderation API.
+
+        Args:
+            text: Content text to moderate.
+
+        Returns:
+            Moderation result from OpenAI.
+
+        Raises:
+            ValueError: If OpenAI configuration not provided.
+            Exception: If API call fails.
+        """
         if not self._cfg.openai:
             raise ValueError("OpenAI configuration not provided")
 
@@ -408,7 +468,15 @@ Respond with JSON format:
             raise
 
     async def _apply_moderation_action(self, text: str, result: ModerationResult) -> str:
-        """Apply the moderation action to the text."""
+        """Apply the moderation action to the text.
+
+        Args:
+            text: Original content text.
+            result: Moderation result with action to apply.
+
+        Returns:
+            Modified text based on moderation action.
+        """
         if result.action == ModerationAction.BLOCK:
             return ""  # Empty content
         elif result.action == ModerationAction.REDACT:
@@ -427,7 +495,14 @@ Respond with JSON format:
             return text  # Return original text
 
     async def _moderate_content(self, text: str) -> ModerationResult:
-        """Moderate content using the configured provider."""
+        """Moderate content using the configured provider.
+
+        Args:
+            text: Content text to moderate.
+
+        Returns:
+            Moderation result from the configured provider.
+        """
         if len(text) > self._cfg.max_text_length:
             text = text[: self._cfg.max_text_length]
 
@@ -477,7 +552,14 @@ Respond with JSON format:
         return result
 
     async def _moderate_with_patterns(self, text: str) -> ModerationResult:
-        """Fallback moderation using regex patterns."""
+        """Fallback moderation using regex patterns.
+
+        Args:
+            text: Content text to moderate.
+
+        Returns:
+            Moderation result based on pattern matching.
+        """
         categories = {}
 
         # Basic pattern matching for different categories
@@ -518,11 +600,23 @@ Respond with JSON format:
                     break
 
         return ModerationResult(
-            flagged=flagged, categories=categories, action=action, provider=ModerationProvider.IBM_WATSON, confidence=max_score, details={"method": "pattern_matching"}  # Default fallback
+            flagged=flagged,
+            categories=categories,
+            action=action,
+            provider=ModerationProvider.IBM_WATSON,
+            confidence=max_score,
+            details={"method": "pattern_matching"},  # Default fallback
         )
 
     async def _extract_text_content(self, payload: Any) -> List[str]:
-        """Extract text content from various payload types."""
+        """Extract text content from various payload types.
+
+        Args:
+            payload: Payload to extract text from.
+
+        Returns:
+            List of extracted text strings.
+        """
         texts = []
 
         if hasattr(payload, "args") and payload.args:
@@ -540,8 +634,16 @@ Respond with JSON format:
 
         return [text for text in texts if len(text.strip()) > 3]  # Filter very short texts
 
-    async def prompt_pre_fetch(self, payload: PromptPrehookPayload, context: PluginContext) -> PromptPrehookResult:
-        """Moderate prompt content before fetching."""
+    async def prompt_pre_fetch(self, payload: PromptPrehookPayload, _context: PluginContext) -> PromptPrehookResult:
+        """Moderate prompt content before fetching.
+
+        Args:
+            payload: Prompt payload to moderate.
+            _context: Plugin context (unused).
+
+        Returns:
+            Result indicating whether to continue processing.
+        """
         texts = await self._extract_text_content(payload)
 
         for text in texts:
@@ -550,7 +652,7 @@ Respond with JSON format:
 
                 if self._cfg.audit_decisions:
                     logger.info(
-                        f"Content moderation - Prompt: {payload.name}, Result: {result.flagged}, " f"Action: {result.action}, Provider: {result.provider}, " f"Confidence: {result.confidence:.2f}"
+                        f"Content moderation - Prompt: {payload.prompt_id}, Result: {result.flagged}, Action: {result.action}, Provider: {result.provider}, Confidence: {result.confidence:.2f}"
                     )
 
                 if result.action == ModerationAction.BLOCK:
@@ -567,15 +669,15 @@ Respond with JSON format:
                                 "flagged_text_preview": text[:100] + "..." if len(text) > 100 else text,
                             },
                         ),
-                        metadata={"moderation_result": result.dict(), "provider": result.provider.value},
+                        metadata={"moderation_result": result.model_dump(), "provider": result.provider.value},
                     )
                 elif result.modified_content:
                     # Modify the payload with redacted/transformed content
-                    modified_payload = PromptPrehookPayload(name=payload.name, args={k: result.modified_content if v == text else v for k, v in payload.args.items()})
+                    modified_payload = PromptPrehookPayload(prompt_id=payload.prompt_id, args={k: result.modified_content if v == text else v for k, v in payload.args.items()})
                     return PromptPrehookResult(modified_payload=modified_payload, metadata={"moderation_result": result.dict(), "content_modified": True})
 
             except Exception as e:
-                logger.error(f"Content moderation failed for prompt {payload.name}: {e}")
+                logger.error(f"Content moderation failed for prompt {payload.prompt_id}: {e}")
                 if self._cfg.fallback_on_error == ModerationAction.BLOCK:
                     return PromptPrehookResult(
                         continue_processing=False,
@@ -584,8 +686,16 @@ Respond with JSON format:
 
         return PromptPrehookResult()
 
-    async def tool_pre_invoke(self, payload: ToolPreInvokePayload, context: PluginContext) -> ToolPreInvokeResult:
-        """Moderate tool arguments before invocation."""
+    async def tool_pre_invoke(self, payload: ToolPreInvokePayload, _context: PluginContext) -> ToolPreInvokeResult:
+        """Moderate tool arguments before invocation.
+
+        Args:
+            payload: Tool invocation payload to moderate.
+            _context: Plugin context (unused).
+
+        Returns:
+            Result indicating whether to continue processing.
+        """
         texts = await self._extract_text_content(payload)
 
         for text in texts:
@@ -593,7 +703,7 @@ Respond with JSON format:
                 result = await self._moderate_content(text)
 
                 if self._cfg.audit_decisions:
-                    logger.info(f"Content moderation - Tool: {payload.name}, Result: {result.flagged}, " f"Action: {result.action}, Provider: {result.provider}")
+                    logger.info(f"Content moderation - Tool: {payload.name}, Result: {result.flagged}, Action: {result.action}, Provider: {result.provider}")
 
                 if result.action == ModerationAction.BLOCK:
                     return ToolPreInvokeResult(
@@ -623,8 +733,16 @@ Respond with JSON format:
 
         return ToolPreInvokeResult(metadata={"moderation_checked": True})
 
-    async def tool_post_invoke(self, payload: ToolPostInvokePayload, context: PluginContext) -> ToolPostInvokeResult:
-        """Moderate tool output after invocation."""
+    async def tool_post_invoke(self, payload: ToolPostInvokePayload, _context: PluginContext) -> ToolPostInvokeResult:
+        """Moderate tool output after invocation.
+
+        Args:
+            payload: Tool result payload to moderate.
+            _context: Plugin context (unused).
+
+        Returns:
+            Result indicating whether to continue processing.
+        """
         # Extract text from tool results
         result_text = ""
         if hasattr(payload.result, "content"):
@@ -671,10 +789,14 @@ Respond with JSON format:
         return ToolPostInvokeResult(metadata={"output_checked": True})
 
     async def __aenter__(self):
-        """Async context manager entry."""
+        """Async context manager entry.
+
+        Returns:
+            ContentModerationPlugin: The plugin instance.
+        """
         return self
 
-    async def __aexit__(self, exc_type, exc_val, exc_tb):
+    async def __aexit__(self, _exc_type, _exc_val, _exc_tb):
         """Async context manager exit - cleanup HTTP client."""
         if hasattr(self, "_client"):
             await self._client.aclose()

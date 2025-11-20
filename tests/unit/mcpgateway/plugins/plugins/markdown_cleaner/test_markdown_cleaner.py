@@ -9,12 +9,12 @@ Tests for MarkdownCleanerPlugin.
 
 import pytest
 
-from mcpgateway.models import Message, PromptResult, TextContent
-from mcpgateway.plugins.framework.models import (
+from mcpgateway.common.models import Message, PromptResult, TextContent
+from mcpgateway.plugins.framework import (
     GlobalContext,
-    HookType,
     PluginConfig,
     PluginContext,
+    PromptHookType,
     PromptPosthookPayload,
 )
 from plugins.markdown_cleaner.markdown_cleaner import MarkdownCleanerPlugin
@@ -26,12 +26,12 @@ async def test_cleans_markdown_prompt():
         PluginConfig(
             name="mdclean",
             kind="plugins.markdown_cleaner.markdown_cleaner.MarkdownCleanerPlugin",
-            hooks=[HookType.PROMPT_POST_FETCH],
+            hooks=[PromptHookType.PROMPT_POST_FETCH],
         )
     )
     txt = "#Heading\n\n\n* item\n\n```\n\n```\n"
     pr = PromptResult(messages=[Message(role="assistant", content=TextContent(type="text", text=txt))])
-    payload = PromptPosthookPayload(name="p", result=pr)
+    payload = PromptPosthookPayload(prompt_id="p", result=pr)
     ctx = PluginContext(global_context=GlobalContext(request_id="r1"))
     res = await plugin.prompt_post_fetch(payload, ctx)
     assert res.modified_payload is not None

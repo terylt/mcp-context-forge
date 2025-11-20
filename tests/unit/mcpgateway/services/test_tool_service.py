@@ -19,12 +19,12 @@ import pytest
 from sqlalchemy.exc import IntegrityError
 
 # First-Party
-from mcpgateway.db import A2AAgent as DbA2AAgent
 from mcpgateway.db import Gateway as DbGateway
 from mcpgateway.db import Tool as DbTool
-from mcpgateway.plugins.framework import PluginError, PluginErrorModel, PluginViolationError, PluginManager
+from mcpgateway.plugins.framework import PluginManager
 from mcpgateway.schemas import AuthenticationValues, ToolCreate, ToolRead, ToolUpdate
 from mcpgateway.services.tool_service import (
+    extract_using_jq,
     TextContent,
     ToolError,
     ToolInvocationError,
@@ -69,6 +69,10 @@ def mock_gateway():
     gw.transport = "sse"
     gw.auth_type = None
     gw.auth_value = {}
+    gw.passthrough_headers = []
+    gw.ca_certificate = None
+    gw.ca_certificate_sig = None
+    gw.signing_algorithm = None
 
     gw.enabled = True
     gw.reachable = True
@@ -76,7 +80,7 @@ def mock_gateway():
 
 
 @pytest.fixture
-def mock_tool():
+def mock_tool(mock_gateway):
     """Create a mock tool model."""
     tool = MagicMock(spec=DbTool)
     tool.id = "1"
@@ -87,6 +91,7 @@ def mock_tool():
     tool.request_type = "SSE"
     tool.headers = {"Content-Type": "application/json"}
     tool.input_schema = {"type": "object", "properties": {"param": {"type": "string"}}}
+    tool.output_schema = None
     tool.jsonpath_filter = ""
     tool.created_at = "2023-01-01T00:00:00"
     tool.updated_at = "2023-01-01T00:00:00"
@@ -115,7 +120,7 @@ def mock_tool():
     tool.annotations = {}
     tool.gateway_slug = "test-gateway"
     tool.name = "test-gateway-test-tool"
-    tool.custom_name="test_tool"
+    tool.custom_name = "test_tool"
     tool.custom_name_slug = "test-tool"
     tool.display_name = None
     tool.tags = []
@@ -146,6 +151,7 @@ def mock_tool():
 
 from mcpgateway.services.tool_service import ToolNameConflictError
 
+
 class TestToolService:
     """Tests for the ToolService class."""
 
@@ -171,7 +177,7 @@ class TestToolService:
     async def test_convert_tool_to_read_basic_auth(self, tool_service, mock_tool):
         """Check auth for basic auth"""
 
-            # Build Authorization header with base64 encoded user:password
+        # Build Authorization header with base64 encoded user:password
         creds = base64.b64encode(b"test_user:test_password").decode()
         auth_dict = {"Authorization": f"Basic {creds}"}
 
@@ -182,8 +188,8 @@ class TestToolService:
         # Create auth_value with the following values
         # user = "test_user"
         # password = "test_password"
-        #mock_tool.auth_value = "FpZyxAu5PVpT0FN-gJ0JUmdovCMS0emkwW1Vb8HvkhjiBZhj1gDgDRF1wcWNrjTJSLtkz1rLzKibXrhk4GbxXnV6LV4lSw_JDYZ2sPNRy68j_UKOJnf_"
-        #mock_tool.auth_value = encode_auth({"user": "test_user", "password": "test_password"})
+        # mock_tool.auth_value = "FpZyxAu5PVpT0FN-gJ0JUmdovCMS0emkwW1Vb8HvkhjiBZhj1gDgDRF1wcWNrjTJSLtkz1rLzKibXrhk4GbxXnV6LV4lSw_JDYZ2sPNRy68j_UKOJnf_"
+        # mock_tool.auth_value = encode_auth({"user": "test_user", "password": "test_password"})
         tool_read = tool_service._convert_tool_to_read(mock_tool)
 
         assert tool_read.auth.auth_type == "basic"
@@ -210,7 +216,7 @@ class TestToolService:
         mock_tool.auth_type = "authheaders"
         # Create auth_value with the following values
         # {"test-api-key": "test-api-value"}
-        #mock_tool.auth_value = "8pvPTCegaDhrx0bmBf488YvGg9oSo4cJJX68WCTvxjMY-C2yko_QSPGVggjjNt59TPvlGLsotTZvAiewPRQ"
+        # mock_tool.auth_value = "8pvPTCegaDhrx0bmBf488YvGg9oSo4cJJX68WCTvxjMY-C2yko_QSPGVggjjNt59TPvlGLsotTZvAiewPRQ"
         mock_tool.auth_value = encode_auth({"test-api-key": "test-api-value"})
         tool_read = tool_service._convert_tool_to_read(mock_tool)
 
@@ -380,7 +386,7 @@ class TestToolService:
             request_type="POST",
             visibility="team",
             team_id="team123",
-            owner_email="user@example.com"
+            owner_email="user@example.com",
         )
         test_db.commit = Mock()
         with pytest.raises(ToolNameConflictError) as exc_info:
@@ -441,7 +447,7 @@ class TestToolService:
         mock_scalar.scalar_one_or_none.return_value = None
         test_db.execute = Mock(return_value=mock_scalar)
         test_db.add = Mock()
-        #test_db.commit = Mock(side_effect=IntegrityError("statement", "params", "orig"))
+        # test_db.commit = Mock(side_effect=IntegrityError("statement", "params", "orig"))
         test_db.commit = Mock(side_effect=IntegrityError("UNIQUE constraint failed: tools.name, owner_email", None, None))
 
         test_db.rollback = Mock()
@@ -509,12 +515,11 @@ class TestToolService:
                 "avg_response_time": None,
                 "last_execution_time": None,
             },
-
         )
         tool_service._convert_tool_to_read = Mock(return_value=tool_read)
 
         # Call method
-        result = await tool_service.list_tools(test_db)
+        result, next_cursor = await tool_service.list_tools(test_db)
 
         # Verify DB query: should be called twice
         assert test_db.execute.call_count == 2
@@ -522,6 +527,7 @@ class TestToolService:
         # Verify result
         assert len(result) == 1
         assert result[0] == tool_read
+        assert next_cursor is None  # No pagination needed for single result
         tool_service._convert_tool_to_read.assert_called_once_with(mock_tool)
 
     @pytest.mark.asyncio
@@ -568,12 +574,12 @@ class TestToolService:
                 "last_execution_time": None,
             },
             customName="test_tool",
-            customNameSlug="test-tool"
+            customNameSlug="test-tool",
         )
         tool_service._convert_tool_to_read = Mock(return_value=tool_read)
 
         # Call method
-        result = await tool_service.list_tools(test_db, include_inactive=True)
+        result, _ = await tool_service.list_tools(test_db, include_inactive=True)
 
         # Verify DB query: should be called twice
         assert test_db.execute.call_count == 2
@@ -656,7 +662,7 @@ class TestToolService:
                 "last_execution_time": None,
             },
             customName="test_tool",
-            customNameSlug="test-tool"
+            customNameSlug="test-tool",
         )
         tool_service._convert_tool_to_read = Mock(return_value=tool_read)
 
@@ -761,7 +767,6 @@ class TestToolService:
                 "avg_response_time": None,
                 "last_execution_time": None,
             },
-
         )
         tool_service._convert_tool_to_read = Mock(return_value=tool_read)
 
@@ -794,7 +799,7 @@ class TestToolService:
         with pytest.raises(ToolError) as exc:
             await tool_service.toggle_tool_status(test_db, "1", activate=False, reachable=True)
 
-        assert f"Tool not found: 1" in str(exc.value)
+        assert "Tool not found: 1" in str(exc.value)
 
         # Verify DB operations
         test_db.get.assert_called_once_with(DbTool, "1")
@@ -1115,8 +1120,8 @@ class TestToolService:
         # Mock DB get to return None
         mock_tool.id = "999"
         test_db.get = Mock(return_value=mock_tool)
-        test_db.commit = AsyncMock()
-        test_db.refresh = AsyncMock()
+        test_db.commit = Mock()  # SQLAlchemy commit is synchronous
+        test_db.refresh = Mock()  # SQLAlchemy refresh is synchronous
 
         # Create update request
         tool_update = ToolUpdate(integration_type="REST", request_type="POST", headers={"key": "value"}, input_schema={"key2": "value2"}, annotations={"key3": "value3"}, jsonpath_filter="test_filter")
@@ -1137,8 +1142,8 @@ class TestToolService:
         # Mock DB get to return None
         mock_tool.id = "999"
         test_db.get = Mock(return_value=mock_tool)
-        test_db.commit = AsyncMock()
-        test_db.refresh = AsyncMock()
+        test_db.commit = Mock()  # SQLAlchemy commit is synchronous
+        test_db.refresh = Mock()  # SQLAlchemy refresh is synchronous
 
         # Basic auth_value
         # Create auth_value with the following values
@@ -1147,7 +1152,7 @@ class TestToolService:
         creds = base64.b64encode(b"test_user:test_password").decode()
         auth_dict = {"Authorization": f"Basic {creds}"}
         basic_auth_value = encode_auth(auth_dict)
-        #basic_auth_value = "FpZyxAu5PVpT0FN-gJ0JUmdovCMS0emkwW1Vb8HvkhjiBZhj1gDgDRF1wcWNrjTJSLtkz1rLzKibXrhk4GbxXnV6LV4lSw_JDYZ2sPNRy68j_UKOJnf_"
+        # basic_auth_value = "FpZyxAu5PVpT0FN-gJ0JUmdovCMS0emkwW1Vb8HvkhjiBZhj1gDgDRF1wcWNrjTJSLtkz1rLzKibXrhk4GbxXnV6LV4lSw_JDYZ2sPNRy68j_UKOJnf_"
 
         # Create update request
         tool_update = ToolUpdate(auth=AuthenticationValues(auth_type="basic", auth_value=basic_auth_value))
@@ -1163,8 +1168,8 @@ class TestToolService:
         # Mock DB get to return None
         mock_tool.id = "999"
         test_db.get = Mock(return_value=mock_tool)
-        test_db.commit = AsyncMock()
-        test_db.refresh = AsyncMock()
+        test_db.commit = Mock()  # SQLAlchemy commit is synchronous
+        test_db.refresh = Mock()  # SQLAlchemy refresh is synchronous
 
         # Bearer auth_value
         # Create auth_value with the following values
@@ -1184,8 +1189,8 @@ class TestToolService:
         # Mock DB get to return None
         mock_tool.id = "999"
         test_db.get = Mock(return_value=mock_tool)
-        test_db.commit = AsyncMock()
-        test_db.refresh = AsyncMock()
+        test_db.commit = Mock()  # SQLAlchemy commit is synchronous
+        test_db.refresh = Mock()  # SQLAlchemy refresh is synchronous
 
         # Create update request
         tool_update = ToolUpdate(auth=AuthenticationValues())
@@ -1244,7 +1249,7 @@ class TestToolService:
 
         # --------------- HTTP ------------------
         mock_response = AsyncMock()
-        mock_response.raise_for_status = AsyncMock()
+        mock_response.raise_for_status = Mock()  # HTTP response raise_for_status is synchronous
         mock_response.status_code = 200
         # <-- make json() *synchronous*
         mock_response.json = Mock(return_value={"result": "REST tool response"})
@@ -1269,7 +1274,7 @@ class TestToolService:
 
         # Test 204 status
         mock_response = AsyncMock()
-        mock_response.raise_for_status = AsyncMock()
+        mock_response.raise_for_status = Mock()  # HTTP response raise_for_status is synchronous
         mock_response.status_code = 204
         mock_response.json = Mock(return_value=ToolResult(content=[TextContent(type="text", text="Request completed successfully (No Content)")]))
 
@@ -1285,7 +1290,7 @@ class TestToolService:
 
         # Test 205 status
         mock_response = AsyncMock()
-        mock_response.raise_for_status = AsyncMock()
+        mock_response.raise_for_status = Mock()  # HTTP response raise_for_status is synchronous
         mock_response.status_code = 205
         mock_response.json = Mock(return_value=ToolResult(content=[TextContent(type="text", text="Tool error encountered")]))
 
@@ -1315,7 +1320,7 @@ class TestToolService:
 
         # Mock HTTP client response
         mock_response = AsyncMock()
-        mock_response.raise_for_status = AsyncMock()
+        mock_response.raise_for_status = Mock()  # HTTP response raise_for_status is synchronous
         mock_response.status_code = 200
         mock_response.json = Mock(return_value={"result": "REST tool response"})  # Make json() synchronous
         tool_service._http_client.request.return_value = mock_response
@@ -1325,7 +1330,7 @@ class TestToolService:
 
         # Mock decode_auth to return empty dict when auth_value is None
         # Mock extract_using_jq to return the input unmodified when filter is empty
-        with patch("mcpgateway.services.tool_service.decode_auth", return_value={}), patch("mcpgateway.config.extract_using_jq", return_value={"result": "REST tool response"}):
+        with patch("mcpgateway.services.tool_service.decode_auth", return_value={}), patch("mcpgateway.services.tool_service.extract_using_jq", return_value={"result": "REST tool response"}):
             # Invoke tool
             result = await tool_service.invoke_tool(test_db, "test_tool", {"param": "value"}, request_headers=None)
 
@@ -1419,9 +1424,9 @@ class TestToolService:
             reachable=True,
             auth_type="bearer",  #  ←← attribute your error complained about
             auth_value="Bearer abc123",
-            capabilities = {"prompts": {"listChanged": True}, "resources": {"listChanged": True}, "tools": {"listChanged": True}},
-            transport = "STREAMABLEHTTP",
-            passthrough_headers = [],
+            capabilities={"prompts": {"listChanged": True}, "resources": {"listChanged": True}, "tools": {"listChanged": True}},
+            transport="STREAMABLEHTTP",
+            passthrough_headers=[],
         )
         # Configure tool as REST
         mock_tool.integration_type = "MCP"
@@ -1522,9 +1527,9 @@ class TestToolService:
             reachable=True,
             auth_type="bearer",  #  ←← attribute your error complained about
             auth_value="Bearer abc123",
-            capabilities = {"prompts": {"listChanged": True}, "resources": {"listChanged": True}, "tools": {"listChanged": True}},
-            transport = "STREAMABLEHTTP",
-            passthrough_headers = [],
+            capabilities={"prompts": {"listChanged": True}, "resources": {"listChanged": True}, "tools": {"listChanged": True}},
+            transport="STREAMABLEHTTP",
+            passthrough_headers=[],
         )
         # Configure tool as REST
         mock_tool.integration_type = "MCP"
@@ -1621,8 +1626,7 @@ class TestToolService:
         # Create auth_value with the following values
         # user = "test_user"
         # password = "test_password"
-        basic_auth_value = encode_auth({
-        "Authorization": "Basic " + base64.b64encode(b"test_user:test_password").decode()})
+        basic_auth_value = encode_auth({"Authorization": "Basic " + base64.b64encode(b"test_user:test_password").decode()})
 
         # Configure tool as REST
         mock_tool.integration_type = "MCP"
@@ -1640,15 +1644,38 @@ class TestToolService:
         mock_scalar_1 = Mock()
         mock_scalar_1.scalar_one_or_none.return_value = mock_tool
 
-        mock_scalar_2 = Mock()
         mock_gateway.auth_type = "basic"
         mock_gateway.auth_value = basic_auth_value
         mock_gateway.enabled = True
         mock_gateway.reachable = True
         mock_gateway.id = mock_tool.gateway_id
-        mock_scalar_2.scalar_one_or_none.return_value = mock_gateway
+        mock_gateway.slug="test-gateway"
+        mock_gateway.capabilities = {"tools": {"listChanged": True}}
+        mock_gateway.transport = "SSE"
+        mock_gateway.passthrough_headers = []
 
-        test_db.execute = Mock(side_effect=[mock_scalar_1, mock_scalar_1, mock_scalar_2])
+        # Ensure the service reads headers from the gateway attached to the tool
+        # The invoke path uses `gateway = tool.gateway` for auth header calculation
+        mock_tool.gateway = mock_gateway
+
+        # Two DB selects occur in this path: first for tool, then for gateway
+        # Return the tool on first call and the gateway on second call
+        returns = [mock_tool, mock_gateway]
+
+        def execute_side_effect(*_args, **_kwargs):
+            if returns:
+                value = returns.pop(0)
+            else:
+                value = mock_gateway
+
+            # Return an object whose scalar_one_or_none() returns the real value
+            class Result:
+                def scalar_one_or_none(self_inner):
+                    return value
+
+            return Result()
+
+        test_db.execute = Mock(side_effect=execute_side_effect)
 
         expected_result = ToolResult(content=[TextContent(type="text", text="MCP response")])
 
@@ -1685,6 +1712,7 @@ class TestToolService:
         sse_client_mock.assert_called_once_with(
             url=mock_gateway.url,
             headers={"Authorization": "Basic dGVzdF91c2VyOnRlc3RfcGFzc3dvcmQ="},
+            httpx_client_factory=ANY,
         )
 
     @pytest.mark.asyncio
@@ -1772,7 +1800,7 @@ class TestToolService:
                     tool_id=mock_tool.id,
                     response_time=5.0,  # 105.0 - 100.0
                     is_success=True,
-                    error_message=None
+                    error_message=None,
                 )
 
                 # Verify DB operations
@@ -1796,12 +1824,7 @@ class TestToolService:
                 await tool_service._record_tool_metric(mock_db, mock_tool, start_time, success, error_message)
 
                 # Verify ToolMetric was created with error data
-                MockToolMetric.assert_called_once_with(
-                    tool_id=mock_tool.id,
-                    response_time=2.5,
-                    is_success=False,
-                    error_message="Connection timeout"
-                )
+                MockToolMetric.assert_called_once_with(tool_id=mock_tool.id, response_time=2.5, is_success=False, error_message="Connection timeout")
 
                 mock_db.add.assert_called_once_with(mock_metric_instance)
                 mock_db.commit.assert_called_once()
@@ -1814,13 +1837,13 @@ class TestToolService:
         # Create a mock that returns scalar values
         mock_execute_result = MagicMock()
         mock_execute_result.scalar.side_effect = [
-            10,     # total count
-            8,      # successful count
-            2,      # failed count
-            0.5,    # min response time
-            5.0,    # max response time
-            2.3,    # avg response time
-            "2025-01-10T12:00:00"  # last execution time
+            10,  # total count
+            8,  # successful count
+            2,  # failed count
+            0.5,  # min response time
+            5.0,  # max response time
+            2.3,  # avg response time
+            "2025-01-10T12:00:00",  # last execution time
         ]
         mock_db.execute.return_value = mock_execute_result
 
@@ -1834,7 +1857,7 @@ class TestToolService:
             "min_response_time": 0.5,
             "max_response_time": 5.0,
             "avg_response_time": 2.3,
-            "last_execution_time": "2025-01-10T12:00:00"
+            "last_execution_time": "2025-01-10T12:00:00",
         }
 
         # Verify all expected queries were made
@@ -1848,13 +1871,13 @@ class TestToolService:
         # Create a mock that returns scalar values
         mock_execute_result = MagicMock()
         mock_execute_result.scalar.side_effect = [
-            0,      # total count
-            0,      # successful count
-            0,      # failed count
-            None,   # min response time
-            None,   # max response time
-            None,   # avg response time
-            None    # last execution time
+            0,  # total count
+            0,  # successful count
+            0,  # failed count
+            None,  # min response time
+            None,  # max response time
+            None,  # avg response time
+            None,  # last execution time
         ]
         mock_db.execute.return_value = mock_execute_result
 
@@ -1868,7 +1891,7 @@ class TestToolService:
             "min_response_time": None,
             "max_response_time": None,
             "avg_response_time": None,
-            "last_execution_time": None
+            "last_execution_time": None,
         }
 
     async def test_validate_tool_url_success(self, tool_service):
@@ -1945,7 +1968,7 @@ class TestToolService:
 
     async def test_notify_tool_added(self, tool_service, mock_tool):
         """Test notification when tool is added."""
-        with patch.object(tool_service, '_publish_event', new_callable=AsyncMock) as mock_publish:
+        with patch.object(tool_service, "_publish_event", new_callable=AsyncMock) as mock_publish:
             await tool_service._notify_tool_added(mock_tool)
 
             mock_publish.assert_called_once()
@@ -1956,7 +1979,7 @@ class TestToolService:
 
     async def test_notify_tool_removed(self, tool_service, mock_tool):
         """Test notification when tool is removed."""
-        with patch.object(tool_service, '_publish_event', new_callable=AsyncMock) as mock_publish:
+        with patch.object(tool_service, "_publish_event", new_callable=AsyncMock) as mock_publish:
             await tool_service._notify_tool_removed(mock_tool)
 
             mock_publish.assert_called_once()
@@ -1989,18 +2012,19 @@ class TestToolService:
     async def test_list_tools_with_tags(self, tool_service, mock_tool):
         """Test listing tools with tag filtering."""
         # Third-Party
-        from sqlalchemy import func
 
-        # Mock query chain
+        # Mock query chain - support pagination methods
         mock_query = MagicMock()
         mock_query.where.return_value = mock_query
+        mock_query.order_by.return_value = mock_query
+        mock_query.limit.return_value = mock_query
 
         session = MagicMock()
         session.execute.return_value.scalars.return_value.all.return_value = [mock_tool]
 
         bind = MagicMock()
         bind.dialect = MagicMock()
-        bind.dialect.name = "sqlite"    # or "postgresql" or "mysql"
+        bind.dialect.name = "sqlite"  # or "postgresql" or "mysql"
         session.get_bind.return_value = bind
 
         with patch("mcpgateway.services.tool_service.select", return_value=mock_query):
@@ -2014,15 +2038,12 @@ class TestToolService:
                 mock_team.name = "test-team"
                 session.query().filter().first.return_value = mock_team
 
-
-                result = await tool_service.list_tools(
-                    session, tags=["test", "production"]
-                )
+                result, _ = await tool_service.list_tools(session, tags=["test", "production"])
 
                 # helper should be called once with the tags list (not once per tag)
-                mock_json_contains.assert_called_once()                       # called exactly once
-                called_args = mock_json_contains.call_args[0]                # positional args tuple
-                assert called_args[0] is session                            # session passed through
+                mock_json_contains.assert_called_once()  # called exactly once
+                called_args = mock_json_contains.call_args[0]  # positional args tuple
+                assert called_args[0] is session  # session passed through
                 # third positional arg is the tags list (signature: session, col, values, match_any=True)
                 assert called_args[2] == ["test", "production"]
                 # and the fake condition returned must have been passed to where()
@@ -2049,7 +2070,7 @@ class TestToolService:
 
         # Mock HTTP client response
         mock_response = AsyncMock()
-        mock_response.raise_for_status = AsyncMock()
+        mock_response.raise_for_status = Mock()  # HTTP response raise_for_status is synchronous
         mock_response.status_code = 200
         mock_response.json = Mock(return_value={"result": "OAuth success"})
         tool_service._http_client.request.return_value = mock_response
@@ -2057,7 +2078,7 @@ class TestToolService:
         # Mock metrics recording
         tool_service._record_tool_metric = AsyncMock()
 
-        with patch("mcpgateway.config.extract_using_jq", return_value={"result": "OAuth success"}):
+        with patch("mcpgateway.services.tool_service.extract_using_jq", return_value={"result": "OAuth success"}):
             # Invoke tool
             result = await tool_service.invoke_tool(test_db, "test_tool", {"param": "value"}, request_headers=None)
 
@@ -2147,7 +2168,6 @@ class TestToolService:
         session_mock.initialize.assert_awaited_once()
         session_mock.call_tool.assert_awaited_once()
 
-
     async def test_invoke_tool_with_passthrough_headers_rest(self, tool_service, mock_tool, test_db):
         """Test invoking REST tool with passthrough headers."""
         # Configure tool as REST
@@ -2162,7 +2182,7 @@ class TestToolService:
 
         # Mock HTTP client response
         mock_response = AsyncMock()
-        mock_response.raise_for_status = AsyncMock()
+        mock_response.raise_for_status = Mock()  # HTTP response raise_for_status is synchronous
         mock_response.status_code = 200
         mock_response.json = Mock(return_value={"result": "success with headers"})
         tool_service._http_client.request.return_value = mock_response
@@ -2178,7 +2198,7 @@ class TestToolService:
         with (
             patch("mcpgateway.services.tool_service.decode_auth", return_value={}),
             patch("mcpgateway.services.tool_service.get_passthrough_headers", side_effect=mock_passthrough),
-            patch("mcpgateway.config.extract_using_jq", return_value={"result": "success with headers"}),
+            patch("mcpgateway.services.tool_service.extract_using_jq", return_value={"result": "success with headers"}),
         ):
             result = await tool_service.invoke_tool(test_db, "test_tool", {"param": "value"}, request_headers=request_headers)
 
@@ -2242,6 +2262,10 @@ class TestToolService:
 
     async def test_invoke_tool_with_plugin_post_invoke_success(self, tool_service, mock_tool, test_db):
         """Test invoking tool with successful plugin post-invoke hook."""
+        # First-Party
+        from mcpgateway.plugins.framework.models import PluginResult
+        from mcpgateway.plugins.framework import ToolHookType
+
         # Configure tool as REST
         mock_tool.integration_type = "REST"
         mock_tool.request_type = "POST"
@@ -2254,33 +2278,38 @@ class TestToolService:
 
         # Mock HTTP client response
         mock_response = AsyncMock()
-        mock_response.raise_for_status = AsyncMock()
+        mock_response.raise_for_status = Mock()  # HTTP response raise_for_status is synchronous
         mock_response.status_code = 200
         mock_response.json = Mock(return_value={"result": "original response"})
         tool_service._http_client.request.return_value = mock_response
 
-        # Mock plugin manager and post-invoke hook
+        # Mock plugin manager with invoke_hook
         mock_post_result = Mock()
         mock_post_result.continue_processing = True
         mock_post_result.violation = None
         mock_post_result.modified_payload = None
 
         tool_service._plugin_manager = Mock()
-        tool_service._plugin_manager.tool_pre_invoke = AsyncMock(return_value=(Mock(continue_processing=True, violation=None, modified_payload=None), None))
-        tool_service._plugin_manager.tool_post_invoke = AsyncMock(return_value=(mock_post_result, None))
+
+        def invoke_hook_side_effect(hook_type, payload, global_context, local_contexts=None, **kwargs):
+            if hook_type == ToolHookType.TOOL_PRE_INVOKE:
+                return (PluginResult(continue_processing=True, violation=None, modified_payload=None), None)
+            # POST_INVOKE
+            return (mock_post_result, None)
+
+        tool_service._plugin_manager.invoke_hook = AsyncMock(side_effect=invoke_hook_side_effect)
 
         with (
             patch("mcpgateway.services.tool_service.decode_auth", return_value={}),
-            patch("mcpgateway.config.extract_using_jq", return_value={"result": "original response"}),
+            patch("mcpgateway.services.tool_service.extract_using_jq", return_value={"result": "original response"}),
         ):
             result = await tool_service.invoke_tool(test_db, "test_tool", {"param": "value"}, request_headers=None)
 
-        # Verify plugin post-invoke was called
-        tool_service._plugin_manager.tool_post_invoke.assert_called_once()
+        # Verify plugin hooks were called
+        assert tool_service._plugin_manager.invoke_hook.call_count == 2  # Pre and post invoke
 
         # Verify result
         assert result.content[0].text == '{\n  "result": "original response"\n}'
-
 
     async def test_invoke_tool_with_plugin_post_invoke_modified_payload(self, tool_service, mock_tool, test_db):
         """Test invoking tool with plugin post-invoke hook modifying payload."""
@@ -2296,7 +2325,7 @@ class TestToolService:
 
         # Mock HTTP client response
         mock_response = AsyncMock()
-        mock_response.raise_for_status = AsyncMock()
+        mock_response.raise_for_status = Mock()  # HTTP response raise_for_status is synchronous
         mock_response.status_code = 200
         mock_response.json = Mock(return_value={"result": "original response"})
         tool_service._http_client.request.return_value = mock_response
@@ -2310,18 +2339,27 @@ class TestToolService:
         mock_post_result.violation = None
         mock_post_result.modified_payload = mock_modified_payload
 
+        # First-Party
+        from mcpgateway.plugins.framework import PluginResult, ToolHookType
+
         tool_service._plugin_manager = Mock()
-        tool_service._plugin_manager.tool_pre_invoke = AsyncMock(return_value=(Mock(continue_processing=True, violation=None, modified_payload=None), None))
-        tool_service._plugin_manager.tool_post_invoke = AsyncMock(return_value=(mock_post_result, None))
+
+        def invoke_hook_side_effect(hook_type, payload, global_context, local_contexts=None, **kwargs):
+            if hook_type == ToolHookType.TOOL_PRE_INVOKE:
+                return (PluginResult(continue_processing=True, violation=None, modified_payload=None), None)
+            # POST_INVOKE
+            return (mock_post_result, None)
+
+        tool_service._plugin_manager.invoke_hook = AsyncMock(side_effect=invoke_hook_side_effect)
 
         with (
             patch("mcpgateway.services.tool_service.decode_auth", return_value={}),
-            patch("mcpgateway.config.extract_using_jq", return_value={"result": "original response"}),
+            patch("mcpgateway.services.tool_service.extract_using_jq", return_value={"result": "original response"}),
         ):
             result = await tool_service.invoke_tool(test_db, "test_tool", {"param": "value"}, request_headers=None)
 
-        # Verify plugin post-invoke was called
-        tool_service._plugin_manager.tool_post_invoke.assert_called_once()
+        # Verify plugin hooks were called
+        assert tool_service._plugin_manager.invoke_hook.call_count == 2  # Pre and post invoke
 
         # Verify result was modified by plugin
         assert result.content[0].text == "Modified by plugin"
@@ -2340,7 +2378,7 @@ class TestToolService:
 
         # Mock HTTP client response
         mock_response = AsyncMock()
-        mock_response.raise_for_status = AsyncMock()
+        mock_response.raise_for_status = Mock()  # HTTP response raise_for_status is synchronous
         mock_response.status_code = 200
         mock_response.json = Mock(return_value={"result": "original response"})
         tool_service._http_client.request.return_value = mock_response
@@ -2354,18 +2392,28 @@ class TestToolService:
         mock_post_result.violation = None
         mock_post_result.modified_payload = mock_modified_payload
 
+        # First-Party
+        from mcpgateway.plugins.framework.models import PluginResult
+        from mcpgateway.plugins.framework import ToolHookType
+
         tool_service._plugin_manager = Mock()
-        tool_service._plugin_manager.tool_pre_invoke = AsyncMock(return_value=(Mock(continue_processing=True, violation=None, modified_payload=None), None))
-        tool_service._plugin_manager.tool_post_invoke = AsyncMock(return_value=(mock_post_result, None))
+
+        def invoke_hook_side_effect(hook_type, payload, global_context, local_contexts=None, **kwargs):
+            if hook_type == ToolHookType.TOOL_PRE_INVOKE:
+                return (PluginResult(continue_processing=True, violation=None, modified_payload=None), None)
+            # POST_INVOKE
+            return (mock_post_result, None)
+
+        tool_service._plugin_manager.invoke_hook = AsyncMock(side_effect=invoke_hook_side_effect)
 
         with (
             patch("mcpgateway.services.tool_service.decode_auth", return_value={}),
-            patch("mcpgateway.config.extract_using_jq", return_value={"result": "original response"}),
+            patch("mcpgateway.services.tool_service.extract_using_jq", return_value={"result": "original response"}),
         ):
             result = await tool_service.invoke_tool(test_db, "test_tool", {"param": "value"}, request_headers=None)
 
-        # Verify plugin post-invoke was called
-        tool_service._plugin_manager.tool_post_invoke.assert_called_once()
+        # Verify plugin hooks were called
+        assert tool_service._plugin_manager.invoke_hook.call_count == 2  # Pre and post invoke
 
         # Verify result was converted to string since format was invalid
         assert result.content[0].text == "Invalid format - not a dict"
@@ -2384,15 +2432,25 @@ class TestToolService:
 
         # Mock HTTP client response
         mock_response = AsyncMock()
-        mock_response.raise_for_status = AsyncMock()
+        mock_response.raise_for_status = Mock()  # HTTP response raise_for_status is synchronous
         mock_response.status_code = 200
         mock_response.json = Mock(return_value={"result": "original response"})
         tool_service._http_client.request.return_value = mock_response
 
-        # Mock plugin manager and post-invoke hook with error
+        # Mock plugin manager with invoke_hook that raises error on POST_INVOKE
+        # First-Party
+        from mcpgateway.plugins.framework.models import PluginResult
+        from mcpgateway.plugins.framework import ToolHookType
+
         tool_service._plugin_manager = Mock()
-        tool_service._plugin_manager.tool_pre_invoke = AsyncMock(return_value=(Mock(continue_processing=True, violation=None, modified_payload=None), None))
-        tool_service._plugin_manager.tool_post_invoke = AsyncMock(side_effect=Exception("Plugin error"))
+
+        def invoke_hook_side_effect(hook_type, payload, global_context, local_contexts=None, **kwargs):
+            if hook_type == ToolHookType.TOOL_PRE_INVOKE:
+                return (PluginResult(continue_processing=True, violation=None, modified_payload=None), None)
+            # POST_INVOKE - raise error
+            raise Exception("Plugin error")
+
+        tool_service._plugin_manager.invoke_hook = AsyncMock(side_effect=invoke_hook_side_effect)
 
         # Mock plugin config to fail on errors
         mock_plugin_settings = Mock()
@@ -2406,13 +2464,12 @@ class TestToolService:
 
         with (
             patch("mcpgateway.services.tool_service.decode_auth", return_value={}),
-            patch("mcpgateway.config.extract_using_jq", return_value={"result": "original response"}),
+            patch("mcpgateway.services.tool_service.extract_using_jq", return_value={"result": "original response"}),
         ):
             with pytest.raises(Exception) as exc_info:
                 await tool_service.invoke_tool(test_db, "test_tool", {"param": "value"}, request_headers=None)
 
         assert "Plugin error" in str(exc_info.value)
-
 
     async def test_invoke_tool_with_plugin_metadata_rest(self, tool_service, mock_tool, test_db):
         """Test invoking tool with plugin post-invoke hook error when fail_on_plugin_error is True."""
@@ -2428,7 +2485,7 @@ class TestToolService:
 
         # Mock HTTP client response
         mock_response = AsyncMock()
-        mock_response.raise_for_status = AsyncMock()
+        mock_response.raise_for_status = Mock()  # HTTP response raise_for_status is synchronous
         mock_response.status_code = 200
         mock_response.json = Mock(return_value={"result": "original response"})
         tool_service._http_client.request.return_value = mock_response
@@ -2441,7 +2498,7 @@ class TestToolService:
 
         with (
             patch("mcpgateway.services.tool_service.decode_auth", return_value={}),
-            patch("mcpgateway.config.extract_using_jq", return_value={"result": "original response"}),
+            patch("mcpgateway.services.tool_service.extract_using_jq", return_value={"result": "original response"}),
         ):
             result = await tool_service.invoke_tool(test_db, "test_tool", {"param": "value"}, request_headers=None)
 
@@ -2453,9 +2510,9 @@ class TestToolService:
     async def test_invoke_tool_with_plugin_metadata_sse(self, tool_service, mock_tool, mock_gateway, test_db):
         """Test invoking tool with plugin post-invoke hook error when fail_on_plugin_error is True."""
         # Configure tool as REST
-        #mock_tool.integration_type = "REST"
-        #mock_tool.request_type = "POST"
-        #mock_tool.auth_value = None
+        # mock_tool.integration_type = "REST"
+        # mock_tool.request_type = "POST"
+        # mock_tool.auth_value = None
         mock_tool.integration_type = "MCP"
         mock_tool.request_type = "sse"
         mock_gateway.auth_value = None
@@ -2482,7 +2539,6 @@ class TestToolService:
         sse_ctx = AsyncMock()
         sse_ctx.__aenter__.return_value = ("read", "write")
 
-
         # Mock HTTP client response
 
         # Mock plugin manager and post-invoke hook with error
@@ -2499,3 +2555,27 @@ class TestToolService:
             await tool_service.invoke_tool(test_db, "test_tool", {"param": "value"}, request_headers=None)
 
         await tool_service._plugin_manager.shutdown()
+
+
+# --------------------------------------------------------------------------- #
+#                               extract_using_jq                              #
+# --------------------------------------------------------------------------- #
+def test_extract_using_jq_happy_path():
+    data = {"a": 123}
+
+    with patch("mcpgateway.services.tool_service.jq.all", return_value=[123]) as mock_jq:
+        out = extract_using_jq(data, ".a")
+        mock_jq.assert_called_once_with(".a", data)
+        assert out == [123]
+
+
+def test_extract_using_jq_short_circuits_and_errors():
+    # Empty filter returns data unmodified
+    orig = {"x": "y"}
+    assert extract_using_jq(orig) is orig
+
+    # Non-JSON string
+    assert extract_using_jq("this isn't json", ".foo") == ["Invalid JSON string provided."]
+
+    # Unsupported input type
+    assert extract_using_jq(42, ".foo") == ["Input data must be a JSON string, dictionary, or list."]

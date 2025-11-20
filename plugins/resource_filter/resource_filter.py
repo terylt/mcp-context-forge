@@ -176,9 +176,16 @@ class ResourceFilterPlugin(Plugin):
             if filtered_text != original_text:
                 # Create new content object with filtered text
                 # First-Party
-                from mcpgateway.models import ResourceContent
+                from mcpgateway.common.models import ResourceContent
 
-                modified_content = ResourceContent(type=payload.content.type, uri=payload.content.uri, text=filtered_text)
+                modified_content = ResourceContent(
+                    type=payload.content.type,
+                    id=payload.content.id,
+                    uri=payload.content.uri,
+                    mime_type=getattr(payload.content, "mime_type", None),
+                    text=filtered_text,
+                    blob=getattr(payload.content, "blob", None),
+                )
                 content_was_modified = True
                 context.set_state("content_filtered", True)
 

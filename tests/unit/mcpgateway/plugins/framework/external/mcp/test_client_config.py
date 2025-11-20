@@ -17,11 +17,14 @@ from mcp.types import CallToolResult
 import pytest
 
 # First-Party
-from mcpgateway.models import Message, PromptResult, ResourceContent, Role, TextContent
+from mcpgateway.common.models import Message, PromptResult, ResourceContent, Role, TextContent
 from mcpgateway.plugins.framework import (
     ConfigLoader,
     GlobalContext,
     PluginContext,
+    PromptHookType,
+    ResourceHookType,
+    ToolHookType,
     PromptPosthookPayload,
     PromptPrehookPayload,
     ResourcePostFetchPayload,
@@ -84,9 +87,10 @@ async def test_initialize_config_retrieval_failure():
     mock_session.call_tool = AsyncMock()
     mock_session.call_tool.return_value = CallToolResult(content=[])
 
-    with patch('mcpgateway.plugins.framework.external.mcp.client.stdio_client') as mock_stdio_client, \
-         patch('mcpgateway.plugins.framework.external.mcp.client.ClientSession', return_value=mock_session):
-
+    with (
+        patch("mcpgateway.plugins.framework.external.mcp.client.stdio_client") as mock_stdio_client,
+        patch("mcpgateway.plugins.framework.external.mcp.client.ClientSession", return_value=mock_session),
+    ):
         mock_stdio_client.return_value.__aenter__ = AsyncMock(return_value=(mock_stdio, mock_write))
         mock_stdio_client.return_value.__aexit__ = AsyncMock(return_value=False)
 
@@ -118,37 +122,37 @@ async def test_hook_methods_empty_content():
     context = PluginContext(global_context=GlobalContext(request_id="test", server_id="test"))
 
     # Test prompt_pre_fetch with empty content - should raise PluginError
-    payload = PromptPrehookPayload(name="test", args={})
+    payload = PromptPrehookPayload(prompt_id="1", args={})
     with pytest.raises(PluginError):
-        await plugin.prompt_pre_fetch(payload, context)
+        await plugin.invoke_hook(PromptHookType.PROMPT_PRE_FETCH, payload, context)
 
     # Test prompt_post_fetch with empty content - should raise PluginError
     message = Message(content=TextContent(type="text", text="test"), role=Role.USER)
     prompt_result = PromptResult(messages=[message])
-    payload = PromptPosthookPayload(name="test", result=prompt_result)
+    payload = PromptPosthookPayload(prompt_id="1", result=prompt_result)
     with pytest.raises(PluginError):
-        await plugin.prompt_post_fetch(payload, context)
+        await plugin.invoke_hook(PromptHookType.PROMPT_POST_FETCH, payload, context)
 
     # Test tool_pre_invoke with empty content - should raise PluginError
     payload = ToolPreInvokePayload(name="test", args={})
     with pytest.raises(PluginError):
-        await plugin.tool_pre_invoke(payload, context)
+        await plugin.invoke_hook(ToolHookType.TOOL_PRE_INVOKE, payload, context)
 
     # Test tool_post_invoke with empty content - should raise PluginError
     payload = ToolPostInvokePayload(name="test", result={})
     with pytest.raises(PluginError):
-        await plugin.tool_post_invoke(payload, context)
+        await plugin.invoke_hook(ToolHookType.TOOL_POST_INVOKE, payload, context)
 
     # Test resource_pre_fetch with empty content - should raise PluginError
     payload = ResourcePreFetchPayload(uri="file://test.txt")
     with pytest.raises(PluginError):
-        await plugin.resource_pre_fetch(payload, context)
+        await plugin.invoke_hook(ResourceHookType.RESOURCE_PRE_FETCH, payload, context)
 
     # Test resource_post_fetch with empty content - should raise PluginError
-    resource_content = ResourceContent(type="resource", uri="file://test.txt", text="content")
+    resource_content = ResourceContent(type="resource", id="123",uri="file://test.txt", text="content")
     payload = ResourcePostFetchPayload(uri="file://test.txt", content=resource_content)
     with pytest.raises(PluginError):
-        await plugin.resource_post_fetch(payload, context)
+        await plugin.invoke_hook(ResourceHookType.RESOURCE_POST_FETCH, payload, context)
 
     await plugin.shutdown()
 

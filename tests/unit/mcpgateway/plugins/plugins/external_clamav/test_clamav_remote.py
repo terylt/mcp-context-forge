@@ -9,15 +9,16 @@ Tests for ClamAVRemotePlugin (direct import, eicar_only mode).
 
 import pytest
 
-from mcpgateway.plugins.framework.models import (
+from mcpgateway.plugins.framework import (
     GlobalContext,
-    HookType,
     PluginConfig,
     PluginContext,
+    ResourceHookType,
     ResourcePostFetchPayload,
     ResourcePreFetchPayload,
 )
-from mcpgateway.models import ResourceContent
+from mcpgateway.common.models import ResourceContent
+from mcpgateway.common.models import Message, PromptResult, Role, TextContent
 
 from plugins.external.clamav_server.clamav_plugin import ClamAVRemotePlugin
 
@@ -29,7 +30,7 @@ def _mk_plugin(block_on_positive: bool = True) -> ClamAVRemotePlugin:
     cfg = PluginConfig(
         name="clamav",
         kind="plugins.external.clamav_server.clamav_plugin.ClamAVRemotePlugin",
-        hooks=[HookType.RESOURCE_PRE_FETCH, HookType.RESOURCE_POST_FETCH],
+        hooks=[ResourceHookType.RESOURCE_PRE_FETCH, ResourceHookType.RESOURCE_POST_FETCH],
         config={
             "mode": "eicar_only",
             "block_on_positive": block_on_positive,
@@ -54,7 +55,7 @@ async def test_resource_pre_fetch_blocks_on_eicar(tmp_path):
 async def test_resource_post_fetch_blocks_on_eicar_text():
     plugin = _mk_plugin(True)
     ctx = PluginContext(global_context=GlobalContext(request_id="r2"))
-    rc = ResourceContent(type="resource", uri="test://mem", mime_type="text/plain", text=EICAR)
+    rc = ResourceContent(type="resource", id="123", uri="test://mem", mime_type="text/plain", text=EICAR)
     payload = ResourcePostFetchPayload(uri="test://mem", content=rc)
     res = await plugin.resource_post_fetch(payload, ctx)
     assert res.violation is not None
@@ -77,17 +78,18 @@ async def test_non_blocking_mode_reports_metadata(tmp_path):
 @pytest.mark.asyncio
 async def test_prompt_post_fetch_blocks_on_eicar_text():
     plugin = _mk_plugin(True)
-    from mcpgateway.plugins.framework.models import PromptPosthookPayload
-    pr = __import__("mcpgateway.models").models.PromptResult(
+    from mcpgateway.plugins.framework import PromptPosthookPayload
+
+    pr = PromptResult(
         messages=[
-            __import__("mcpgateway.models").models.Message(
+            Message(
                 role="assistant",
-                content=__import__("mcpgateway.models").models.TextContent(type="text", text=EICAR),
+                content=TextContent(type="text", text=EICAR),
             )
         ]
     )
     ctx = PluginContext(global_context=GlobalContext(request_id="r4"))
-    payload = PromptPosthookPayload(name="p", result=pr)
+    payload = PromptPosthookPayload(prompt_id="p", result=pr)
     res = await plugin.prompt_post_fetch(payload, ctx)
     assert res.violation is not None
     assert res.violation.code == "CLAMAV_INFECTED"
@@ -96,7 +98,8 @@ async def test_prompt_post_fetch_blocks_on_eicar_text():
 @pytest.mark.asyncio
 async def test_tool_post_invoke_blocks_on_eicar_string():
     plugin = _mk_plugin(True)
-    from mcpgateway.plugins.framework.models import ToolPostInvokePayload
+    from mcpgateway.plugins.framework import ToolPostInvokePayload
+
     ctx = PluginContext(global_context=GlobalContext(request_id="r5"))
     payload = ToolPostInvokePayload(name="t", result={"text": EICAR})
     res = await plugin.tool_post_invoke(payload, ctx)
@@ -111,25 +114,27 @@ async def test_health_stats_counters():
     ctx = PluginContext(global_context=GlobalContext(request_id="r6"))
 
     # 1) resource_post_fetch with EICAR -> attempted +1, infected +1
-    rc = ResourceContent(type="resource", uri="test://mem", mime_type="text/plain", text=EICAR)
+    rc = ResourceContent(type="resource", id="123", uri="test://mem", mime_type="text/plain", text=EICAR)
     payload_r = ResourcePostFetchPayload(uri="test://mem", content=rc)
     await plugin.resource_post_fetch(payload_r, ctx)
 
     # 2) prompt_post_fetch with EICAR -> attempted +1, infected +1 (total attempted=2, infected=2)
-    from mcpgateway.plugins.framework.models import PromptPosthookPayload
-    pr = __import__("mcpgateway.models").models.PromptResult(
+    from mcpgateway.plugins.framework import PromptPosthookPayload
+
+    pr = PromptResult(
         messages=[
-            __import__("mcpgateway.models").models.Message(
+            Message(
                 role="assistant",
-                content=__import__("mcpgateway.models").models.TextContent(type="text", text=EICAR),
+                content=TextContent(type="text", text=EICAR),
             )
         ]
     )
-    payload_p = PromptPosthookPayload(name="p", result=pr)
+    payload_p = PromptPosthookPayload(prompt_id="p", result=pr)
     await plugin.prompt_post_fetch(payload_p, ctx)
 
     # 3) tool_post_invoke with one EICAR and one clean string -> attempted +2, infected +1
-    from mcpgateway.plugins.framework.models import ToolPostInvokePayload
+    from mcpgateway.plugins.framework import ToolPostInvokePayload
+
     payload_t = ToolPostInvokePayload(name="t", result={"a": EICAR, "b": "clean"})
     await plugin.tool_post_invoke(payload_t, ctx)
 

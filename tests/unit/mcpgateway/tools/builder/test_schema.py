@@ -180,7 +180,7 @@ class TestInfrastructureConfig:
         """Test PostgreSQL default configuration."""
         config = PostgresConfig()
         assert config.enabled is True
-        assert config.image == "postgres:17"
+        assert config.image == "quay.io/sclorg/postgresql-15-c9s:latest"
         assert config.database == "mcp"
         assert config.user == "postgres"
         assert config.password == "mysecretpassword"

@@ -124,12 +124,12 @@ class SecurityHeadersMiddleware(BaseHTTPMiddleware):
             ...     "img-src 'self' data: https:",
             ...     "font-src 'self' data: https://cdnjs.cloudflare.com",
             ...     "connect-src 'self' ws: wss: https:",
-            ...     "frame-ancestors 'none'",
+            ...     "frame-ancestors 'self'",  # Example for SAMEORIGIN
             ... ]
             >>> csp_header = "; ".join(csp_directives) + ";"
             >>> "default-src 'self'" in csp_header
             True
-            >>> "frame-ancestors 'none'" in csp_header
+            >>> "frame-ancestors 'self'" in csp_header
             True
             >>> csp_header.endswith(";")
             True
@@ -255,8 +255,12 @@ class SecurityHeadersMiddleware(BaseHTTPMiddleware):
         if settings.x_content_type_options_enabled:
             response.headers["X-Content-Type-Options"] = "nosniff"
 
-        if settings.x_frame_options:
-            response.headers["X-Frame-Options"] = settings.x_frame_options
+        # Handle X-Frame-Options: None = don't set header, empty string = allow all, other values = set header
+        if settings.x_frame_options is not None:
+            if settings.x_frame_options:  # Non-empty string
+                response.headers["X-Frame-Options"] = settings.x_frame_options
+            # Empty string means user wants to disable the header (allow all frames)
+            # Don't set the header in this case
 
         if settings.x_xss_protection_enabled:
             response.headers["X-XSS-Protection"] = "0"  # Modern browsers use CSP instead
@@ -268,6 +272,23 @@ class SecurityHeadersMiddleware(BaseHTTPMiddleware):
 
         # Content Security Policy
         # This CSP is designed to work with the Admin UI while providing security
+        # Dynamically set frame-ancestors based on X_FRAME_OPTIONS setting to stay consistent
+        x_frame = str(settings.x_frame_options)
+        x_frame_upper = x_frame.upper()
+
+        if x_frame_upper == "DENY":
+            frame_ancestors = "'none'"
+        elif x_frame_upper == "SAMEORIGIN":
+            frame_ancestors = "'self'"
+        elif x_frame_upper.startswith("ALLOW-FROM"):
+            allowed_uri = x_frame.split(" ", 1)[1] if " " in x_frame else "'none'"
+            frame_ancestors = allowed_uri
+        elif not x_frame:  # Empty string means allow all
+            frame_ancestors = "*"
+        else:
+            # Default to none for unknown values (matches DENY default)
+            frame_ancestors = "'none'"
+
         csp_directives = [
             "default-src 'self'",
             "script-src 'self' 'unsafe-inline' 'unsafe-eval' https://cdnjs.cloudflare.com https://cdn.tailwindcss.com https://cdn.jsdelivr.net https://unpkg.com",
@@ -275,7 +296,7 @@ class SecurityHeadersMiddleware(BaseHTTPMiddleware):
             "img-src 'self' data: https:",
             "font-src 'self' data: https://cdnjs.cloudflare.com",
             "connect-src 'self' ws: wss: https:",
-            "frame-ancestors 'none'",
+            f"frame-ancestors {frame_ancestors}",
         ]
         response.headers["Content-Security-Policy"] = "; ".join(csp_directives) + ";"
 

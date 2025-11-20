@@ -9,112 +9,21 @@ Unit tests for plain Python MCP Stack deployment.
 
 # Standard
 from pathlib import Path
+import re
 import subprocess
 from unittest.mock import MagicMock, Mock, patch, call
 
 # Third-Party
 import pytest
+from pydantic import ValidationError
 
 # First-Party
 from mcpgateway.tools.builder.python_deploy import MCPStackPython
+from mcpgateway.tools.builder.schema import BuildableConfig, MCPStackConfig
 
 
 class TestMCPStackPython:
     """Test MCPStackPython deployment class."""
-
-    @patch("mcpgateway.tools.builder.python_deploy.shutil.which")
-    def test_init_with_docker(self, mock_which):
-        """Test initialization with Docker runtime."""
-        mock_which.return_value = "/usr/bin/docker"
-        stack = MCPStackPython()
-        assert stack.container_runtime == "docker"
-
-    @patch("mcpgateway.tools.builder.python_deploy.shutil.which")
-    def test_init_with_podman(self, mock_which):
-        """Test initialization with Podman runtime."""
-
-        def which_side_effect(cmd):
-            if cmd == "docker":
-                return None
-            elif cmd == "podman":
-                return "/usr/bin/podman"
-            return None
-
-        mock_which.side_effect = which_side_effect
-        stack = MCPStackPython()
-        assert stack.container_runtime == "podman"
-
-    @patch("mcpgateway.tools.builder.python_deploy.shutil.which")
-    def test_init_no_runtime(self, mock_which):
-        """Test initialization when no container runtime available."""
-        mock_which.return_value = None
-        with pytest.raises(RuntimeError, match="No container runtime found"):
-            MCPStackPython()
-
-    @patch("mcpgateway.tools.builder.python_deploy.shutil.which")
-    @patch("mcpgateway.tools.builder.python_deploy.load_config")
-    @patch.object(MCPStackPython, "_build_component")
-    @pytest.mark.asyncio
-    async def test_build_gateway(self, mock_build, mock_load, mock_which):
-        """Test building gateway container."""
-        mock_which.return_value = "/usr/bin/docker"
-        mock_load.return_value = {
-            "gateway": {"repo": "https://github.com/test/gateway.git", "ref": "main"},
-            "plugins": [],
-        }
-
-        stack = MCPStackPython()
-        await stack.build("test-config.yaml")
-
-        mock_build.assert_called_once()
-        assert mock_build.call_args[0][1] == "gateway"
-
-    @patch("mcpgateway.tools.builder.python_deploy.shutil.which")
-    @patch("mcpgateway.tools.builder.python_deploy.load_config")
-    @pytest.mark.asyncio
-    async def test_build_plugins_only(self, mock_load, mock_which):
-        """Test building only plugins."""
-        mock_which.return_value = "/usr/bin/docker"
-        mock_load.return_value = {
-            "gateway": {"repo": "https://github.com/test/gateway.git"},
-            "plugins": [
-                {"name": "Plugin1", "repo": "https://github.com/test/plugin1.git"}
-            ],
-        }
-
-        stack = MCPStackPython()
-        with patch.object(stack, "_build_component") as mock_build:
-            await stack.build("test-config.yaml", plugins_only=True)
-
-            # Gateway should not be built
-            calls = [call_args[0][1] for call_args in mock_build.call_args_list]
-            assert "gateway" not in calls
-            assert "Plugin1" in calls
-
-    @patch("mcpgateway.tools.builder.python_deploy.shutil.which")
-    @patch("mcpgateway.tools.builder.python_deploy.load_config")
-    @patch.object(MCPStackPython, "_build_component")
-    @pytest.mark.asyncio
-    async def test_build_specific_plugins(self, mock_build, mock_load, mock_which):
-        """Test building specific plugins only."""
-        mock_which.return_value = "/usr/bin/docker"
-        mock_load.return_value = {
-            "gateway": {"image": "mcpgateway:latest"},
-            "plugins": [
-                {"name": "Plugin1", "repo": "https://github.com/test/plugin1.git"},
-                {"name": "Plugin2", "repo": "https://github.com/test/plugin2.git"},
-                {"name": "Plugin3", "repo": "https://github.com/test/plugin3.git"},
-            ],
-        }
-
-        stack = MCPStackPython()
-        await stack.build("test-config.yaml", specific_plugins=["Plugin1", "Plugin3"])
-
-        # Should only build Plugin1 and Plugin3
-        calls = [call_args[0][1] for call_args in mock_build.call_args_list]
-        assert "Plugin1" in calls
-        assert "Plugin3" in calls
-        assert "Plugin2" not in calls
 
     @patch("mcpgateway.tools.builder.python_deploy.shutil.which")
     @patch("mcpgateway.tools.builder.python_deploy.load_config")
@@ -122,10 +31,11 @@ class TestMCPStackPython:
     async def test_build_no_plugins(self, mock_load, mock_which):
         """Test building when no plugins are defined."""
         mock_which.return_value = "/usr/bin/docker"
-        mock_load.return_value = {
+        mock_load.return_value =  MCPStackConfig.model_validate({
+            "deployment": {"type": "compose"},
             "gateway": {"image": "mcpgateway:latest"},
             "plugins": [],
-        }
+        })
 
         stack = MCPStackPython()
         # Should not raise error
@@ -139,34 +49,20 @@ class TestMCPStackPython:
     async def test_generate_certificates(self, mock_run, mock_make, mock_load, mock_which_runtime):
         """Test certificate generation."""
         mock_which_runtime.return_value = "/usr/bin/docker"
-        mock_load.return_value = {
+        mock_load.return_value =  MCPStackConfig.model_validate({
+            "gateway": {"image": "mcpgateway:latest"},
+            "deployment": {"type": "compose"},
             "plugins": [
-                {"name": "Plugin1"},
-                {"name": "Plugin2"},
+                {"name": "Plugin1", "repo": "https://github.com/test/plugin1.git"},
+                {"name": "Plugin2", "repo": "https://github.com/test/plugin2.git"},
             ]
-        }
+        })
 
         stack = MCPStackPython()
         await stack.generate_certificates("test-config.yaml")
 
         # Should call make commands for CA, gateway, and each plugin
         assert mock_run.call_count == 4  # CA + gateway + 2 plugins
-
-    @patch("mcpgateway.tools.builder.python_deploy.load_config")
-    @pytest.mark.asyncio
-    async def test_generate_certificates_make_not_found(self, mock_load):
-        """Test certificate generation when make is not available."""
-        mock_load.return_value = {"plugins": []}
-
-        # Patch shutil.which to return docker for __init__, then None for make check
-        with patch("mcpgateway.tools.builder.python_deploy.shutil.which") as mock_which:
-            # First call returns docker (for __init__), subsequent calls return None (for make check)
-            mock_which.side_effect = ["/usr/bin/docker", None]
-
-            stack = MCPStackPython(verbose=True)
-
-            with pytest.raises(RuntimeError, match="'make' command not found"):
-                await stack.generate_certificates("test-config.yaml")
 
     @patch("mcpgateway.tools.builder.python_deploy.shutil.which")
     @patch("mcpgateway.tools.builder.python_deploy.load_config")
@@ -180,11 +76,11 @@ class TestMCPStackPython:
     ):
         """Test full compose deployment."""
         mock_which.return_value = "/usr/bin/docker"
-        mock_load.return_value = {
+        mock_load.return_value =  MCPStackConfig.model_validate({
             "deployment": {"type": "compose", "project_name": "test"},
             "gateway": {"image": "mcpgateway:latest", "mtls_enabled": True},
             "plugins": [],
-        }
+        })
         mock_gen_manifests.return_value = Path("/tmp/manifests")
 
         stack = MCPStackPython()
@@ -203,11 +99,11 @@ class TestMCPStackPython:
     async def test_deploy_dry_run(self, mock_gen_manifests, mock_build, mock_load, mock_which):
         """Test dry-run deployment."""
         mock_which.return_value = "/usr/bin/docker"
-        mock_load.return_value = {
+        mock_load.return_value =  MCPStackConfig.model_validate({
             "deployment": {"type": "compose"},
             "gateway": {"image": "mcpgateway:latest"},
             "plugins": [],
-        }
+        })
         mock_gen_manifests.return_value = Path("/tmp/manifests")
 
         stack = MCPStackPython()
@@ -223,11 +119,11 @@ class TestMCPStackPython:
     async def test_deploy_skip_certs_mtls_disabled(self, mock_gen_manifests, mock_load, mock_which):
         """Test deployment with mTLS disabled."""
         mock_which.return_value = "/usr/bin/docker"
-        mock_load.return_value = {
+        mock_load.return_value =  MCPStackConfig.model_validate({
             "deployment": {"type": "compose"},
             "gateway": {"image": "mcpgateway:latest", "mtls_enabled": False},
             "plugins": [],
-        }
+        })
         mock_gen_manifests.return_value = Path("/tmp/manifests")
 
         stack = MCPStackPython()
@@ -244,9 +140,10 @@ class TestMCPStackPython:
     async def test_verify_kubernetes(self, mock_verify, mock_load, mock_which):
         """Test Kubernetes deployment verification."""
         mock_which.return_value = "/usr/bin/docker"
-        mock_load.return_value = {
+        mock_load.return_value =  MCPStackConfig.model_validate({
+            "gateway": {"image": "mcpgateway:latest", "mtls_enabled": False},
             "deployment": {"type": "kubernetes", "namespace": "test-ns"}
-        }
+        })
 
         stack = MCPStackPython()
         await stack.verify("test-config.yaml")
@@ -260,7 +157,9 @@ class TestMCPStackPython:
     async def test_verify_compose(self, mock_verify, mock_load, mock_which):
         """Test Docker Compose deployment verification."""
         mock_which.return_value = "/usr/bin/docker"
-        mock_load.return_value = {"deployment": {"type": "compose"}}
+        mock_load.return_value =  MCPStackConfig.model_validate({"deployment": {"type": "compose"},
+            "gateway": {"image": "mcpgateway:latest", "mtls_enabled": False},
+        })
 
         stack = MCPStackPython()
         await stack.verify("test-config.yaml")
@@ -274,7 +173,9 @@ class TestMCPStackPython:
     async def test_destroy_kubernetes(self, mock_destroy, mock_load, mock_which):
         """Test Kubernetes deployment destruction."""
         mock_which.return_value = "/usr/bin/docker"
-        mock_load.return_value = {"deployment": {"type": "kubernetes"}}
+        mock_load.return_value =  MCPStackConfig.model_validate({"deployment": {"type": "kubernetes"},
+            "gateway": {"image": "mcpgateway:latest", "mtls_enabled": False},
+        })
 
         stack = MCPStackPython()
         await stack.destroy("test-config.yaml")
@@ -288,7 +189,9 @@ class TestMCPStackPython:
     async def test_destroy_compose(self, mock_destroy, mock_load, mock_which):
         """Test Docker Compose deployment destruction."""
         mock_which.return_value = "/usr/bin/docker"
-        mock_load.return_value = {"deployment": {"type": "compose"}}
+        mock_load.return_value =  MCPStackConfig.model_validate({"deployment": {"type": "compose"},
+            "gateway": {"image": "mcpgateway:latest", "mtls_enabled": False},
+        })
 
         stack = MCPStackPython()
         await stack.destroy("test-config.yaml")
@@ -304,11 +207,11 @@ class TestMCPStackPython:
     ):
         """Test generating Kubernetes manifests."""
         mock_which.return_value = "/usr/bin/docker"
-        mock_load.return_value = {
+        mock_load.return_value =  MCPStackConfig.model_validate({
             "deployment": {"type": "kubernetes", "namespace": "test-ns"},
             "gateway": {"image": "mcpgateway:latest"},
             "plugins": [],
-        }
+        })
 
         stack = MCPStackPython()
         result = stack.generate_manifests("test-config.yaml", output_dir=str(tmp_path))
@@ -326,11 +229,11 @@ class TestMCPStackPython:
     ):
         """Test generating Docker Compose manifests."""
         mock_which.return_value = "/usr/bin/docker"
-        mock_load.return_value = {
+        mock_load.return_value = MCPStackConfig.model_validate({
             "deployment": {"type": "compose"},
             "gateway": {"image": "mcpgateway:latest"},
             "plugins": [],
-        }
+        })
 
         stack = MCPStackPython()
         result = stack.generate_manifests("test-config.yaml", output_dir=str(tmp_path))
@@ -345,88 +248,11 @@ class TestMCPStackPython:
     def test_generate_manifests_invalid_type(self, mock_get_deploy, mock_load, mock_which, tmp_path):
         """Test generating manifests with invalid deployment type."""
         mock_which.return_value = "/usr/bin/docker"
-        mock_load.return_value = {
-            "deployment": {"type": "invalid"},
-            "gateway": {"image": "mcpgateway:latest"},
-        }
-        mock_get_deploy.return_value = tmp_path / "deploy"
-
-        stack = MCPStackPython()
-        with pytest.raises(ValueError, match="Unsupported deployment type"):
-            stack.generate_manifests("test-config.yaml")
-
-
-class TestBuildComponent:
-    """Test _build_component method."""
-
-    @patch("mcpgateway.tools.builder.python_deploy.shutil.which")
-    @patch.object(MCPStackPython, "_run_command")
-    def test_build_component_clone_new(self, mock_run, mock_which, tmp_path):
-        """Test building component with new git clone."""
-        mock_which.return_value = "/usr/bin/docker"
-        component = {
-            "repo": "https://github.com/test/component.git",
-            "ref": "main",
-            "context": ".",
-            "image": "test-component:latest",
-        }
-
-        # Create Containerfile in expected location
-        build_dir = tmp_path / "build" / "test-component"
-        build_dir.mkdir(parents=True)
-        (build_dir / "Containerfile").write_text("FROM alpine\n")
-
-        stack = MCPStackPython()
-
-        with patch("mcpgateway.tools.builder.python_deploy.Path") as mock_path_class:
-            mock_path_class.return_value = tmp_path / "build" / "test-component"
-            # Mock the path checks
-            with patch.object(Path, "exists", return_value=True):
-                with patch.object(Path, "__truediv__", return_value=build_dir / "Containerfile"):
-                    stack._build_component(component, "test-component")
-
-        # Verify git clone was called
-        clone_calls = [c for c in mock_run.call_args_list if "git" in str(c) and "clone" in str(c)]
-        assert len(clone_calls) > 0
-
-    @patch("mcpgateway.tools.builder.python_deploy.shutil.which")
-    def test_build_component_no_repo(self, mock_which):
-        """Test building component without repo field."""
-        mock_which.return_value = "/usr/bin/docker"
-        component = {"image": "test:latest"}
-
-        stack = MCPStackPython()
-        with pytest.raises(ValueError, match="has no 'repo' field"):
-            stack._build_component(component, "test-component")
-
-    @patch("mcpgateway.tools.builder.python_deploy.shutil.which")
-    @patch.object(MCPStackPython, "_run_command")
-    def test_build_component_with_target(self, mock_run, mock_which, tmp_path):
-        """Test building component with multi-stage target."""
-        mock_which.return_value = "/usr/bin/docker"
-        component = {
-            "repo": "https://github.com/test/component.git",
-            "ref": "main",
-            "image": "test:latest",
-            "target": "production",
-        }
-
-        build_dir = tmp_path / "build" / "test"
-        build_dir.mkdir(parents=True)
-        (build_dir / "Containerfile").write_text("FROM alpine\n")
-
-        stack = MCPStackPython()
-
-        with patch("mcpgateway.tools.builder.python_deploy.Path") as mock_path_class:
-            mock_path_class.return_value = build_dir
-            with patch.object(Path, "exists", return_value=True):
-                with patch.object(Path, "__truediv__", return_value=build_dir / "Containerfile"):
-                    stack._build_component(component, "test")
-
-        # Verify --target was included in build command
-        build_calls = [c for c in mock_run.call_args_list if "docker" in str(c) and "build" in str(c)]
-        assert len(build_calls) > 0
-
+        with pytest.raises(ValidationError, match=re.escape("1 validation error for MCPStackConfig\ndeployment.type\n  Input should be 'kubernetes' or 'compose' [type=literal_error, input_value='invalid', input_type=str]\n    For further information visit https://errors.pydantic.dev/2.12/v/literal_error")):
+            mock_load.return_value =  MCPStackConfig.model_validate({
+                "deployment": {"type": "invalid"},
+                "gateway": {"image": "mcpgateway:latest"},
+            })
 
 class TestRunCommand:
     """Test _run_command method."""

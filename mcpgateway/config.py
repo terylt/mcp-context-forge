@@ -50,20 +50,18 @@ Examples:
 # Standard
 from functools import lru_cache
 from importlib.resources import files
-import json
+import json  # consider typjson for type safety loading from configuration data.
 import logging
 import os
 from pathlib import Path
 import re
 import sys
-from typing import Annotated, Any, ClassVar, Dict, List, Literal, Optional, Set, Union
+from typing import Annotated, Any, ClassVar, Dict, List, Literal, NotRequired, Optional, Self, Set, TypedDict
 
 # Third-Party
-from fastapi import HTTPException
-import jq
-from jsonpath_ng.ext import parse
-from jsonpath_ng.jsonpath import JSONPath
-from pydantic import Field, field_validator, HttpUrl, model_validator, PositiveInt, SecretStr
+from cryptography.hazmat.primitives import serialization
+from cryptography.hazmat.primitives.asymmetric import ed25519
+from pydantic import Field, field_validator, HttpUrl, model_validator, PositiveInt, SecretStr, ValidationInfo
 from pydantic_settings import BaseSettings, NoDecode, SettingsConfigDict
 
 # Only configure basic logging if no handlers exist yet
@@ -153,23 +151,24 @@ class Settings(BaseSettings):
     # Basic Settings
     app_name: str = "MCP_Gateway"
     host: str = "127.0.0.1"
-    port: PositiveInt = Field(default=4444, ge=1, le=65535, env="PORT")
+    port: PositiveInt = Field(default=4444, ge=1, le=65535)
     docs_allow_basic_auth: bool = False  # Allow basic auth for docs
     database_url: str = "sqlite:///./mcp.db"
-    templates_dir: Path = Path("mcpgateway/templates")
+
     # Absolute paths resolved at import-time (still override-able via env vars)
-    templates_dir: Path = files("mcpgateway") / "templates"
-    static_dir: Path = files("mcpgateway") / "static"
+    templates_dir: Path = Field(default_factory=lambda: Path(str(files("mcpgateway") / "templates")))
+    static_dir: Path = Field(default_factory=lambda: Path(str(files("mcpgateway") / "static")))
+
     app_root_path: str = ""
 
     # Protocol
-    protocol_version: str = "2025-03-26"
+    protocol_version: str = "2025-06-18"
 
     # Authentication
     basic_auth_user: str = "admin"
-    basic_auth_password: str = "changeme"
+    basic_auth_password: SecretStr = Field(default=SecretStr("changeme"))
     jwt_algorithm: str = "HS256"
-    jwt_secret_key: SecretStr = Field(default="my-test-key", env="JWT_SECRET_KEY")
+    jwt_secret_key: SecretStr = Field(default=SecretStr("my-test-key"))
     jwt_public_key_path: str = ""
     jwt_private_key_path: str = ""
     jwt_audience: str = "mcpgateway-api"
@@ -184,21 +183,48 @@ class Settings(BaseSettings):
     sso_enabled: bool = Field(default=False, description="Enable Single Sign-On authentication")
     sso_github_enabled: bool = Field(default=False, description="Enable GitHub OAuth authentication")
     sso_github_client_id: Optional[str] = Field(default=None, description="GitHub OAuth client ID")
-    sso_github_client_secret: Optional[str] = Field(default=None, description="GitHub OAuth client secret")
+    sso_github_client_secret: Optional[SecretStr] = Field(default=None, description="GitHub OAuth client secret")
 
     sso_google_enabled: bool = Field(default=False, description="Enable Google OAuth authentication")
     sso_google_client_id: Optional[str] = Field(default=None, description="Google OAuth client ID")
-    sso_google_client_secret: Optional[str] = Field(default=None, description="Google OAuth client secret")
+    sso_google_client_secret: Optional[SecretStr] = Field(default=None, description="Google OAuth client secret")
 
     sso_ibm_verify_enabled: bool = Field(default=False, description="Enable IBM Security Verify OIDC authentication")
     sso_ibm_verify_client_id: Optional[str] = Field(default=None, description="IBM Security Verify client ID")
-    sso_ibm_verify_client_secret: Optional[str] = Field(default=None, description="IBM Security Verify client secret")
+    sso_ibm_verify_client_secret: Optional[SecretStr] = Field(default=None, description="IBM Security Verify client secret")
     sso_ibm_verify_issuer: Optional[str] = Field(default=None, description="IBM Security Verify OIDC issuer URL")
 
     sso_okta_enabled: bool = Field(default=False, description="Enable Okta OIDC authentication")
     sso_okta_client_id: Optional[str] = Field(default=None, description="Okta client ID")
-    sso_okta_client_secret: Optional[str] = Field(default=None, description="Okta client secret")
+    sso_okta_client_secret: Optional[SecretStr] = Field(default=None, description="Okta client secret")
     sso_okta_issuer: Optional[str] = Field(default=None, description="Okta issuer URL")
+
+    sso_keycloak_enabled: bool = Field(default=False, description="Enable Keycloak OIDC authentication")
+    sso_keycloak_base_url: Optional[str] = Field(default=None, description="Keycloak base URL (e.g., https://keycloak.example.com)")
+    sso_keycloak_realm: str = Field(default="master", description="Keycloak realm name")
+    sso_keycloak_client_id: Optional[str] = Field(default=None, description="Keycloak client ID")
+    sso_keycloak_client_secret: Optional[SecretStr] = Field(default=None, description="Keycloak client secret")
+    sso_keycloak_map_realm_roles: bool = Field(default=True, description="Map Keycloak realm roles to gateway teams")
+    sso_keycloak_map_client_roles: bool = Field(default=False, description="Map Keycloak client roles to gateway RBAC")
+    sso_keycloak_username_claim: str = Field(default="preferred_username", description="JWT claim for username")
+    sso_keycloak_email_claim: str = Field(default="email", description="JWT claim for email")
+    sso_keycloak_groups_claim: str = Field(default="groups", description="JWT claim for groups/roles")
+
+    sso_entra_enabled: bool = Field(default=False, description="Enable Microsoft Entra ID OIDC authentication")
+    sso_entra_client_id: Optional[str] = Field(default=None, description="Microsoft Entra ID client ID")
+    sso_entra_client_secret: Optional[SecretStr] = Field(default=None, description="Microsoft Entra ID client secret")
+    sso_entra_tenant_id: Optional[str] = Field(default=None, description="Microsoft Entra ID tenant ID")
+
+    sso_generic_enabled: bool = Field(default=False, description="Enable generic OIDC provider (Keycloak, Auth0, etc.)")
+    sso_generic_provider_id: Optional[str] = Field(default=None, description="Provider ID (e.g., 'keycloak', 'auth0', 'authentik')")
+    sso_generic_display_name: Optional[str] = Field(default=None, description="Display name shown on login page")
+    sso_generic_client_id: Optional[str] = Field(default=None, description="Generic OIDC client ID")
+    sso_generic_client_secret: Optional[SecretStr] = Field(default=None, description="Generic OIDC client secret")
+    sso_generic_authorization_url: Optional[str] = Field(default=None, description="Authorization endpoint URL")
+    sso_generic_token_url: Optional[str] = Field(default=None, description="Token endpoint URL")
+    sso_generic_userinfo_url: Optional[str] = Field(default=None, description="Userinfo endpoint URL")
+    sso_generic_issuer: Optional[str] = Field(default=None, description="OIDC issuer URL")
+    sso_generic_scope: Optional[str] = Field(default="openid profile email", description="OAuth scopes (space-separated)")
 
     # SSO Settings
     sso_auto_create_users: bool = Field(default=True, description="Automatically create users from SSO providers")
@@ -220,7 +246,7 @@ class Settings(BaseSettings):
     proxy_user_header: str = Field(default="X-Authenticated-User", description="Header containing authenticated username from proxy")
 
     #  Encryption key phrase for auth storage
-    auth_encryption_secret: SecretStr = Field(default=SecretStr("my-test-salt"), env="AUTH_ENCRYPTION_SECRET")
+    auth_encryption_secret: SecretStr = Field(default=SecretStr("my-test-salt"))
 
     # OAuth Configuration
     oauth_request_timeout: int = Field(default=30, description="OAuth request timeout in seconds")
@@ -263,7 +289,7 @@ class Settings(BaseSettings):
     # Email-Based Authentication
     email_auth_enabled: bool = Field(default=True, description="Enable email-based authentication")
     platform_admin_email: str = Field(default="admin@example.com", description="Platform administrator email address")
-    platform_admin_password: str = Field(default="changeme", description="Platform administrator password")
+    platform_admin_password: SecretStr = Field(default=SecretStr("changeme"), description="Platform administrator password")
     platform_admin_full_name: str = Field(default="Platform Administrator", description="Platform administrator full name")
 
     # Argon2id Password Hashing Configuration
@@ -307,6 +333,13 @@ class Settings(BaseSettings):
     mcpgateway_a2a_max_retries: int = 3
     mcpgateway_a2a_metrics_enabled: bool = True
 
+    # gRPC Support Configuration (EXPERIMENTAL - disabled by default)
+    mcpgateway_grpc_enabled: bool = Field(default=False, description="Enable gRPC to MCP translation support (experimental feature)")
+    mcpgateway_grpc_reflection_enabled: bool = Field(default=True, description="Enable gRPC server reflection by default")
+    mcpgateway_grpc_max_message_size: int = Field(default=4194304, description="Maximum gRPC message size in bytes (4MB)")
+    mcpgateway_grpc_timeout: int = Field(default=30, description="Default gRPC call timeout in seconds")
+    mcpgateway_grpc_tls_enabled: bool = Field(default=False, description="Enable TLS for gRPC connections by default")
+
     # MCP Server Catalog Configuration
     mcpgateway_catalog_enabled: bool = Field(default=True, description="Enable MCP server catalog feature")
     mcpgateway_catalog_file: str = Field(default="mcp-catalog.yml", description="Path to catalog configuration file")
@@ -314,33 +347,45 @@ class Settings(BaseSettings):
     mcpgateway_catalog_cache_ttl: int = Field(default=3600, description="Catalog cache TTL in seconds")
     mcpgateway_catalog_page_size: int = Field(default=100, description="Number of catalog servers per page")
 
+    # Elicitation support (MCP 2025-06-18)
+    mcpgateway_elicitation_enabled: bool = Field(default=True, description="Enable elicitation passthrough support (MCP 2025-06-18)")
+    mcpgateway_elicitation_timeout: int = Field(default=60, description="Default timeout for elicitation requests in seconds")
+    mcpgateway_elicitation_max_concurrent: int = Field(default=100, description="Maximum concurrent elicitation requests")
+
     # Security
     skip_ssl_verify: bool = False
     cors_enabled: bool = True
 
     # Environment
-    environment: Literal["development", "staging", "production"] = Field(default="development", env="ENVIRONMENT")
+    environment: Literal["development", "staging", "production"] = Field(default="development")
 
     # Domain configuration
-    app_domain: HttpUrl = Field(default="http://localhost:4444", env="APP_DOMAIN")
+    app_domain: HttpUrl = Field(default=HttpUrl("http://localhost:4444"))
 
     # Security settings
-    secure_cookies: bool = Field(default=True, env="SECURE_COOKIES")
-    cookie_samesite: str = Field(default="lax", env="COOKIE_SAMESITE")
+    secure_cookies: bool = Field(default=True)
+    cookie_samesite: str = Field(default="lax")
 
     # CORS settings
-    cors_allow_credentials: bool = Field(default=True, env="CORS_ALLOW_CREDENTIALS")
+    cors_allow_credentials: bool = Field(default=True)
 
     # Security Headers Configuration
-    security_headers_enabled: bool = Field(default=True, env="SECURITY_HEADERS_ENABLED")
-    x_frame_options: str = Field(default="DENY", env="X_FRAME_OPTIONS")
-    x_content_type_options_enabled: bool = Field(default=True, env="X_CONTENT_TYPE_OPTIONS_ENABLED")
-    x_xss_protection_enabled: bool = Field(default=True, env="X_XSS_PROTECTION_ENABLED")
-    x_download_options_enabled: bool = Field(default=True, env="X_DOWNLOAD_OPTIONS_ENABLED")
-    hsts_enabled: bool = Field(default=True, env="HSTS_ENABLED")
-    hsts_max_age: int = Field(default=31536000, env="HSTS_MAX_AGE")  # 1 year
-    hsts_include_subdomains: bool = Field(default=True, env="HSTS_INCLUDE_SUBDOMAINS")
-    remove_server_headers: bool = Field(default=True, env="REMOVE_SERVER_HEADERS")
+    security_headers_enabled: bool = Field(default=True)
+    x_frame_options: str = Field(default="DENY")
+    x_content_type_options_enabled: bool = Field(default=True)
+    x_xss_protection_enabled: bool = Field(default=True)
+    x_download_options_enabled: bool = Field(default=True)
+    hsts_enabled: bool = Field(default=True)
+    hsts_max_age: int = Field(default=31536000)  # 1 year
+    hsts_include_subdomains: bool = Field(default=True)
+    remove_server_headers: bool = Field(default=True)
+
+    # Response Compression Configuration
+    compression_enabled: bool = Field(default=True, description="Enable response compression (Brotli, Zstd, GZip)")
+    compression_minimum_size: int = Field(default=500, ge=0, description="Minimum response size in bytes to compress (0 = compress all)")
+    compression_gzip_level: int = Field(default=6, ge=1, le=9, description="GZip compression level (1=fastest, 9=best compression)")
+    compression_brotli_quality: int = Field(default=4, ge=0, le=11, description="Brotli compression quality (0-3=fast, 4-9=balanced, 10-11=max)")
+    compression_zstd_level: int = Field(default=3, ge=1, le=22, description="Zstd compression level (1-3=fast, 4-9=balanced, 10+=slow)")
 
     # For allowed_origins, strip '' to ensure we're passing on valid JSON via env
     # Tell pydantic *not* to touch this env var - our validator will.
@@ -352,11 +397,21 @@ class Settings(BaseSettings):
     # Security validation thresholds
     min_secret_length: int = 32
     min_password_length: int = 12
-    require_strong_secrets: bool = False  # Default to False for backward compatibility, will be enforced in 0.8.0
+    require_strong_secrets: bool = False  # Default to False for backward compatibility, will be enforced in 1.0.0
+
+    llmchat_enabled: bool = Field(default=False, description="Enable LLM Chat feature")
+
+    # redis configurations for Maintaining Chat Sessions in multi-worker environment
+    llmchat_session_ttl: int = Field(default=300, description="Seconds for active_session key TTL")
+    llmchat_session_lock_ttl: int = Field(default=30, description="Seconds for lock expiry")
+    llmchat_session_lock_retries: int = Field(default=10, description="How many times to poll while waiting")
+    llmchat_session_lock_wait: float = Field(default=0.2, description="Seconds between polls")
+    llmchat_chat_history_ttl: int = Field(default=3600, description="Seconds for chat history expiry")
+    llmchat_chat_history_max_messages: int = Field(default=50, description="Maximum message history to store per user")
 
     @field_validator("jwt_secret_key", "auth_encryption_secret")
     @classmethod
-    def validate_secrets(cls, v, info):
+    def validate_secrets(cls, v: Any, info: ValidationInfo) -> SecretStr:
         """
         Validate that secret keys meet basic security requirements.
 
@@ -375,7 +430,7 @@ class Settings(BaseSettings):
             - The original value is returned as a `SecretStr` for safe handling.
 
         Args:
-            v (str | SecretStr): The secret value to validate.
+            v: The secret value to validate.
             info: Pydantic validation info object, used to get the field name.
 
         Returns:
@@ -388,7 +443,7 @@ class Settings(BaseSettings):
         if isinstance(v, SecretStr):
             value = v.get_secret_value()
         else:
-            value = v
+            value = str(v)
 
         # Check for default/weak secrets
         weak_secrets = ["my-test-key", "my-test-salt", "changeme", "secret", "password"]
@@ -408,39 +463,46 @@ class Settings(BaseSettings):
 
     @field_validator("basic_auth_password")
     @classmethod
-    def validate_admin_password(cls, v: str) -> str:
+    def validate_admin_password(cls, v: str | SecretStr) -> SecretStr:
         """Validate admin password meets security requirements.
 
         Args:
             v: The admin password value to validate.
 
         Returns:
-            str: The validated admin password value.
+            SecretStr: The validated admin password value, wrapped as SecretStr.
         """
-        if v == "changeme":  # nosec B105 - checking for default value
+        # Extract actual string value safely
+        if isinstance(v, SecretStr):
+            value = v.get_secret_value()
+        else:
+            value = v
+
+        if value == "changeme":  # nosec B105 - checking for default value
             logger.warning("🔓 SECURITY WARNING: Default admin password detected! Please change the BASIC_AUTH_PASSWORD immediately.")
 
         # Note: We can't access password_min_length here as it's not set yet during validation
         # Using default value of 8 to match the field default
         min_length = 8  # This matches the default in password_min_length field
-        if len(v) < min_length:
-            logger.warning(f"⚠️  SECURITY WARNING: Admin password should be at least {min_length} characters long. Current length: {len(v)}")
+        if len(value) < min_length:
+            logger.warning(f"⚠️  SECURITY WARNING: Admin password should be at least {min_length} characters long. Current length: {len(value)}")
 
         # Check password complexity
-        has_upper = any(c.isupper() for c in v)
-        has_lower = any(c.islower() for c in v)
-        has_digit = any(c.isdigit() for c in v)
-        has_special = bool(re.search(r'[!@#$%^&*(),.?":{}|<>]', v))
+        has_upper = any(c.isupper() for c in value)
+        has_lower = any(c.islower() for c in value)
+        has_digit = any(c.isdigit() for c in value)
+        has_special = bool(re.search(r'[!@#$%^&*(),.?":{}|<>]', value))
 
         complexity_score = sum([has_upper, has_lower, has_digit, has_special])
         if complexity_score < 3:
             logger.warning("🔐 SECURITY WARNING: Admin password has low complexity. Should contain at least 3 of: uppercase, lowercase, digits, special characters")
 
-        return v
+        # Always return SecretStr to keep it secret-safe
+        return v if isinstance(v, SecretStr) else SecretStr(value)
 
     @field_validator("allowed_origins")
     @classmethod
-    def validate_cors_origins(cls, v: set) -> set:
+    def validate_cors_origins(cls, v: Any) -> set[str] | None:
         """Validate CORS allowed origins.
 
         Args:
@@ -448,9 +510,14 @@ class Settings(BaseSettings):
 
         Returns:
             set: The validated set of allowed origins.
+
+        Raises:
+            ValueError: If allowed_origins is not a set or list of strings.
         """
-        if not v:
+        if v is None:
             return v
+        if not isinstance(v, (set, list)):
+            raise ValueError("allowed_origins must be a set or list of strings")
 
         dangerous_origins = ["*", "null", ""]
         for origin in v:
@@ -461,7 +528,7 @@ class Settings(BaseSettings):
             if not origin.startswith(("http://", "https://")) and origin not in dangerous_origins:
                 logger.warning(f"⚠️  SECURITY WARNING: Invalid origin format '{origin}'. Origins should start with http:// or https://")
 
-        return v
+        return set({str(origin) for origin in v})
 
     @field_validator("database_url")
     @classmethod
@@ -486,31 +553,27 @@ class Settings(BaseSettings):
         return v
 
     @model_validator(mode="after")
-    @classmethod
-    def validate_security_combinations(cls, values):
-        """Validate security setting combinations.
-
-        Args:
-            values: The Settings instance with all field values.
+    def validate_security_combinations(self) -> Self:
+        """Validate security setting combinations.  Only logs warnings; no changes are made.
 
         Returns:
-            Settings: The validated Settings instance.
+            Itself.
         """
         # Check for dangerous combinations - only log warnings, don't raise errors
-        if not values.auth_required and values.mcpgateway_ui_enabled:
+        if not self.auth_required and self.mcpgateway_ui_enabled:
             logger.warning("🔓 SECURITY WARNING: Admin UI is enabled without authentication. Consider setting AUTH_REQUIRED=true for production.")
 
-        if values.skip_ssl_verify and not values.dev_mode:
+        if self.skip_ssl_verify and not self.dev_mode:
             logger.warning("🔓 SECURITY WARNING: SSL verification is disabled in non-dev mode. This is a security risk! Set SKIP_SSL_VERIFY=false for production.")
 
-        if values.debug and not values.dev_mode:
+        if self.debug and not self.dev_mode:
             logger.warning("🐛 SECURITY WARNING: Debug mode is enabled in non-dev mode. This may leak sensitive information! Set DEBUG=false for production.")
 
         # Warn about federation without auth
-        if values.federation_enabled and not values.auth_required:
+        if self.federation_enabled and not self.auth_required:
             logger.warning("🌐 SECURITY WARNING: Federation is enabled without authentication. This may expose your gateway to unauthorized access.")
 
-        return values
+        return self
 
     def get_security_warnings(self) -> List[str]:
         """Get list of security warnings for current configuration.
@@ -556,11 +619,23 @@ class Settings(BaseSettings):
 
         return warnings
 
-    def get_security_status(self) -> dict:
+    class SecurityStatus(TypedDict):
+        """TypedDict for comprehensive security status."""
+
+        secure_secrets: bool
+        auth_enabled: bool
+        ssl_verification: bool
+        debug_disabled: bool
+        cors_restricted: bool
+        ui_protected: bool
+        warnings: List[str]
+        security_score: int
+
+    def get_security_status(self) -> SecurityStatus:
         """Get comprehensive security status.
 
         Returns:
-            dict: Dictionary containing security status information including score and warnings.
+            SecurityStatus: Dictionary containing security status information including score and warnings.
         """
 
         # Compute a security score: 100 minus 10 for each warning
@@ -585,7 +660,7 @@ class Settings(BaseSettings):
 
     @field_validator("allowed_origins", mode="before")
     @classmethod
-    def _parse_allowed_origins(cls, v):
+    def _parse_allowed_origins(cls, v: Any) -> Set[str]:
         """Parse allowed origins from environment variable or config value.
 
         Handles multiple input formats for the allowed_origins field:
@@ -627,7 +702,8 @@ class Settings(BaseSettings):
         return set(v)
 
     # Logging
-    log_level: Literal["DEBUG", "INFO", "WARNING", "ERROR", "CRITICAL"] = Field(default="ERROR", env="LOG_LEVEL")
+    log_level: Literal["DEBUG", "INFO", "WARNING", "ERROR", "CRITICAL"] = Field(default="ERROR")
+    log_requests: bool = Field(default=False, description="Enable request payload logging with sensitive data masking")
     log_format: Literal["json", "text"] = "json"  # json or text
     log_to_file: bool = False  # Enable file logging (default: stdout/stderr only)
     log_filemode: str = "a+"  # append or overwrite
@@ -641,6 +717,34 @@ class Settings(BaseSettings):
 
     # Log Buffer (for in-memory storage in admin UI)
     log_buffer_size_mb: float = 1.0  # Size of in-memory log buffer in MB
+
+    # ===================================
+    # Observability Configuration
+    # ===================================
+
+    # Enable observability features (traces, spans, metrics)
+    observability_enabled: bool = Field(default=False, description="Enable observability tracing and metrics collection")
+
+    # Automatic HTTP request tracing
+    observability_trace_http_requests: bool = Field(default=True, description="Automatically trace HTTP requests")
+
+    # Trace retention period (days)
+    observability_trace_retention_days: int = Field(default=7, ge=1, description="Number of days to retain trace data")
+
+    # Maximum traces to store (prevents unbounded growth)
+    observability_max_traces: int = Field(default=100000, ge=1000, description="Maximum number of traces to retain")
+
+    # Sample rate (0.0 to 1.0) - 1.0 means trace everything
+    observability_sample_rate: float = Field(default=1.0, ge=0.0, le=1.0, description="Trace sampling rate (0.0-1.0)")
+
+    # Exclude paths from tracing (regex patterns)
+    observability_exclude_paths: List[str] = Field(default_factory=lambda: ["/health", "/healthz", "/ready", "/metrics", "/static/.*"], description="Paths to exclude from tracing (regex)")
+
+    # Enable performance metrics
+    observability_metrics_enabled: bool = Field(default=True, description="Enable metrics collection")
+
+    # Enable span events
+    observability_events_enabled: bool = Field(default=True, description="Enable event logging within spans")
 
     @field_validator("log_level", mode="before")
     @classmethod
@@ -680,11 +784,11 @@ class Settings(BaseSettings):
     federation_discovery: bool = False
 
     # For federation_peers strip out quotes to ensure we're passing valid JSON via env
-    federation_peers: List[HttpUrl] = Field(default_factory=list, env="FEDERATION_PEERS")
+    federation_peers: List[HttpUrl] = Field(default_factory=list)
 
     @field_validator("federation_peers", mode="before")
     @classmethod
-    def _parse_federation_peers(cls, v):
+    def _parse_federation_peers(cls, v: Any) -> List[str]:
         """Parse federation peer URLs from environment variable or config value.
 
         Handles multiple input formats for the federation_peers field:
@@ -726,7 +830,7 @@ class Settings(BaseSettings):
                 peers = json.loads(v)
             except json.JSONDecodeError:
                 peers = [s.strip() for s in v.split(",") if s.strip()]
-            return peers
+            return peers  # type: ignore[no-any-return]
 
         # Convert other iterables to list
         return list(v)
@@ -736,36 +840,46 @@ class Settings(BaseSettings):
 
     # SSO
     # For sso_issuers strip out quotes to ensure we're passing valid JSON via env
-    sso_issuers: Optional[list[HttpUrl]] = Field(default=None, env="SSO_ISSUERS")
+    sso_issuers: Optional[list[HttpUrl]] = Field(default=None)
 
     @field_validator("sso_issuers", mode="before")
     @classmethod
-    def parse_issuers(cls, v):
+    def parse_issuers(cls, v: Any) -> list[str]:
         """
         Parse and validate the SSO issuers configuration value.
 
-        Accepts either a JSON array string (e.g. '["https://idp1.com", "https://idp2.com"]')
-        or an already-parsed list of issuer URLs. This allows environment variables to
-        provide issuers as JSON while still supporting direct list assignment in code.
+        Accepts:
+        - JSON array string: '["https://idp1.com", "https://idp2.com"]'
+        - Comma-separated string: "https://idp1.com, https://idp2.com"
+        - Empty string or None → []
+        - Already-parsed list
 
         Args:
-            v (str | list): The input value for SSO issuers, either a JSON array string
-                or a Python list.
+            v: The input value to parse.
 
         Returns:
-            list: A list of issuer URLs.
+            list[str]: Parsed list of issuer URLs.
 
         Raises:
-            ValueError: If the string input cannot be parsed as JSON.
+            ValueError: If the input is not a valid format.
         """
-
-        # Accept either a JSON array string or actual list
+        if v is None:
+            return []
+        if isinstance(v, list):
+            return v
         if isinstance(v, str):
-            try:
-                return json.loads(v)
-            except json.JSONDecodeError:
-                raise ValueError(f"SSO_ISSUERS must be a JSON array of URLs, got: {v!r}")
-        return v
+            s = v.strip()
+            if not s:
+                return []
+            if s.startswith("["):
+                try:
+                    parsed = json.loads(s)
+                    return parsed if isinstance(parsed, list) else []
+                except json.JSONDecodeError:
+                    raise ValueError(f"Invalid JSON for SSO_ISSUERS: {v!r}")
+            # Fallback to comma-separated parsing
+            return [item.strip() for item in s.split(",") if item.strip()]
+        raise ValueError("Invalid type for SSO_ISSUERS")
 
     # Resources
     resource_cache_size: int = 1000
@@ -800,6 +914,7 @@ class Settings(BaseSettings):
 
     # Validation Gateway URL
     gateway_validation_timeout: int = 5  # seconds
+    gateway_max_redirects: int = 5
 
     filelock_name: str = "gateway_service_leader.lock"
 
@@ -833,7 +948,7 @@ class Settings(BaseSettings):
 
     # Plugin CLI settings
     plugins_cli_completion: bool = Field(default=False, description="Enable auto-completion for plugins CLI")
-    plugins_cli_markup_mode: str | None = Field(default=None, description="Set markup mode for plugins CLI")
+    plugins_cli_markup_mode: Literal["markdown", "rich", "disabled"] | None = Field(default=None, description="Set markup mode for plugins CLI")
 
     # Development
     dev_mode: bool = False
@@ -933,7 +1048,7 @@ Disallow: /
 
     @field_validator("well_known_security_txt_enabled", mode="after")
     @classmethod
-    def _auto_enable_security_txt(cls, v, info):
+    def _auto_enable_security_txt(cls, v: Any, info: ValidationInfo) -> bool:
         """Auto-enable security.txt if content is provided.
 
         Args:
@@ -945,7 +1060,7 @@ Disallow: /
         """
         if info.data and "well_known_security_txt" in info.data:
             return bool(info.data["well_known_security_txt"].strip())
-        return v
+        return bool(v)
 
     # -------------------------------
     # Flexible list parsing for envs
@@ -958,7 +1073,7 @@ Disallow: /
         mode="before",
     )
     @classmethod
-    def _parse_list_from_env(cls, v):  # type: ignore[override]
+    def _parse_list_from_env(cls, v: None | str | list[str]) -> list[str]:
         """Parse list fields from environment values.
 
         Accepts either JSON arrays (e.g. '["a","b"]') or comma-separated
@@ -969,6 +1084,9 @@ Disallow: /
 
         Returns:
             list: Parsed list of values.
+
+        Raises:
+            ValueError: If the value type is invalid for list field parsing.
         """
         if v is None:
             return []
@@ -986,7 +1104,7 @@ Disallow: /
                     logger.warning("Invalid JSON list in env for list field; falling back to CSV parsing")
             # CSV fallback
             return [item.strip() for item in s.split(",") if item.strip()]
-        return v
+        raise ValueError("Invalid type for list field")
 
     @property
     def api_key(self) -> str:
@@ -1005,7 +1123,7 @@ Disallow: /
             >>> settings.api_key
             'user123:pass456'
         """
-        return f"{self.basic_auth_user}:{self.basic_auth_password}"
+        return f"{self.basic_auth_user}:{self.basic_auth_password.get_secret_value()}"
 
     @property
     def supports_http(self) -> bool:
@@ -1067,13 +1185,22 @@ Disallow: /
         """
         return self.transport_type in ["sse", "all"]
 
+    class DatabaseSettings(TypedDict):
+        """TypedDict for SQLAlchemy database settings."""
+
+        pool_size: int
+        max_overflow: int
+        pool_timeout: int
+        pool_recycle: int
+        connect_args: dict[str, Any]  # consider more specific type if needed
+
     @property
-    def database_settings(self) -> dict:
+    def database_settings(self) -> DatabaseSettings:
         """
         Get SQLAlchemy database settings.
 
         Returns:
-            dict: Dictionary containing SQLAlchemy database configuration options.
+            DatabaseSettings: Dictionary containing SQLAlchemy database configuration options.
 
         Examples:
             >>> from mcpgateway.config import Settings
@@ -1089,12 +1216,20 @@ Disallow: /
             "connect_args": {"check_same_thread": False} if self.database_url.startswith("sqlite") else {},
         }
 
+    class CORSSettings(TypedDict):
+        """TypedDict for CORS settings."""
+
+        allow_origins: NotRequired[List[str]]
+        allow_credentials: NotRequired[bool]
+        allow_methods: NotRequired[List[str]]
+        allow_headers: NotRequired[List[str]]
+
     @property
-    def cors_settings(self) -> dict:
+    def cors_settings(self) -> CORSSettings:
         """Get CORS settings.
 
         Returns:
-            dict: Dictionary containing CORS configuration options.
+            CORSSettings: Dictionary containing CORS configuration options.
 
         Examples:
             >>> s = Settings(cors_enabled=True, allowed_origins={'http://localhost'})
@@ -1210,7 +1345,95 @@ Disallow: /
     # Passthrough headers configuration
     default_passthrough_headers: List[str] = Field(default_factory=list)
 
-    def __init__(self, **kwargs):
+    # ===================================
+    # Pagination Configuration
+    # ===================================
+
+    # Default number of items per page for paginated endpoints
+    pagination_default_page_size: int = Field(default=50, ge=1, le=1000, description="Default number of items per page")
+
+    # Maximum allowed items per page (prevents abuse)
+    pagination_max_page_size: int = Field(default=500, ge=1, le=10000, description="Maximum allowed items per page")
+
+    # Minimum items per page
+    pagination_min_page_size: int = Field(default=1, ge=1, description="Minimum items per page")
+
+    # Threshold for switching from offset to cursor-based pagination
+    pagination_cursor_threshold: int = Field(default=10000, ge=1, description="Threshold for cursor-based pagination")
+
+    # Enable cursor-based pagination globally
+    pagination_cursor_enabled: bool = Field(default=True, description="Enable cursor-based pagination")
+
+    # Default sort field for paginated queries
+    pagination_default_sort_field: str = Field(default="created_at", description="Default sort field")
+
+    # Default sort order for paginated queries
+    pagination_default_sort_order: str = Field(default="desc", pattern="^(asc|desc)$", description="Default sort order")
+
+    # Maximum offset allowed for offset-based pagination (prevents abuse)
+    pagination_max_offset: int = Field(default=100000, ge=0, description="Maximum offset for pagination")
+
+    # Cache pagination counts for performance (seconds)
+    pagination_count_cache_ttl: int = Field(default=300, ge=0, description="Cache TTL for pagination counts")
+
+    # Enable pagination links in API responses
+    pagination_include_links: bool = Field(default=True, description="Include pagination links")
+
+    # Base URL for pagination links (defaults to request URL)
+    pagination_base_url: Optional[str] = Field(default=None, description="Base URL for pagination links")
+
+    # Ed25519 keys for signing
+    enable_ed25519_signing: bool = Field(default=False, description="Enable Ed25519 signing for certificates")
+    prev_ed25519_private_key: SecretStr = Field(default=SecretStr(""), description="Previous Ed25519 private key for signing")
+    prev_ed25519_public_key: Optional[str] = Field(default=None, description="Derived previous Ed25519 public key")
+    ed25519_private_key: SecretStr = Field(default=SecretStr(""), description="Ed25519 private key for signing")
+    ed25519_public_key: Optional[str] = Field(default=None, description="Derived Ed25519 public key")
+
+    @model_validator(mode="after")
+    def derive_public_keys(self) -> "Settings":
+        """
+        Derive public keys after all individual field validations are complete.
+
+        Returns:
+            Settings: The updated Settings instance with derived public keys.
+        """
+        for private_key_field in ["ed25519_private_key", "prev_ed25519_private_key"]:
+            public_key_field = private_key_field.replace("private", "public")
+
+            # 1. Get the private key SecretStr object
+            private_key_secret: SecretStr = getattr(self, private_key_field)
+
+            # 2. Proceed only if a key is present and the public key hasn't been set
+            pem = private_key_secret.get_secret_value().strip()
+            if not pem:
+                continue
+
+            try:
+                # Load the private key
+                private_key = serialization.load_pem_private_key(pem.encode(), password=None)
+                if not isinstance(private_key, ed25519.Ed25519PrivateKey):
+                    # This check is useful, though model_validator should not raise
+                    # for an invalid key if the field validator has already passed.
+                    continue
+
+                # Derive and PEM-encode the public key
+                public_key = private_key.public_key()
+                public_pem = public_key.public_bytes(
+                    encoding=serialization.Encoding.PEM,
+                    format=serialization.PublicFormat.SubjectPublicKeyInfo,
+                ).decode()
+
+                # 3. Set the public key attribute directly on the model instance (self)
+                setattr(self, public_key_field, public_pem)
+                # logger.info(f"Derived and stored {public_key_field} automatically.")
+
+            except Exception:
+                logger.warning("Failed to derive public key for private_key")
+                # You can choose to raise an error here if a failure should halt model creation
+
+        return self
+
+    def __init__(self, **kwargs: Any) -> None:
         """Initialize Settings with environment variable parsing.
 
         Args:
@@ -1278,7 +1501,7 @@ Disallow: /
     # Masking value for all sensitive data
     masked_auth_value: str = "*****"
 
-    def log_summary(self):
+    def log_summary(self) -> None:
         """
         Log a summary of the application settings.
 
@@ -1292,124 +1515,11 @@ Disallow: /
         summary = self.model_dump(exclude={"database_url", "memcached_url"})
         logger.info(f"Application settings summary: {summary}")
 
-
-def extract_using_jq(data, jq_filter=""):
-    """
-    Extracts data from a given input (string, dict, or list) using a jq filter string.
-
-    Args:
-        data (str, dict, list): The input JSON data. Can be a string, dict, or list.
-        jq_filter (str): The jq filter string to extract the desired data.
-
-    Returns:
-        The result of applying the jq filter to the input data.
-
-    Examples:
-        >>> extract_using_jq('{"a": 1, "b": 2}', '.a')
-        [1]
-        >>> extract_using_jq({'a': 1, 'b': 2}, '.b')
-        [2]
-        >>> extract_using_jq('[{"a": 1}, {"a": 2}]', '.[].a')
-        [1, 2]
-        >>> extract_using_jq('not a json', '.a')
-        ['Invalid JSON string provided.']
-        >>> extract_using_jq({'a': 1}, '')
-        {'a': 1}
-    """
-    if jq_filter == "":
-        return data
-    if isinstance(data, str):
-        # If the input is a string, parse it as JSON
-        try:
-            data = json.loads(data)
-        except json.JSONDecodeError:
-            return ["Invalid JSON string provided."]
-
-    elif not isinstance(data, (dict, list)):
-        # If the input is not a string, dict, or list, raise an error
-        return ["Input data must be a JSON string, dictionary, or list."]
-
-    # Apply the jq filter to the data
-    try:
-        # Pylint can't introspect C-extension modules, so it doesn't know that jq really does export an all() function.
-        # pylint: disable=c-extension-no-member
-        result = jq.all(jq_filter, data)  # Use `jq.all` to get all matches (returns a list)
-        if result == [None]:
-            result = "Error applying jsonpath filter"
-    except Exception as e:
-        message = "Error applying jsonpath filter: " + str(e)
-        return message
-
-    return result
-
-
-def jsonpath_modifier(data: Any, jsonpath: str = "$[*]", mappings: Optional[Dict[str, str]] = None) -> Union[List, Dict]:
-    """
-    Applies the given JSONPath expression and mappings to the data.
-    Only return data that is required by the user dynamically.
-
-    Args:
-        data: The JSON data to query.
-        jsonpath: The JSONPath expression to apply.
-        mappings: Optional dictionary of mappings where keys are new field names
-                  and values are JSONPath expressions.
-
-    Returns:
-        Union[List, Dict]: A list (or mapped list) or a Dict of extracted data.
-
-    Raises:
-        HTTPException: If there's an error parsing or executing the JSONPath expressions.
-
-    Examples:
-        >>> jsonpath_modifier({'a': 1, 'b': 2}, '$.a')
-        [1]
-        >>> jsonpath_modifier([{'a': 1}, {'a': 2}], '$[*].a')
-        [1, 2]
-        >>> jsonpath_modifier({'a': {'b': 2}}, '$.a.b')
-        [2]
-        >>> jsonpath_modifier({'a': 1}, '$.b')
-        []
-    """
-    if not jsonpath:
-        jsonpath = "$[*]"
-
-    try:
-        main_expr: JSONPath = parse(jsonpath)
-    except Exception as e:
-        raise HTTPException(status_code=400, detail=f"Invalid main JSONPath expression: {e}")
-
-    try:
-        main_matches = main_expr.find(data)
-    except Exception as e:
-        raise HTTPException(status_code=400, detail=f"Error executing main JSONPath: {e}")
-
-    results = [match.value for match in main_matches]
-
-    if mappings:
-        mapped_results = []
-        for item in results:
-            mapped_item = {}
-            for new_key, mapping_expr_str in mappings.items():
-                try:
-                    mapping_expr = parse(mapping_expr_str)
-                except Exception as e:
-                    raise HTTPException(status_code=400, detail=f"Invalid mapping JSONPath for key '{new_key}': {e}")
-                try:
-                    mapping_matches = mapping_expr.find(item)
-                except Exception as e:
-                    raise HTTPException(status_code=400, detail=f"Error executing mapping JSONPath for key '{new_key}': {e}")
-                if not mapping_matches:
-                    mapped_item[new_key] = None
-                elif len(mapping_matches) == 1:
-                    mapped_item[new_key] = mapping_matches[0].value
-                else:
-                    mapped_item[new_key] = [m.value for m in mapping_matches]
-            mapped_results.append(mapped_item)
-        results = mapped_results
-
-    if len(results) == 1 and isinstance(results[0], dict):
-        return results[0]
-    return results
+    ENABLE_METRICS: bool = Field(True, description="Enable Prometheus metrics instrumentation")
+    METRICS_EXCLUDED_HANDLERS: str = Field("", description="Comma-separated regex patterns for paths to exclude from metrics")
+    METRICS_NAMESPACE: str = Field("default", description="Prometheus metrics namespace")
+    METRICS_SUBSYSTEM: str = Field("", description="Prometheus metrics subsystem")
+    METRICS_CUSTOM_LABELS: str = Field("", description='Comma-separated "key=value" pairs for static custom labels')
 
 
 @lru_cache()
@@ -1440,7 +1550,7 @@ def get_settings() -> Settings:
     return cfg
 
 
-def generate_settings_schema() -> dict:
+def generate_settings_schema() -> dict[str, Any]:
     """
     Return the JSON Schema describing the Settings model.
 
@@ -1452,9 +1562,7 @@ def generate_settings_schema() -> dict:
     return Settings.model_json_schema(mode="validation")
 
 
-# Create settings instance
 settings = get_settings()
-
 
 if __name__ == "__main__":
     if "--schema" in sys.argv:

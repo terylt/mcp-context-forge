@@ -498,3 +498,66 @@ Error: `certificate verify failed: IP address mismatch` or `Hostname mismatch`
 1. **Use hostname from SANs**: Connect to `https://localhost:8000` instead of `https://127.0.0.1:8000`
 2. **Disable hostname check**: Set `check_hostname: false` or `PLUGINS_CLIENT_MTLS_CHECK_HOSTNAME="false"`
 3. **Add IP to SANs**: Regenerate certificates with IP SANs included
+
+## mTLS Deployment Hardening Guidelines
+
+For production deployments, follow these security best practices to ensure robust mTLS configuration:
+
+| Category | Recommendation | Configuration / Option | Notes |
+| --- | --- | --- | --- |
+| **Certificate Verification** | Keep hostname and certificate chain verification enabled. | **YAML**: `check_hostname: true` and valid `ca_bundle`<br>**Environment**: `PLUGINS_CLIENT_MTLS_CHECK_HOSTNAME="true"` and valid `PLUGINS_CLIENT_MTLS_CA_BUNDLE` or `PLUGINS_SERVER_SSL_CA_CERTS` | Only disable in trusted, local test setups. |
+| **CA Management** | Use a dedicated CA for gateway ↔ plugin certificates. | **YAML**: `ca_bundle: certs/mcp/gateway/ca.crt`<br>**Environment**: `PLUGINS_SERVER_SSL_CA_CERTS` or `PLUGINS_CLIENT_MTLS_CA_BUNDLE` | Ensures trust is limited to your deployment's CA. |
+| **Certificate Rotation** | Regenerate and redeploy certificates periodically. | **Local/Docker**: Use Makefile targets: `make certs-mcp-all`, `make certs-mcp-check`<br>**Kubernetes**: Use [cert-manager](https://cert-manager.io/) for automated certificate lifecycle management | Recommended: short-lived certs (e.g. 90–180 days). Configure with `MCP_CERT_DAYS` variable for Makefile targets. |
+| **Key Protection** | Limit read access to private key files. | **YAML**: `keyfile` paths (e.g., `server.key`, `client.key`)<br>**Environment**: `PLUGINS_SERVER_SSL_KEYFILE` or `PLUGINS_CLIENT_MTLS_KEYFILE`<br>**File permissions**: `600` (owner read/write only) | Keys should be owned and readable only by the service account. |
+| **TLS Version Enforcement** | Enforce TLS 1.2 or newer. | Controlled by Python's `ssl` defaults or runtime settings. | No additional configuration required; defaults are secure. |
+| **Health Endpoint Exposure** | Bind health endpoints to localhost only. | **YAML**: `server_settings.host: 127.0.0.1`<br>**Environment**: `PLUGINS_SERVER_HOST="127.0.0.1"` | Prevents unauthenticated HTTP access from external hosts. Health check server (port+1000) is HTTP-only. |
+| **Logging & Diagnostics** | Enable debug logs for TLS handshake troubleshooting. | `LOG_LEVEL=DEBUG` or `--verbose` | Logs cert subjects and handshake results (safe to enable temporarily). |
+| **Insecure Mode Control** | Disable insecure (non-TLS) connections in production. | **Environment**: `PLUGINS_SERVER_SSL_ENABLED="true"`<br>Set `ssl_cert_reqs: 2` (CERT_REQUIRED) for mTLS enforcement | Guarantees all plugin communications use mTLS. |
+| **Configuration Validation** | Fail fast on missing or invalid TLS configuration. | Enabled automatically at startup. | Ensures system won't silently downgrade to HTTP. |
+
+### Implementation Checklist
+
+When deploying plugin mTLS in production:
+
+1. **Generate Certificates**:
+   - **Local/Docker**: Use `make certs-mcp-all` to create complete certificate infrastructure
+   - **Kubernetes**: Deploy [cert-manager](https://cert-manager.io/) and configure Certificate resources for automated issuance and renewal
+2. **Verify Expiration**:
+   - **Local/Docker**: Run `make certs-mcp-check` regularly to monitor certificate validity
+   - **Kubernetes**: cert-manager automatically monitors and renews certificates before expiration
+3. **Secure Private Keys**: Ensure all `.key` files have `600` permissions and are owned by service accounts (or stored in Kubernetes Secrets with appropriate RBAC)
+4. **Enable Hostname Verification**: Set `check_hostname: true` or `PLUGINS_CLIENT_MTLS_CHECK_HOSTNAME="true"` unless using IP addresses
+5. **Configure Health Checks**: Bind health servers to `127.0.0.1` to prevent external access
+6. **Enforce mTLS**: Set `PLUGINS_SERVER_SSL_CERT_REQS="2"` to require client certificates
+7. **Monitor Logs**: Enable `LOG_LEVEL=DEBUG` temporarily during initial deployment to verify handshakes
+8. **Plan Rotation**:
+   - **Local/Docker**: Schedule certificate rotation every 90-180 days using `MCP_CERT_DAYS` parameter
+   - **Kubernetes**: Configure cert-manager Certificate resources with appropriate `renewBefore` duration (typically 30 days before expiration)
+
+### Security Validation
+
+After deployment, verify your mTLS configuration:
+
+```bash
+# 1. Check certificate expiration dates
+make certs-mcp-check
+
+# 2. Verify file permissions on private keys
+find certs/mcp -name "*.key" -exec ls -la {} \;
+
+# 3. Test certificate verification
+openssl verify -CAfile certs/mcp/ca/ca.crt certs/mcp/gateway/client.crt
+
+# 4. Confirm TLS version enforcement
+openssl s_client -connect localhost:8000 -tls1_1 < /dev/null
+# Should fail with "no protocols available" or similar
+
+# 5. Test hostname verification (should succeed)
+curl --cert certs/mcp/gateway/client.pem \
+     --cacert certs/mcp/gateway/ca.crt \
+     https://localhost:8000/health
+
+# 6. Test without client cert (should fail if ssl_cert_reqs=2)
+curl --cacert certs/mcp/gateway/ca.crt \
+     https://localhost:8000/health
+```

@@ -150,22 +150,26 @@ Below is an example of a plugin configuration file. A plugin configuration file 
 ```yaml
 # plugins/config.yaml
 plugins:
+
   - name: "PIIFilterPlugin"                    # Unique plugin identifier
     kind: "plugins.pii_filter.pii_filter.PIIFilterPlugin"  # Plugin class path
     description: "Detects and masks PII"       # Human-readable description
     version: "1.0.0"                          # Plugin version
     author: "Security Team"                   # Plugin author
     hooks:                                    # Hook registration
+
       - "prompt_pre_fetch"
       - "tool_pre_invoke"
       - "tool_post_invoke"
     tags:                                     # Searchable tags
+
       - "security"
       - "pii"
       - "compliance"
     mode: "enforce"                           # enforce|enforce_ignore_error|permissive|disabled
     priority: 50                              # Execution priority (lower = higher)
     conditions:                               # Conditional execution
+
       - server_ids: ["prod-server"]
         tenant_ids: ["enterprise"]
         tools: ["sensitive-tool"]
@@ -206,6 +210,8 @@ Details of each field are below:
 
 Available hook values for the `hooks` field:
 
+**MCP Protocol Hooks:**
+
 | Hook Value | Description | Timing |
 |------------|-------------|--------|
 | `"prompt_pre_fetch"` | Process prompt requests before template processing | Before prompt template retrieval |
@@ -214,6 +220,17 @@ Available hook values for the `hooks` field:
 | `"tool_post_invoke"` | Process tool results after execution | After tool completion |
 | `"resource_pre_fetch"` | Process resource requests before fetching | Before resource retrieval |
 | `"resource_post_fetch"` | Process resource content after loading | After resource content loading |
+
+**HTTP Authentication & Middleware Hooks:**
+
+| Hook Value | Description | Timing |
+|------------|-------------|--------|
+| `"http_pre_request"` | Transform HTTP headers before processing | Before authentication |
+| `"http_auth_resolve_user"` | Implement custom authentication | During user authentication |
+| `"http_auth_check_permission"` | Custom permission checking logic | Before RBAC checks |
+| `"http_post_request"` | Process responses and add audit headers | After request completion |
+
+See the [HTTP Authentication Hooks Guide](../../using/plugins/http-auth-hooks.md) for detailed implementation examples.
 
 #### Plugin Modes
 
@@ -295,6 +312,7 @@ repository: "https://github.com/company/advanced-pii-filter.git"
 
 # Plugin capabilities and hook registration
 available_hooks:
+
   - "prompt_pre_fetch"
   - "prompt_post_fetch"
   - "tool_pre_invoke"
@@ -303,6 +321,7 @@ available_hooks:
 
 # Categorization and discovery
 tags:
+
   - "security"
   - "pii"
   - "compliance"
@@ -319,6 +338,7 @@ default_config:
   detection_sensitivity: 0.8
   masking_strategy: "partial"             # partial | full | token
   pii_types:
+
     - "ssn"
     - "credit_card"
     - "email"
@@ -336,6 +356,7 @@ requirements:
 
 # Dependencies (for external plugins)
 dependencies:
+
   - "spacy>=3.4.0"
   - "presidio-analyzer>=2.2.0"
   - "pydantic>=2.0.0"
@@ -430,56 +451,100 @@ mcpgateway/plugins/framework/
 
 ### Base Plugin Class
 
-The base plugin class, of which developers subclass and implement the hooks that are important for their plugins. Hook points are functions that interpose on existing MCP and agent-based functionality.
+The `Plugin` class is an **Abstract Base Class (ABC)** that provides the foundation for all plugins. Developers must subclass it and implement only the hooks they need using one of three registration patterns.
 
 ```python
-class Plugin:
-    """Base plugin class for self-contained, in-process plugins"""
+from abc import ABC
+
+class Plugin(ABC):
+    """Abstract base class for self-contained, in-process plugins.
+
+    Plugins must inherit from this class and implement at least one hook method.
+    Three hook registration patterns are supported:
+
+    1. Convention-based: Name your method to match the hook type
+    2. Decorator-based: Use @hook decorator with custom method names
+    3. Custom hooks: Define new hook types with @hook decorator
+    """
 
     def __init__(self, config: PluginConfig) -> None:
-        """Initialize plugin with configuration"""
+        """Initialize plugin with configuration."""
 
     @property
-    def name(self) -> str: ...
-        """Plugin name"""
+    def name(self) -> str:
+        """Plugin name from configuration."""
 
     @property
-    def priority(self) -> int: ...
-        """Plugin execution priority (lower = higher priority)"""
+    def priority(self) -> int:
+        """Plugin execution priority (lower number = higher priority)."""
 
     @property
-    def mode(self) -> PluginMode: ...
-        """Plugin execution mode (enforce/permissive/disabled)"""
+    def mode(self) -> PluginMode:
+        """Plugin execution mode (enforce/enforce_ignore_error/permissive/disabled)."""
 
     @property
-    def hooks(self) -> list[HookType]: ...
-        """Hook points where plugin executes"""
+    def hooks(self) -> list[str]:
+        """Hook points where plugin executes (discovered via introspection)."""
 
     @property
-    def conditions(self) -> list[PluginCondition] | None: ...
-        """Conditions for plugin execution"""
+    def conditions(self) -> list[PluginCondition] | None:
+        """Conditions for plugin execution (optional)."""
 
-    async def initialize(self) -> None: ...
-        """Initialize plugin resources"""
+    # Optional lifecycle methods
+    async def initialize(self) -> None:
+        """Initialize plugin resources (called when plugin is loaded)."""
 
-    async def shutdown(self) -> None: ...
-        """Cleanup plugin resources"""
-
-    # Hook methods (implemented by subclasses)
-    async def prompt_pre_fetch(self, payload: PromptPrehookPayload,
-                              context: PluginContext) -> PromptPrehookResult: ...
-    async def prompt_post_fetch(self, payload: PromptPosthookPayload,
-                               context: PluginContext) -> PromptPosthookResult: ...
-    async def tool_pre_invoke(self, payload: ToolPreInvokePayload,
-                             context: PluginContext) -> ToolPreInvokeResult: ...
-    async def tool_post_invoke(self, payload: ToolPostInvokePayload,
-                              context: PluginContext) -> ToolPostInvokeResult: ...
-    async def resource_pre_fetch(self, payload: ResourcePreFetchPayload,
-                                context: PluginContext) -> ResourcePreFetchResult: ...
-    async def resource_post_fetch(self, payload: ResourcePostFetchPayload,
-                                 context: PluginContext) -> ResourcePostFetchResult: ...
-    # ... additional hook methods
+    async def shutdown(self) -> None:
+        """Cleanup plugin resources (called on shutdown)."""
 ```
+
+**Hook Implementation Patterns:**
+
+Plugins implement hooks using one of three patterns - **they do not need to implement all hooks**, only the ones they need:
+
+**Pattern 1: Convention-Based** (method name matches hook type)
+```python
+class MyPlugin(Plugin):
+    async def tool_pre_invoke(
+        self,
+        payload: ToolPreInvokePayload,
+        context: PluginContext
+    ) -> ToolPreInvokeResult:
+        # Implementation
+        pass
+```
+
+**Pattern 2: Decorator-Based** (custom method names)
+```python
+from mcpgateway.plugins.framework.decorator import hook
+
+class MyPlugin(Plugin):
+    @hook(ToolHookType.TOOL_POST_INVOKE)
+    async def my_custom_handler(
+        self,
+        payload: ToolPostInvokePayload,
+        context: PluginContext
+    ) -> ToolPostInvokeResult:
+        # Implementation
+        pass
+```
+
+**Pattern 3: Custom Hooks** (new hook types)
+```python
+from mcpgateway.plugins.framework.decorator import hook
+
+class MyPlugin(Plugin):
+    @hook("email_pre_send", EmailPayload, EmailResult)
+    async def validate_email(
+        self,
+        payload: EmailPayload,
+        context: PluginContext
+    ) -> EmailResult:
+        # Implementation
+        pass
+```
+
+See [Plugin Development Guide](../../using/plugins/) for detailed examples and best practices
 
 ### Plugin Manager
 
@@ -512,14 +577,61 @@ class PluginManager:
     def get_plugin(self, name: str) -> Optional[Plugin]:
         """Get plugin by name"""
 
-    # Hook execution methods
-    async def prompt_pre_fetch(self, payload: PromptPrehookPayload,
-                              global_context: GlobalContext, ...) -> tuple[PromptPrehookResult, PluginContextTable]: ...
-    async def prompt_post_fetch(self, payload: PromptPosthookPayload, ...) -> tuple[PromptPosthookResult, PluginContextTable]: ...
-    async def tool_pre_invoke(self, payload: ToolPreInvokePayload, ...) -> tuple[ToolPreInvokeResult, PluginContextTable]: ...
-    async def tool_post_invoke(self, payload: ToolPostInvokePayload, ...) -> tuple[ToolPostInvokeResult, PluginContextTable]: ...
-    async def resource_pre_fetch(self, payload: ResourcePreFetchPayload, ...) -> tuple[ResourcePreFetchResult, PluginContextTable]: ...
-    async def resource_post_fetch(self, payload: ResourcePostFetchPayload, ...) -> tuple[ResourcePostFetchResult, PluginContextTable]: ...
+    # Unified hook invocation API
+    async def invoke_hook(
+        self,
+        hook_type: str,
+        payload: PluginPayload,
+        global_context: GlobalContext,
+        **kwargs
+    ) -> tuple[PluginResult, PluginContextTable]:
+        """
+        Invoke a specific hook type with the given payload.
+
+        This is the primary API for executing plugins at hook points.
+        Plugins are executed in priority order with conditional filtering.
+
+        Args:
+            hook_type: String identifier for the hook (e.g., HttpHookType.HTTP_AUTH_RESOLVE_USER,
+                      ToolHookType.TOOL_PRE_INVOKE, PromptHookType.PROMPT_PRE_FETCH)
+            payload: Hook-specific payload (e.g., HttpAuthResolveUserPayload,
+                    ToolPreInvokePayload, PromptPrehookPayload)
+            global_context: Shared request context across all plugins
+            **kwargs: Additional hook-specific parameters
+
+        Returns:
+            tuple[PluginResult, PluginContextTable]: Combined plugin result and context table
+        """
+        ...
+```
+
+**Usage Example:**
+
+```python
+# Invoke HTTP authentication hook
+result, contexts = await plugin_manager.invoke_hook(
+    HttpHookType.HTTP_AUTH_RESOLVE_USER,
+    payload=HttpAuthResolveUserPayload(
+        credentials=credentials,
+        headers=HttpHeaderPayload(headers),
+        client_host=client_host,
+    ),
+    global_context=GlobalContext(
+        request_id=request_id,
+        server_id=None,
+        tenant_id=None,
+    )
+)
+
+# Invoke MCP protocol hook
+result, contexts = await plugin_manager.invoke_hook(
+    HookType.TOOL_PRE_INVOKE,
+    payload=ToolPreInvokePayload(
+        name=tool_name,
+        args=tool_args,
+    ),
+    global_context=global_context
+)
 ```
 
 ### Plugin Registry
@@ -637,14 +749,32 @@ class PluginMode(str, Enum):
     PERMISSIVE = "permissive"        # Log violations but allow continuation
     DISABLED = "disabled"            # Plugin loaded but not executed
 
-class HookType(str, Enum):
-    """Available hook points in MCP request lifecycle"""
+class PromptHookType(str, Enum):
+    """Prompt lifecycle hook points"""
     PROMPT_PRE_FETCH = "prompt_pre_fetch"     # Before prompt retrieval
     PROMPT_POST_FETCH = "prompt_post_fetch"   # After prompt rendering
+
+class ToolHookType(str, Enum):
+    """Tool invocation hook points"""
     TOOL_PRE_INVOKE = "tool_pre_invoke"       # Before tool execution
     TOOL_POST_INVOKE = "tool_post_invoke"     # After tool execution
+
+class ResourceHookType(str, Enum):
+    """Resource fetching hook points"""
     RESOURCE_PRE_FETCH = "resource_pre_fetch" # Before resource fetching
     RESOURCE_POST_FETCH = "resource_post_fetch" # After resource retrieval
+
+class HttpHookType(str, Enum):
+    """HTTP authentication and middleware hook points"""
+    HTTP_PRE_REQUEST = "http_pre_request"              # Before authentication
+    HTTP_AUTH_RESOLVE_USER = "http_auth_resolve_user"  # Custom authentication
+    HTTP_AUTH_CHECK_PERMISSION = "http_auth_check_permission"  # Permission checking
+    HTTP_POST_REQUEST = "http_post_request"            # After request completion
+
+class AgentHookType(str, Enum):
+    """Agent-to-Agent hook points"""
+    AGENT_PRE_INVOKE = "agent_pre_invoke"     # Before agent invocation
+    AGENT_POST_INVOKE = "agent_post_invoke"   # After agent completion
 
 class TransportType(str, Enum):
     """Supported MCP transport protocols"""
@@ -979,17 +1109,43 @@ External plugins integrate with the gateway through standardized configuration:
 ```yaml
 # resources/plugins/config.yaml (in plugin project)
 plugins:
-  - name: "MySecurityFilter"
-    kind: "myfilter.plugin.MySecurityFilter"
-    hooks: ["prompt_pre_fetch", "tool_pre_invoke"]
-    mode: "enforce"
-    priority: 10
+
+  # TypeScript/Node.js plugin
+  - name: "OpenAIModerationTS"
+    kind: "external"
+    mcp:
+      proto: "STREAMABLEHTTP"
+      url: "http://nodejs-plugin:3000/mcp"
+      # tls:
+      #   ca_bundle: /app/certs/plugins/ca.crt
+      #   client_cert: /app/certs/plugins/gateway-client.pem
+
+  # Go plugin
+  - name: "HighPerformanceFilter"
+    kind: "external"
+    mcp:
+      proto: "STDIO"
+      script: "/opt/plugins/go-filter"
+
+  # Rust plugin
+  - name: "CryptoValidator"
+    kind: "external"
+    mcp:
+      proto: "STREAMABLEHTTP"
+      url: "http://rust-plugin:8080/mcp"
+      # tls:
+      #   verify: true
+
+Gateway-wide defaults for these TLS options can be supplied via the
+`PLUGINS_MTLS_*` environment variables when you want every external
+plugin to share the same client certificate and CA bundle.
 ```
 
 **Gateway Configuration:**
 ```yaml
 # plugins/config.yaml (in gateway)
 plugins:
+
   - name: "MySecurityFilter"
     kind: "external"
     priority: 10
@@ -1056,6 +1212,7 @@ REQUIRED_TOOLS = [
 
 ```yaml
 plugins:
+
   - name: "OpenAIModerationPlugin"
     kind: "external"                    # Indicates external MCP server
     description: "OpenAI Content Moderation"
@@ -1230,8 +1387,10 @@ version: 1.0.0
 framework_compatibility: "mcp-plugin-framework>=1.0.0,<2.0.0"
 ...
 hooks:
+
   - prompt_pre_fetch
 capabilities:
+
   - hook:invoke:prompt_pre_fetch
   - read:context
 ```
@@ -1532,20 +1691,25 @@ plugins:
 
 Legend: ✅ = Completed | 🚧 = In Progress | 📋 = Planned
 
+### Completed Hook Points
+
+```python
+# HTTP Authentication & Middleware Hooks (✅ Implemented)
+class HttpHookType(str, Enum):
+    HTTP_PRE_REQUEST = "http_pre_request"              # Transform headers before authentication
+    HTTP_AUTH_RESOLVE_USER = "http_auth_resolve_user"  # Custom user authentication
+    HTTP_AUTH_CHECK_PERMISSION = "http_auth_check_permission"  # Custom permission checking
+    HTTP_POST_REQUEST = "http_post_request"            # Response processing and audit logging
+```
+
+See the [HTTP Authentication Hooks Guide](../../using/plugins/http-auth-hooks.md) for implementation details and the [Simple Token Auth Plugin](https://github.com/IBM/mcp-context-forge/tree/main/plugins/examples/simple_token_auth) for a complete example.
+
 ### Planned Hook Points
 
 ```python
-# HTTP hooks
-HTTP_PRE_FORWARDING_CALL = "http_pre_forwarding_call"   # Before HTTP forwarding
-HTTP_POST_FORWARDING_CALL = "http_post_forwarding_call" # After HTTP forwarding
-
 # Server lifecycle hooks
 SERVER_PRE_REGISTER = "server_pre_register"    # Server attestation and validation
 SERVER_POST_REGISTER = "server_post_register"  # Post-registration processing
-
-# Authentication hooks
-AUTH_PRE_CHECK = "auth_pre_check"              # Custom authentication logic
-AUTH_POST_CHECK = "auth_post_check"            # Post-authentication processing
 
 # Federation hooks
 FEDERATION_PRE_SYNC = "federation_pre_sync"    # Pre-federation validation

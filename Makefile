@@ -16,6 +16,10 @@ SHELL := /bin/bash
 # Read values from .env.make
 -include .env.make
 
+# Rust build configuration (set to 1 to enable Rust builds, 0 to disable)
+# Default is disabled to avoid requiring Rust toolchain for standard builds
+ENABLE_RUST_BUILD ?= 0
+
 # Project variables
 PROJECT_NAME      = mcpgateway
 DOCS_DIR          = docs
@@ -31,7 +35,7 @@ DIRS_TO_CLEAN := __pycache__ .pytest_cache .tox .ruff_cache .pyre .mypy_cache .p
 	$(VENV_DIR) $(VENV_DIR).sbom $(COVERAGE_DIR) \
 	node_modules .mutmut-cache html
 
-FILES_TO_CLEAN := .coverage coverage.xml mcp.prof mcp.pstats \
+FILES_TO_CLEAN := .coverage .coverage.* coverage.xml mcp.prof mcp.pstats mcp.db-* \
 	$(PROJECT_NAME).sbom.json \
 	snakefood.dot packages.dot classes.dot \
 	$(DOCS_DIR)/pstats.png \
@@ -99,18 +103,36 @@ endef
 # 🌱 VIRTUAL ENVIRONMENT & INSTALLATION
 # =============================================================================
 # help: 🌱 VIRTUAL ENVIRONMENT & INSTALLATION
+# help: uv                   - Ensure uv is installed or install it if needed
 # help: venv                 - Create a fresh virtual environment with uv & friends
 # help: activate             - Activate the virtual environment in the current shell
 # help: install              - Install project into the venv
 # help: install-dev          - Install project (incl. dev deps) into the venv
 # help: install-db           - Install project (incl. postgres and redis) into venv
 # help: update               - Update all installed deps inside the venv
+.PHONY: uv
+uv:
+	@if ! type uv >/dev/null 2>&1; then \
+		echo "🔧 'uv' not found - installing..."; \
+		if type brew >/dev/null 2>&1; then \
+			echo "🍺 Installing 'uv' via Homebrew..."; \
+			brew install uv; \
+		else \
+			echo "🐍 Installing 'uv' via local install script..."; \
+			curl -LsSf https://astral.sh/uv/install.sh | sh ; \
+			echo "💡  Make sure to add 'uv' to your PATH if not done automatically."; \
+		fi; \
+	fi
+
 .PHONY: venv
 venv:
 	@rm -Rf "$(VENV_DIR)"
 	@test -d "$(VENVS_DIR)" || mkdir -p "$(VENVS_DIR)"
 	@python3 -m venv "$(VENV_DIR)"
-	@/bin/bash -c "source $(VENV_DIR)/bin/activate && python3 -m pip install --upgrade pip setuptools pdm uv"
+	@/bin/bash -c "source $(VENV_DIR)/bin/activate && python3 -m pip install --upgrade pip setuptools pdm"
+	# Eventually, we want to transition to using uv/uvx exclusively, at which point we will only need
+	# a virtual environment if the user has not installed uv into their account.
+	@/bin/bash -c "type uv || ( source $(VENV_DIR)/bin/activate && python3 -m pip install --upgrade uv )"
 	@echo -e "✅  Virtual env created.\n💡  Enter it with:\n    . $(VENV_DIR)/bin/activate\n"
 
 .PHONY: activate
@@ -119,20 +141,26 @@ activate:
 
 .PHONY: install
 install: venv
-	@/bin/bash -c "source $(VENV_DIR)/bin/activate && python3 -m uv pip install ."
+	@/bin/bash -c "source $(VENV_DIR)/bin/activate && uv pip install ."
 
 .PHONY: install-db
 install-db: venv
-	@/bin/bash -c "source $(VENV_DIR)/bin/activate && python3 -m uv pip install .[redis,postgres]"
+	@/bin/bash -c "source $(VENV_DIR)/bin/activate && uv pip install .[redis,postgres]"
 
 .PHONY: install-dev
 install-dev: venv
-	@/bin/bash -c "source $(VENV_DIR)/bin/activate && python3 -m uv pip install .[dev]"
+	@/bin/bash -c "source $(VENV_DIR)/bin/activate && uv pip install --group dev ."
+	@if [ "$(ENABLE_RUST_BUILD)" = "1" ]; then \
+		echo "🦀 Building Rust plugins..."; \
+		$(MAKE) rust-dev || echo "⚠️  Rust plugins not available (optional)"; \
+	else \
+		echo "⏭️  Rust builds disabled (set ENABLE_RUST_BUILD=1 to enable)"; \
+	fi
 
 .PHONY: update
 update:
 	@echo "⬆️   Updating installed dependencies..."
-	@/bin/bash -c "source $(VENV_DIR)/bin/activate && python3 -m uv pip install -U .[dev]"
+	@/bin/bash -c "source $(VENV_DIR)/bin/activate && uv pip install -U --group dev ."
 
 # help: check-env            - Verify all required env vars in .env are present
 .PHONY: check-env check-env-dev
@@ -372,18 +400,14 @@ certs-mcp-check:                 ## Check expiry dates of MCP certificates
 .PHONY: clean
 clean:
 	@echo "🧹  Cleaning workspace..."
-	@bash -eu -o pipefail -c '\
-		# Remove matching directories \
-		for dir in $(DIRS_TO_CLEAN); do \
-			find . -type d -name "$$dir" -exec rm -rf {} +; \
-		done; \
-		# Remove listed files \
-		rm -f $(FILES_TO_CLEAN); \
-		# Delete Python bytecode \
-		find . -name "*.py[cod]" -delete; \
-		# Delete coverage annotated files \
-		find . -name "*.py,cover" -delete; \
-	'
+	@set +e; \
+	for dir in $(DIRS_TO_CLEAN); do \
+		find . -type d -name "$$dir" -prune -exec rm -rf {} +; \
+	done; \
+	set -e
+	@rm -f $(FILES_TO_CLEAN)
+	@find . -name "*.py[cod]" -delete
+	@find . -name "*.py,cover" -delete
 	@echo "✅  Clean complete."
 
 
@@ -393,6 +417,7 @@ clean:
 # help: 🧪 TESTING
 # help: smoketest            - Run smoketest.py --verbose (build container, add MCP server, test endpoints)
 # help: test                 - Run unit tests with pytest
+# help: test-profile         - Run tests and show slowest 20 tests (durations >= 1s)
 # help: coverage             - Run tests with coverage, emit md/HTML/XML + badge, generate annotated files
 # help: htmlcov              - (re)build just the HTML coverage report into docs
 # help: test-curl            - Smoke-test API endpoints with curl script
@@ -402,7 +427,7 @@ clean:
 # help: doctest-coverage     - Generate coverage report for doctest examples
 # help: doctest-check        - Check doctest coverage percentage (fail if < 100%)
 
-.PHONY: smoketest test coverage pytest-examples test-curl htmlcov doctest doctest-verbose doctest-coverage doctest-check
+.PHONY: smoketest test test-profile coverage pytest-examples test-curl htmlcov doctest doctest-verbose doctest-coverage doctest-check
 
 ## --- Automated checks --------------------------------------------------------
 smoketest:
@@ -416,10 +441,17 @@ test:
 	@echo "🧪 Running tests..."
 	@test -d "$(VENV_DIR)" || $(MAKE) venv
 	@/bin/bash -c "source $(VENV_DIR)/bin/activate && \
-		python3 -m pip install -q pytest pytest-asyncio pytest-cov && \
 		export DATABASE_URL='sqlite:///:memory:' && \
 		export TEST_DATABASE_URL='sqlite:///:memory:' && \
-		python3 -m pytest --maxfail=0 --disable-warnings -v --ignore=tests/fuzz"
+		uv run pytest -n auto --maxfail=0 -v --ignore=tests/fuzz"
+
+test-profile:
+	@echo "🧪 Running tests with profiling (showing slowest tests)..."
+	@test -d "$(VENV_DIR)" || $(MAKE) venv
+	@/bin/bash -c "source $(VENV_DIR)/bin/activate && \
+		export DATABASE_URL='sqlite:///:memory:' && \
+		export TEST_DATABASE_URL='sqlite:///:memory:' && \
+		uv run pytest -n auto --durations=20 --durations-min=1.0 --disable-warnings -v --ignore=tests/fuzz"
 
 coverage:
 	@test -d "$(VENV_DIR)" || $(MAKE) venv
@@ -472,13 +504,15 @@ doctest:
 	@echo "🧪 Running doctest on all modules..."
 	@test -d "$(VENV_DIR)" || $(MAKE) venv
 	@/bin/bash -c "source $(VENV_DIR)/bin/activate && \
-		python3 -m pytest --doctest-modules mcpgateway/ --tb=short"
+		export JWT_SECRET_KEY=secret && \
+		python3 -m pytest --doctest-modules mcpgateway/ --ignore=mcpgateway/utils/pagination.py --tb=short --no-cov --disable-warnings -n auto"
 
 doctest-verbose:
 	@echo "🧪 Running doctest with verbose output..."
 	@test -d "$(VENV_DIR)" || $(MAKE) venv
 	@/bin/bash -c "source $(VENV_DIR)/bin/activate && \
-		python3 -m pytest --doctest-modules mcpgateway/ -v --tb=short"
+		export JWT_SECRET_KEY=secret && \
+		python3 -m pytest --doctest-modules mcpgateway/ --ignore=mcpgateway/utils/pagination.py -v --tb=short --no-cov --disable-warnings -n auto"
 
 doctest-coverage:
 	@echo "📊 Generating doctest coverage report..."
@@ -496,6 +530,97 @@ doctest-check:
 	@/bin/bash -c "source $(VENV_DIR)/bin/activate && \
 		python3 -m pytest --doctest-modules mcpgateway/ --tb=no -q && \
 		echo '✅ All doctests passing' || (echo '❌ Doctest failures detected' && exit 1)"
+
+
+# =============================================================================
+# 📊 LOAD TESTING - Database population and performance testing
+# =============================================================================
+# help: 📊 LOAD TESTING
+# help: generate-small       - Generate small load test data (100 users, ~74K records, <1 min)
+# help: generate-medium      - Generate medium load test data (10K users, ~70M records, ~10 min)
+# help: generate-large       - Generate large load test data (100K users, ~700M records, ~1-2 hours)
+# help: generate-massive     - Generate massive load test data (1M users, billions of records, ~10-20 hours)
+# help: generate-clean       - Clean all generated load test data and reports
+# help: generate-report      - Display most recent load test report
+
+.PHONY: generate-small generate-medium generate-large generate-massive generate-clean generate-report
+
+generate-small:                            ## Generate small load test dataset (100 users)
+	@echo "📊 Generating small load test data..."
+	@echo "   Target: 100 users, ~74K records"
+	@echo "   Time: <1 minute"
+	@test -d "$(VENV_DIR)" || $(MAKE) venv
+	@/bin/bash -c "source $(VENV_DIR)/bin/activate && \
+		python -m tests.load.generate --profile small"
+	@echo ""
+	@echo "✅ Small load test data generated!"
+	@echo "📄 Report: reports/small_load_report.json"
+
+generate-medium:                           ## Generate medium load test dataset (10K users)
+	@echo "📊 Generating medium load test data..."
+	@echo "   Target: 10K users, ~70M records"
+	@echo "   Time: ~10 minutes"
+	@echo "   ⚠️  Recommended: Use PostgreSQL or MySQL for better performance"
+	@test -d "$(VENV_DIR)" || $(MAKE) venv
+	@/bin/bash -c "source $(VENV_DIR)/bin/activate && \
+		python -m tests.load.generate --profile medium"
+	@echo ""
+	@echo "✅ Medium load test data generated!"
+	@echo "📄 Report: reports/medium_load_report.json"
+
+generate-large:                            ## Generate large load test dataset (100K users)
+	@echo "📊 Generating large load test data..."
+	@echo "   Target: 100K users, ~700M records"
+	@echo "   Time: ~1-2 hours"
+	@echo "   ⚠️  REQUIRED: PostgreSQL or MySQL"
+	@echo "   ⚠️  Recommended: 16GB+ RAM, SSD storage"
+	@test -d "$(VENV_DIR)" || $(MAKE) venv
+	@/bin/bash -c "source $(VENV_DIR)/bin/activate && \
+		python -m tests.load.generate --profile large"
+	@echo ""
+	@echo "✅ Large load test data generated!"
+	@echo "📄 Report: reports/large_load_report.json"
+
+generate-massive:                          ## Generate massive load test dataset (1M users)
+	@echo "📊 Generating massive load test data..."
+	@echo "   Target: 1M users, billions of records"
+	@echo "   Time: ~10-20 hours"
+	@echo "   ⚠️  REQUIRED: PostgreSQL or MySQL with high-performance config"
+	@echo "   ⚠️  REQUIRED: 32GB+ RAM, SSD storage, multi-core CPU"
+	@echo ""
+	@read -p "This will take 10-20 hours. Continue? [y/N] " -n 1 -r; \
+	echo; \
+	if [[ $$REPLY =~ ^[Yy]$$ ]]; then \
+		test -d "$(VENV_DIR)" || $(MAKE) venv; \
+		/bin/bash -c "source $(VENV_DIR)/bin/activate && \
+			python -m tests.load.generate --profile massive"; \
+		echo ""; \
+		echo "✅ Massive load test data generated!"; \
+		echo "📄 Report: reports/massive_load_report.json"; \
+	else \
+		echo "❌ Cancelled"; \
+		exit 1; \
+	fi
+
+generate-clean:                            ## Clean all generated load test data
+	@echo "🧹 Cleaning load test data..."
+	@rm -f reports/*_load_report.json
+	@echo "✅ Load test reports cleaned!"
+	@echo ""
+	@echo "⚠️  Note: This does NOT clean the database itself."
+	@echo "   To clean database, use: make clean-db"
+
+generate-report:                           ## Display most recent load test report
+	@echo "📊 Most Recent Load Test Reports:"
+	@echo ""
+	@for report in reports/*_load_report.json; do \
+		if [ -f "$$report" ]; then \
+			echo "📄 $$report:"; \
+			jq -r '"  Profile: \(.profile)\n  Duration: \(.duration_seconds)s\n  Records: \(.total_generated | tonumber | tostring) total\n  Rate: \(.records_per_second | floor | tostring) records/sec\n  Timestamp: \(.timestamp)"' "$$report" 2>/dev/null || \
+			cat "$$report" | head -20; \
+			echo ""; \
+		fi; \
+	done || echo "❌ No reports found. Run 'make generate-small' first."
 
 # =============================================================================
 # 🧬 MUTATION TESTING
@@ -691,7 +816,7 @@ images:
 # help: pydocstyle           - Docstring style checker
 # help: pycodestyle          - Simple PEP-8 checker
 # help: pre-commit           - Run all configured pre-commit hooks
-# help: ruff                 - Ruff linter + formatter
+# help: ruff                 - Ruff linter + (eventually) formatter
 # help: ty                   - Ty type checker from astral
 # help: pyright              - Static type-checking with Pyright
 # help: radon                - Code complexity & maintainability metrics
@@ -875,8 +1000,6 @@ lint-smart:
 			fi ;; \
 	esac
 
-	fi
-
 ## --------------------------------------------------------------------------- ##
 ##  Individual targets (alphabetical, updated to use TARGET)
 ## --------------------------------------------------------------------------- ##
@@ -902,8 +1025,9 @@ isort-check:
 flake8:                             ## 🐍  flake8 checks
 	@echo "🐍 flake8 $(TARGET)..." && $(VENV_DIR)/bin/flake8 $(TARGET)
 
-pylint:                             ## 🐛  pylint checks
-	@echo "🐛 pylint $(TARGET)..." && $(VENV_DIR)/bin/pylint $(TARGET)
+pylint: uv                             ## 🐛  pylint checks
+	@echo "🐛 pylint $(TARGET) (parallel)..."
+	uv run pylint -j 0 --fail-on E --fail-under 10 $(TARGET)
 
 markdownlint:					    ## 📖  Markdown linting
 	@# Install markdownlint-cli2 if not present
@@ -947,17 +1071,13 @@ pydocstyle:                         ## 📚  Docstring style
 pycodestyle:                        ## 📝  Simple PEP-8 checker
 	@echo "📝 pycodestyle $(TARGET)..." && $(VENV_DIR)/bin/pycodestyle $(TARGET) --max-line-length=200
 
-pre-commit:                         ## 🪄  Run pre-commit hooks
+pre-commit: uv                      ## 🪄  Run pre-commit tool
 	@echo "🪄  Running pre-commit hooks..."
-	@test -d "$(VENV_DIR)" || $(MAKE) venv install install-dev
-	@if [ ! -f "$(VENV_DIR)/bin/pre-commit" ]; then \
-		echo "📦  Installing pre-commit..."; \
-		/bin/bash -c "source $(VENV_DIR)/bin/activate && python3 -m pip install --quiet pre-commit"; \
-	fi
-	@/bin/bash -c "source $(VENV_DIR)/bin/activate && pre-commit run --all-files --show-diff-on-failure"
+	uv run pre-commit run --config .pre-commit-lite.yaml --all-files --show-diff-on-failure
 
-ruff:                               ## ⚡  Ruff lint + format
-	@echo "⚡ ruff $(TARGET)..." && $(VENV_DIR)/bin/ruff check $(TARGET) && $(VENV_DIR)/bin/ruff format $(TARGET)
+ruff:                               ## ⚡  Ruff lint + (eventually) format
+	@echo "⚡ ruff $(TARGET)..." && $(VENV_DIR)/bin/ruff check $(TARGET)
+	#                   && $(VENV_DIR)/bin/ruff format $(TARGET)
 
 # Separate ruff targets for different modes
 ruff-check:
@@ -966,6 +1086,7 @@ ruff-check:
 ruff-fix:
 	@echo "⚡ ruff check --fix $(TARGET)..." && $(VENV_DIR)/bin/ruff check --fix $(TARGET)
 
+#  Nothing depends on this target yet, but kept for future and ad hoc use
 ruff-format:
 	@echo "⚡ ruff format $(TARGET)..." && $(VENV_DIR)/bin/ruff format $(TARGET)
 
@@ -1897,21 +2018,41 @@ containerfile-update:
 # =============================================================================
 .PHONY: dist wheel sdist verify publish publish-testpypi
 
-dist: clean                  ## Build wheel + sdist into ./dist
+dist: clean                  ## Build wheel + sdist into ./dist (optionally includes Rust plugins)
 	@test -d "$(VENV_DIR)" || $(MAKE) --no-print-directory venv
+	@echo "📦 Building Python package..."
 	@/bin/bash -eu -c "\
 	    source $(VENV_DIR)/bin/activate && \
 	    python3 -m pip install --quiet --upgrade pip build && \
 	    python3 -m build"
-	@echo '🛠  Wheel & sdist written to ./dist'
+	@if [ "$(ENABLE_RUST_BUILD)" = "1" ]; then \
+		echo "🦀 Building Rust plugins..."; \
+		$(MAKE) rust-build || { echo "⚠️  Rust build failed, continuing without Rust plugins"; exit 0; }; \
+		echo '🦀 Rust wheels written to ./plugins_rust/target/wheels/'; \
+	else \
+		echo "⏭️  Rust builds disabled (ENABLE_RUST_BUILD=0)"; \
+	fi
+	@echo '🛠  Python wheel & sdist written to ./dist'
+	@echo ''
+	@echo '💡 To publish both Python and Rust packages:'
+	@echo '   make publish         # Publish Python package'
+	@echo '   make rust-publish    # Publish Rust wheels (if configured)'
 
-wheel:                       ## Build wheel only
+wheel:                       ## Build wheel only (Python + optionally Rust)
 	@test -d "$(VENV_DIR)" || $(MAKE) --no-print-directory venv
+	@echo "📦 Building Python wheel..."
 	@/bin/bash -eu -c "\
 	    source $(VENV_DIR)/bin/activate && \
 	    python3 -m pip install --quiet --upgrade pip build && \
 	    python3 -m build -w"
-	@echo '🛠  Wheel written to ./dist'
+	@if [ "$(ENABLE_RUST_BUILD)" = "1" ]; then \
+		echo "🦀 Building Rust wheels..."; \
+		$(MAKE) rust-build || { echo "⚠️  Rust build failed, continuing without Rust plugins"; exit 0; }; \
+		echo '🦀 Rust wheels written to ./plugins_rust/target/wheels/'; \
+	else \
+		echo "⏭️  Rust builds disabled (ENABLE_RUST_BUILD=0)"; \
+	fi
+	@echo '🛠  Python wheel written to ./dist'
 
 sdist:                       ## Build source distribution only
 	@test -d "$(VENV_DIR)" || $(MAKE) --no-print-directory venv
@@ -1957,7 +2098,7 @@ endif
 # =============================================================================
 
 # Auto-detect container runtime if not specified - DEFAULT TO DOCKER
-CONTAINER_RUNTIME ?= $(shell command -v docker >/dev/null 2>&1 && echo docker || echo podman)
+CONTAINER_RUNTIME = $(shell command -v docker >/dev/null 2>&1 && echo docker || echo podman)
 
 # Alternative: Always default to docker unless explicitly overridden
 # CONTAINER_RUNTIME ?= docker
@@ -2006,6 +2147,9 @@ endef
 # =============================================================================
 # help: 🐳 UNIFIED CONTAINER OPERATIONS (Auto-detects Docker/Podman)
 # help: container-build      - Build image using detected runtime
+# help: container-build-rust - Build image WITH Rust plugins (ENABLE_RUST_BUILD=1)
+# help: container-build-rust-lite - Build lite image WITH Rust plugins
+# help: container-rust       - Build with Rust and run container (all-in-one)
 # help: container-run        - Run container using detected runtime
 # help: container-run-host   - Run container using detected runtime with host networking
 # help: container-run-ssl    - Run container with TLS using detected runtime
@@ -2024,7 +2168,8 @@ endef
 # help: use-podman           - Switch to Podman runtime
 # help: show-runtime         - Show current container runtime
 
-.PHONY: container-build container-run container-run-ssl container-run-ssl-host \
+.PHONY: container-build container-build-rust container-build-rust-lite container-rust \
+        container-run container-run-ssl container-run-ssl-host \
         container-run-ssl-jwt container-push container-info container-stop container-logs container-shell \
         container-health image-list image-clean image-retag container-check-image \
         container-build-multi use-docker use-podman show-runtime print-runtime \
@@ -2056,13 +2201,37 @@ PLATFORM ?= linux/$(shell uname -m | sed 's/x86_64/amd64/;s/aarch64/arm64/')
 
 container-build:
 	@echo "🔨 Building with $(CONTAINER_RUNTIME) for platform $(PLATFORM)..."
-	$(CONTAINER_RUNTIME) build \
-		--platform=$(PLATFORM) \
-		-f $(CONTAINER_FILE) \
-		--tag $(IMAGE_BASE):$(IMAGE_TAG) \
-		.
+	@if [ "$(ENABLE_RUST_BUILD)" = "1" ]; then \
+		echo "🦀 Building container WITH Rust plugins..."; \
+		$(CONTAINER_RUNTIME) build \
+			--platform=$(PLATFORM) \
+			-f $(CONTAINER_FILE) \
+			--build-arg ENABLE_RUST=true \
+			--tag $(IMAGE_BASE):$(IMAGE_TAG) \
+			.; \
+	else \
+		echo "⏭️  Building container WITHOUT Rust plugins (set ENABLE_RUST_BUILD=1 to enable)"; \
+		$(CONTAINER_RUNTIME) build \
+			--platform=$(PLATFORM) \
+			-f $(CONTAINER_FILE) \
+			--build-arg ENABLE_RUST=false \
+			--tag $(IMAGE_BASE):$(IMAGE_TAG) \
+			.; \
+	fi
 	@echo "✅ Built image: $(call get_image_name)"
 	$(CONTAINER_RUNTIME) images $(IMAGE_BASE):$(IMAGE_TAG)
+
+container-build-rust:
+	@echo "🦀 Building container WITH Rust plugins..."
+	$(MAKE) container-build ENABLE_RUST_BUILD=1
+
+container-build-rust-lite:
+	@echo "🦀 Building lite container WITH Rust plugins..."
+	$(MAKE) container-build ENABLE_RUST_BUILD=1 CONTAINER_FILE=Containerfile.lite
+
+container-rust: container-build-rust
+	@echo "🦀 Building and running container with Rust plugins..."
+	$(MAKE) container-run
 
 container-run: container-check-image
 	@echo "🚀 Running with $(CONTAINER_RUNTIME)..."
@@ -2241,14 +2410,14 @@ container-build-multi:
 		fi; \
 		docker buildx use $(PROJECT_NAME)-builder; \
 		docker buildx build \
-			--platform=linux/amd64,linux/arm64 \
+			--platform=linux/amd64,linux/arm64,linux/s390x \
 			-f $(CONTAINER_FILE) \
 			--tag $(IMAGE_BASE):$(IMAGE_TAG) \
 			--push \
 			.; \
 	elif [ "$(CONTAINER_RUNTIME)" = "podman" ]; then \
 		echo "📦 Building manifest with Podman..."; \
-		$(CONTAINER_RUNTIME) build --platform=linux/amd64,linux/arm64 \
+		$(CONTAINER_RUNTIME) build --platform=linux/amd64,linux/arm64,linux/s390x \
 			-f $(CONTAINER_FILE) \
 			--manifest $(IMAGE_BASE):$(IMAGE_TAG) \
 			.; \
@@ -2489,7 +2658,7 @@ docker-dev:
 	@$(MAKE) container-build CONTAINER_RUNTIME=docker CONTAINER_FILE=Containerfile
 
 docker:
-	@$(MAKE) container-build CONTAINER_RUNTIME=docker CONTAINER_FILE=Containerfile
+	@$(MAKE) container-build CONTAINER_RUNTIME=docker CONTAINER_FILE=Containerfile.lite
 
 docker-prod:
 	@DOCKER_CONTENT_TRUST=1 $(MAKE) container-build CONTAINER_RUNTIME=docker CONTAINER_FILE=Containerfile.lite
@@ -2587,8 +2756,13 @@ endif
 # Alternative: Always default to docker compose unless explicitly overridden
 # COMPOSE_CMD ?= docker compose
 
+# Profile detection (for platform-specific services)
+ifeq ($(PLATFORM),linux/amd64)
+    PROFILE = --profile with-fast-time
+endif
+
 define COMPOSE
-$(COMPOSE_CMD) -f $(COMPOSE_FILE)
+$(COMPOSE_CMD) -f $(COMPOSE_FILE) $(PROFILE)
 endef
 
 .PHONY: compose-up compose-restart compose-build compose-pull \
@@ -2605,6 +2779,21 @@ compose-validate:
 	fi
 	$(COMPOSE) config --quiet
 	@echo "✅ Compose file is valid"
+
+compose-upgrade-pg18: compose-validate
+	@echo "⚠️  This will upgrade Postgres 17 -> 18"
+	@echo "⚠️  Make sure you have a backup!"
+	@read -p "Continue? [y/N] " confirm && [ "$$confirm" = "y" ] || exit 1
+	@echo "🔄 Running Postgres upgrade..."
+	$(COMPOSE) -f $(COMPOSE_FILE) -f compose.upgrade.yml run --rm pg-upgrade
+	@echo "🔧 Copying pg_hba.conf from old cluster..."
+	@$(COMPOSE) -f $(COMPOSE_FILE) -f compose.upgrade.yml run --rm pg-upgrade sh -c \
+		"cp /var/lib/postgresql/OLD/pg_hba.conf /var/lib/postgresql/18/docker/pg_hba.conf && \
+		 echo '✅ pg_hba.conf copied successfully'"
+	@echo "✅ Upgrade complete!"
+	@echo "📝 Next steps:"
+	@echo "   1. Update docker-compose.yml to use postgres:18"
+	@echo "   2. Run: make compose-up"
 
 compose-up: compose-validate
 	@echo "🚀  Using $(COMPOSE_CMD); starting stack..."
@@ -2884,7 +3073,7 @@ MINIKUBE_ADDONS  ?= ingress ingress-dns metrics-server dashboard registry regist
 # OCI image tag to preload into the cluster.
 # - By default we point to the *local* image built via `make docker-prod`, e.g.
 #   mcpgateway/mcpgateway:latest.  Override with IMAGE=<repo:tag> to use a
-#   remote registry (e.g. ghcr.io/ibm/mcp-context-forge:v0.8.0).
+#   remote registry (e.g. ghcr.io/ibm/mcp-context-forge:v0.9.0).
 TAG              ?= latest         # override with TAG=<ver>
 IMAGE            ?= $(IMG):$(TAG)  # or IMAGE=ghcr.io/ibm/mcp-context-forge:$(TAG)
 
@@ -3519,7 +3708,7 @@ devpi-unconfigure-pip:
 
 # ─────────────────────────────────────────────────────────────────────────────
 # 📦  Version helper (defaults to the version in pyproject.toml)
-#      override on the CLI:  make VER=0.8.0 devpi-delete
+#      override on the CLI:  make VER=0.9.0 devpi-delete
 # ─────────────────────────────────────────────────────────────────────────────
 VER ?= $(shell python3 -c "import tomllib, pathlib; \
 print(tomllib.loads(pathlib.Path('pyproject.toml').read_text())['project']['version'])" \
@@ -3953,9 +4142,12 @@ security-all:
 semgrep:                            ## 🔍 Security patterns & anti-patterns
 	@echo "🔍  semgrep - scanning for security patterns..."
 	@test -d "$(VENV_DIR)" || $(MAKE) venv
+	# Notice the use of uvx below -- semgrep is not in the project dependencies because it introduces a
+	# resolution conflict with other packages.
 	@/bin/bash -c "source $(VENV_DIR)/bin/activate && \
-		python3 -m pip install -q semgrep && \
-		$(VENV_DIR)/bin/semgrep --config=auto $(TARGET) --exclude-rule python.lang.compatibility.python37.python37-compatibility-importlib2 || true"
+		uvx semgrep --config=auto $(TARGET) \
+			--exclude-rule python.lang.compatibility.python37.python37-compatibility-importlib2 \
+			|| true"
 
 dodgy:                              ## 🔐 Suspicious code patterns
 	@echo "🔐  dodgy - scanning for hardcoded secrets..."
@@ -4713,7 +4905,7 @@ MIGRATION_TEST_DIR := tests/migration
 MIGRATION_REPORTS_DIR := $(MIGRATION_TEST_DIR)/reports
 
 # Get supported versions from version config (n-2 policy)
-MIGRATION_VERSIONS := $(shell cd $(MIGRATION_TEST_DIR) && python3 -c "from version_config import get_supported_versions; print(' '.join(get_supported_versions()))" 2>/dev/null || echo "0.5.0 0.8.0 latest")
+MIGRATION_VERSIONS := $(shell cd $(MIGRATION_TEST_DIR) && python3 -c "from version_config import get_supported_versions; print(' '.join(get_supported_versions()))" 2>/dev/null || echo "0.5.0 0.8.0 0.9.0 latest")
 
 .PHONY: migration-test-all migration-test-sqlite migration-test-postgres migration-test-performance \
         migration-setup migration-cleanup migration-debug migration-status
@@ -4824,3 +5016,145 @@ migration-status:                          ## Show current version configuration
 	@test -d "$(VENV_DIR)" || $(MAKE) venv
 	@/bin/bash -c "source $(VENV_DIR)/bin/activate && \
 		cd $(MIGRATION_TEST_DIR) && python3 version_status.py"
+
+# ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
+# 🦀 RUST PLUGIN FRAMEWORK (OPTIONAL)
+# ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
+# help:
+# help: Rust Plugin Framework (Optional - requires Rust toolchain)
+# help: ========================================================================================================
+# help: rust-build          - Build Rust plugins in release mode (native)
+# help: rust-dev            - Build and install Rust plugins in development mode
+# help: rust-test           - Run Rust plugin tests
+# help: rust-test-all       - Run all Rust and Python integration tests
+# help: rust-bench          - Run Rust plugin benchmarks
+# help: rust-bench-compare  - Compare Rust vs Python performance
+# help: rust-check          - Run all Rust checks (format, lint, test)
+# help: rust-clean          - Clean Rust build artifacts
+# help: rust-verify         - Verify Rust plugin installation
+# help:
+# help: rust-check-maturin       - Check/install maturin (auto-runs before builds)
+# help: rust-install-deps        - Install all Rust build dependencies
+# help: rust-install-targets     - Install all Rust cross-compilation targets
+# help: rust-build-x86_64        - Build for Linux x86_64
+# help: rust-build-aarch64       - Build for Linux arm64/aarch64
+# help: rust-build-armv7         - Build for Linux armv7 (32-bit ARM)
+# help: rust-build-s390x         - Build for Linux s390x (IBM mainframe)
+# help: rust-build-ppc64le       - Build for Linux ppc64le (IBM POWER)
+# help: rust-build-all-linux     - Build for all Linux architectures
+# help: rust-build-all-platforms - Build for all platforms (Linux, macOS, Windows)
+# help: rust-cross               - Install targets + build all Linux (convenience)
+# help: rust-cross-install-build - Install targets + build all platforms (one command)
+
+.PHONY: rust-build rust-dev rust-test rust-test-all rust-bench rust-bench-compare rust-check rust-clean rust-verify
+.PHONY: rust-check-maturin rust-install-deps rust-install-targets
+.PHONY: rust-build-x86_64 rust-build-aarch64 rust-build-armv7 rust-build-s390x rust-build-ppc64le
+.PHONY: rust-build-all-linux rust-build-all-platforms rust-cross rust-cross-install-build
+
+rust-build: rust-check-maturin          ## Build Rust plugins (release)
+	@echo "🦀 Building Rust plugins (release mode)..."
+	@cd plugins_rust && maturin build --release
+
+rust-dev:                               ## Build and install Rust plugins (development mode)
+	@echo "🦀 Building and installing Rust plugins (development mode)..."
+	@cd plugins_rust && maturin develop --release
+
+rust-test:                              ## Run Rust plugin tests
+	@echo "🦀 Running Rust plugin tests..."
+	@cd plugins_rust && cargo test --release
+
+rust-test-integration:                  ## Run Rust integration tests
+	@echo "🦀 Running Rust integration tests..."
+	@cd plugins_rust && cargo test --test '*' --release
+
+rust-test-all: rust-test                ## Run all Rust and Python tests
+	@echo "🧪 Running Python tests for Rust plugins..."
+	pytest tests/unit/mcpgateway/plugins/test_pii_filter_rust.py -v
+
+rust-bench:                             ## Run Rust benchmarks
+	@echo "🦀 Running Rust benchmarks..."
+	@cd plugins_rust && cargo bench
+
+rust-bench-compare:                     ## Compare Rust vs Python performance
+	@echo "📊 Comparing Rust vs Python performance..."
+	@cd plugins_rust/benchmarks && python3 compare_pii_filter.py
+
+rust-check:                             ## Run all Rust checks (format, lint, test)
+	@echo "🦀 Running Rust checks..."
+	@cd plugins_rust && cargo fmt --check
+	@cd plugins_rust && cargo clippy --lib -- -D warnings -A deprecated
+	@cd plugins_rust && cargo test --lib --release
+
+rust-clean:                             ## Clean Rust build artifacts
+	@echo "🧹 Cleaning Rust build artifacts..."
+	@cd plugins_rust && cargo clean
+	@rm -rf plugins_rust/target/
+
+rust-verify:                            ## Verify Rust plugin installation
+	@echo "🔍 Verifying Rust plugin installation..."
+	@/bin/bash -c "source $(VENV_DIR)/bin/activate && \
+		python3 -c 'from plugins_rust import PIIDetectorRust; print(\"✅ Rust PII filter available\")' || \
+		echo '❌ Rust plugins not installed'"
+
+rust-check-maturin:                     ## Check/install maturin
+	@which maturin > /dev/null 2>&1 || { \
+		echo "📦 Installing maturin..."; \
+		/bin/bash -c "source $(VENV_DIR)/bin/activate && pip install maturin"; \
+	}
+
+rust-install-deps:                      ## Install all Rust build dependencies
+	@echo "📦 Installing Rust build dependencies..."
+	@/bin/bash -c "source $(VENV_DIR)/bin/activate && pip install maturin"
+	@rustup --version > /dev/null 2>&1 || { \
+		echo "❌ Rust not installed. Install with:"; \
+		echo "   curl --proto '=https' --tlsv1.2 -sSf https://sh.rustup.rs | sh"; \
+		exit 1; \
+	}
+
+rust-install-targets:                   ## Install all Rust cross-compilation targets
+	@echo "🎯 Installing Rust cross-compilation targets..."
+	@rustup target add x86_64-unknown-linux-gnu
+	@rustup target add aarch64-unknown-linux-gnu
+	@rustup target add armv7-unknown-linux-gnueabihf
+	@rustup target add s390x-unknown-linux-gnu
+	@rustup target add powerpc64le-unknown-linux-gnu
+	@rustup target add x86_64-apple-darwin
+	@rustup target add aarch64-apple-darwin
+	@rustup target add x86_64-pc-windows-msvc
+
+rust-build-x86_64: rust-check-maturin   ## Build for Linux x86_64
+	@echo "🦀 Building for x86_64-unknown-linux-gnu..."
+	@cd plugins_rust && maturin build --release --target x86_64-unknown-linux-gnu
+
+rust-build-aarch64: rust-check-maturin  ## Build for Linux arm64/aarch64
+	@echo "🦀 Building for aarch64-unknown-linux-gnu..."
+	@cd plugins_rust && maturin build --release --target aarch64-unknown-linux-gnu
+
+rust-build-armv7: rust-check-maturin    ## Build for Linux armv7 (32-bit ARM)
+	@echo "🦀 Building for armv7-unknown-linux-gnueabihf..."
+	@cd plugins_rust && maturin build --release --target armv7-unknown-linux-gnueabihf
+
+rust-build-s390x: rust-check-maturin    ## Build for Linux s390x (IBM mainframe)
+	@echo "🦀 Building for s390x-unknown-linux-gnu..."
+	@cd plugins_rust && maturin build --release --target s390x-unknown-linux-gnu
+
+rust-build-ppc64le: rust-check-maturin  ## Build for Linux ppc64le (IBM POWER)
+	@echo "🦀 Building for powerpc64le-unknown-linux-gnu..."
+	@cd plugins_rust && maturin build --release --target powerpc64le-unknown-linux-gnu
+
+rust-build-all-linux: rust-build-x86_64 rust-build-aarch64 rust-build-armv7 rust-build-s390x rust-build-ppc64le  ## Build for all Linux architectures
+	@echo "✅ Built for all Linux architectures"
+
+rust-build-all-platforms: rust-build-all-linux  ## Build for all platforms (Linux, macOS, Windows)
+	@echo "🦀 Building for macOS..."
+	@cd plugins_rust && maturin build --release --target x86_64-apple-darwin || echo "⚠️  macOS x86_64 build skipped"
+	@cd plugins_rust && maturin build --release --target aarch64-apple-darwin || echo "⚠️  macOS ARM64 build skipped"
+	@echo "🦀 Building for Windows..."
+	@cd plugins_rust && maturin build --release --target x86_64-pc-windows-msvc || echo "⚠️  Windows build skipped"
+	@echo "✅ Built for all platforms"
+
+rust-cross: rust-install-targets rust-build-all-linux  ## Install targets + build all Linux (convenience)
+	@echo "✅ Cross-compilation complete"
+
+rust-cross-install-build: rust-install-deps rust-install-targets rust-build-all-platforms  ## Install targets + build all platforms (one command)
+	@echo "✅ Full cross-compilation setup and build complete"

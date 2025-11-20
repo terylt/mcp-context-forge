@@ -413,8 +413,10 @@ services:
   gateway:
     image: ghcr.io/ibm/mcp-context-forge:latest
     ports:
+
       - "4444:4444"
     environment:
+
       - DATABASE_URL=mysql+pymysql://mysql:changeme@mysql:3306/mcp
       - REDIS_URL=redis://redis:6379/0
       - JWT_SECRET_KEY=my-secret-key
@@ -427,11 +429,13 @@ services:
   mysql:
     image: mysql:8
     environment:
+
       - MYSQL_ROOT_PASSWORD=mysecretpassword
       - MYSQL_DATABASE=mcp
       - MYSQL_USER=mysql
       - MYSQL_PASSWORD=changeme
     volumes:
+
       - mysql_data:/var/lib/mysql
     healthcheck:
       test: ["CMD", "mysqladmin", "ping", "-h", "localhost"]
@@ -442,6 +446,7 @@ services:
   redis:
     image: redis:7
     volumes:
+
       - redis_data:/data
 
 volumes:
@@ -489,21 +494,28 @@ spec:
         app: mysql
     spec:
       containers:
+
         - name: mysql
           image: mysql:8
           env:
+
             - name: MYSQL_ROOT_PASSWORD
               value: "mysecretpassword"
+
             - name: MYSQL_DATABASE
               value: "mcp"
+
             - name: MYSQL_USER
               value: "mysql"
+
             - name: MYSQL_PASSWORD
               value: "changeme"
           volumeMounts:
+
             - name: mysql-storage
               mountPath: /var/lib/mysql
       volumes:
+
         - name: mysql-storage
           persistentVolumeClaim:
             claimName: mysql-pvc
@@ -516,6 +528,7 @@ spec:
   selector:
     app: mysql
   ports:
+
     - port: 3306
       targetPort: 3306
 ```
@@ -550,7 +563,7 @@ REQUIRE_TOKEN_EXPIRATION=true
 TOKEN_EXPIRY=60
 ```
 
-### Observability Integration
+### OpenTelemetry Observability
 
 ```bash
 # OpenTelemetry (Phoenix, Jaeger, etc.)
@@ -560,6 +573,39 @@ OTEL_EXPORTER_OTLP_ENDPOINT=http://phoenix:4317
 OTEL_EXPORTER_OTLP_PROTOCOL=grpc
 OTEL_SERVICE_NAME=mcp-gateway
 ```
+
+### Internal Observability System
+
+MCP Gateway includes a built-in observability system that stores traces and metrics in the database, providing performance analytics and error tracking through the Admin UI.
+
+```bash
+# Enable internal observability (database-backed tracing)
+OBSERVABILITY_ENABLED=false
+
+# Automatically trace HTTP requests
+OBSERVABILITY_TRACE_HTTP_REQUESTS=true
+
+# Trace retention (days)
+OBSERVABILITY_TRACE_RETENTION_DAYS=7
+
+# Maximum traces to retain (prevents unbounded growth)
+OBSERVABILITY_MAX_TRACES=100000
+
+# Trace sampling rate (0.0-1.0)
+# 1.0 = trace everything, 0.1 = trace 10% of requests
+OBSERVABILITY_SAMPLE_RATE=1.0
+
+# Paths to exclude from tracing (comma-separated regex patterns)
+OBSERVABILITY_EXCLUDE_PATHS=/health,/healthz,/ready,/metrics,/static/.*
+
+# Enable metrics collection
+OBSERVABILITY_METRICS_ENABLED=true
+
+# Enable event logging within spans
+OBSERVABILITY_EVENTS_ENABLED=true
+```
+
+See the [Internal Observability Guide](observability/internal-observability.md) for detailed usage instructions including Admin UI dashboards, performance metrics, and trace analysis.
 
 ---
 

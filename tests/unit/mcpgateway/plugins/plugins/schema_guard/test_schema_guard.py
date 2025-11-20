@@ -9,11 +9,11 @@ Tests for SchemaGuardPlugin.
 
 import pytest
 
-from mcpgateway.plugins.framework.models import (
+from mcpgateway.plugins.framework import (
     GlobalContext,
-    HookType,
     PluginConfig,
     PluginContext,
+    ToolHookType,
     ToolPreInvokePayload,
     ToolPostInvokePayload,
 )
@@ -30,16 +30,14 @@ async def test_schema_guard_valid_and_invalid():
                 "properties": {"a": {"type": "integer"}, "b": {"type": "integer"}},
             }
         },
-        "result_schemas": {
-            "calc": {"type": "object", "required": ["result"], "properties": {"result": {"type": "number"}}}
-        },
+        "result_schemas": {"calc": {"type": "object", "required": ["result"], "properties": {"result": {"type": "number"}}}},
         "block_on_violation": True,
     }
     plugin = SchemaGuardPlugin(
         PluginConfig(
             name="sg",
             kind="plugins.schema_guard.schema_guard.SchemaGuardPlugin",
-            hooks=[HookType.TOOL_PRE_INVOKE, HookType.TOOL_POST_INVOKE],
+            hooks=[ToolHookType.TOOL_PRE_INVOKE, ToolHookType.TOOL_POST_INVOKE],
             config=cfg,
         )
     )

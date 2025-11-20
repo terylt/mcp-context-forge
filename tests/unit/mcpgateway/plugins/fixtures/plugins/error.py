@@ -8,10 +8,9 @@ Authors: Mihai Criveti
 Error plugin.
 """
 
-
 from mcpgateway.plugins.framework import (
-    Plugin,
     PluginContext,
+    Plugin,
     PromptPosthookPayload,
     PromptPosthookResult,
     PromptPrehookPayload,
@@ -25,6 +24,7 @@ from mcpgateway.plugins.framework import (
     ToolPreInvokePayload,
     ToolPreInvokeResult,
 )
+
 
 class ErrorPlugin(Plugin):
     """A simple error plugin."""

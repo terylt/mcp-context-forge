@@ -18,13 +18,24 @@ import json
 import logging
 import sys
 import time
-from unittest.mock import AsyncMock, Mock, patch
+from asyncio import Lock
+from typing import cast, Generator
+from unittest.mock import AsyncMock, MagicMock, Mock, patch
 
 # Third-Party
 import pytest
 
 # First-Party
 from mcpgateway.cache.session_registry import SessionRegistry
+from mcpgateway.transports.sse_transport import SSETransport
+
+
+@pytest.fixture(name="mock_sse_transport")
+def mock_sse_transport_fixture() -> Generator[SSETransport, None, None]:
+    transport = MagicMock(spec=SSETransport)
+    transport.disconnect = AsyncMock()
+    transport.is_connected = AsyncMock(return_value=True)
+    yield transport
 
 
 class TestImportErrors:
@@ -32,12 +43,13 @@ class TestImportErrors:
 
     def test_redis_import_error_flag(self):
         """Test REDIS_AVAILABLE flag when redis import fails."""
-        with patch.dict(sys.modules, {'redis.asyncio': None}):
+        with patch.dict(sys.modules, {"redis.asyncio": None}):
             # Standard
             import importlib
 
             # First-Party
             import mcpgateway.cache.session_registry
+
             importlib.reload(mcpgateway.cache.session_registry)
 
             # Should set REDIS_AVAILABLE = False
@@ -45,12 +57,13 @@ class TestImportErrors:
 
     def test_sqlalchemy_import_error_flag(self):
         """Test SQLALCHEMY_AVAILABLE flag when sqlalchemy import fails."""
-        with patch.dict(sys.modules, {'sqlalchemy': None}):
+        with patch.dict(sys.modules, {"sqlalchemy": None}):
             # Standard
             import importlib
 
             # First-Party
             import mcpgateway.cache.session_registry
+
             importlib.reload(mcpgateway.cache.session_registry)
 
             # Should set SQLALCHEMY_AVAILABLE = False
@@ -63,7 +76,7 @@ class TestNoneBackend:
     @pytest.mark.asyncio
     async def test_none_backend_initialization_logging(self, caplog):
         """Test that 'none' backend logs initialization message."""
-        registry = SessionRegistry(backend="none")
+        _ = SessionRegistry(backend="none")
 
         # Check that initialization message is logged
         assert "Session registry initialized with 'none' backend - session tracking disabled" in caplog.text
@@ -84,26 +97,20 @@ class TestRedisBackendErrors:
     """Test Redis backend error scenarios."""
 
     @pytest.mark.asyncio
-    async def test_redis_add_session_error(self, monkeypatch, caplog):
+    async def test_redis_add_session_error(self, monkeypatch, caplog, mock_sse_transport):
         """Test Redis error during add_session."""
         mock_redis = AsyncMock()
         mock_redis.setex = AsyncMock(side_effect=Exception("Redis connection error"))
         mock_redis.publish = AsyncMock()
+        mock_redis.pubsub = Mock(return_value=AsyncMock())  # pubsub() is synchronous
 
-        with patch('mcpgateway.cache.session_registry.REDIS_AVAILABLE', True):
-            with patch('mcpgateway.cache.session_registry.Redis') as MockRedis:
+        with patch("mcpgateway.cache.session_registry.REDIS_AVAILABLE", True):
+            with patch("mcpgateway.cache.session_registry.Redis") as MockRedis:
                 MockRedis.from_url.return_value = mock_redis
 
                 registry = SessionRegistry(backend="redis", redis_url="redis://localhost")
 
-                class DummyTransport:
-                    async def disconnect(self):
-                        pass
-                    async def is_connected(self):
-                        return True
-
-                transport = DummyTransport()
-                await registry.add_session("test_session", transport)
+                await registry.add_session("test_session", mock_sse_transport)
 
                 # Should log the Redis error
                 assert "Redis error adding session test_session: Redis connection error" in caplog.text
@@ -113,9 +120,10 @@ class TestRedisBackendErrors:
         """Test Redis error during broadcast."""
         mock_redis = AsyncMock()
         mock_redis.publish = AsyncMock(side_effect=Exception("Redis publish error"))
+        mock_redis.pubsub = Mock(return_value=AsyncMock())  # pubsub() is synchronous
 
-        with patch('mcpgateway.cache.session_registry.REDIS_AVAILABLE', True):
-            with patch('mcpgateway.cache.session_registry.Redis') as MockRedis:
+        with patch("mcpgateway.cache.session_registry.REDIS_AVAILABLE", True):
+            with patch("mcpgateway.cache.session_registry.Redis") as MockRedis:
                 MockRedis.from_url.return_value = mock_redis
 
                 registry = SessionRegistry(backend="redis", redis_url="redis://localhost")
@@ -130,8 +138,9 @@ class TestDatabaseBackendErrors:
     """Test database backend error scenarios."""
 
     @pytest.mark.asyncio
-    async def test_database_add_session_error(self, monkeypatch, caplog):
+    async def test_database_add_session_error(self, monkeypatch, caplog, mock_sse_transport):
         """Test database error during add_session."""
+
         def mock_get_db():
             mock_session = Mock()
             mock_session.add = Mock(side_effect=Exception("Database connection error"))
@@ -139,22 +148,15 @@ class TestDatabaseBackendErrors:
             mock_session.close = Mock()
             yield mock_session
 
-        with patch('mcpgateway.cache.session_registry.SQLALCHEMY_AVAILABLE', True):
-            with patch('mcpgateway.cache.session_registry.get_db', mock_get_db):
-                with patch('asyncio.to_thread') as mock_to_thread:
+        with patch("mcpgateway.cache.session_registry.SQLALCHEMY_AVAILABLE", True):
+            with patch("mcpgateway.cache.session_registry.get_db", mock_get_db):
+                with patch("asyncio.to_thread") as mock_to_thread:
                     # Simulate the database error being raised from the thread
                     mock_to_thread.side_effect = Exception("Database connection error")
 
                     registry = SessionRegistry(backend="database", database_url="sqlite:///test.db")
 
-                    class DummyTransport:
-                        async def disconnect(self):
-                            pass
-                        async def is_connected(self):
-                            return True
-
-                    transport = DummyTransport()
-                    await registry.add_session("test_session", transport)
+                    await registry.add_session("test_session", mock_sse_transport)
 
                     # Should log the database error
                     assert "Database error adding session test_session: Database connection error" in caplog.text
@@ -162,6 +164,7 @@ class TestDatabaseBackendErrors:
     @pytest.mark.asyncio
     async def test_database_broadcast_error(self, monkeypatch, caplog):
         """Test database error during broadcast."""
+
         def mock_get_db():
             mock_session = Mock()
             mock_session.add = Mock(side_effect=Exception("Database broadcast error"))
@@ -169,9 +172,9 @@ class TestDatabaseBackendErrors:
             mock_session.close = Mock()
             yield mock_session
 
-        with patch('mcpgateway.cache.session_registry.SQLALCHEMY_AVAILABLE', True):
-            with patch('mcpgateway.cache.session_registry.get_db', mock_get_db):
-                with patch('asyncio.to_thread') as mock_to_thread:
+        with patch("mcpgateway.cache.session_registry.SQLALCHEMY_AVAILABLE", True):
+            with patch("mcpgateway.cache.session_registry.get_db", mock_get_db):
+                with patch("asyncio.to_thread") as mock_to_thread:
                     # Simulate the database error being raised from the thread
                     mock_to_thread.side_effect = Exception("Database broadcast error")
 
@@ -188,7 +191,7 @@ class TestRedisBackendRespond:
 
     @pytest.mark.skip("Redis pubsub mocking is complex, skipping for now")
     @pytest.mark.asyncio
-    async def test_redis_respond_method_pubsub_flow(self, monkeypatch):
+    async def test_redis_respond_method_pubsub_flow(self, monkeypatch, mock_sse_transport):
         """Test Redis backend respond method with pubsub message flow."""
         mock_redis = AsyncMock()
         mock_pubsub = Mock()  # Not AsyncMock for listen method
@@ -197,14 +200,7 @@ class TestRedisBackendRespond:
         # Mock pubsub.listen() to yield test messages
         test_messages = [
             {"type": "subscribe", "data": "test_session"},
-            {
-                "type": "message",
-                "data": json.dumps({
-                    "type": "message",
-                    "message": json.dumps({"method": "ping", "id": 1}),
-                    "timestamp": time.time()
-                })
-            }
+            {"type": "message", "data": json.dumps({"type": "message", "message": json.dumps({"method": "ping", "id": 1}), "timestamp": time.time()})},
         ]
 
         class MockAsyncIterator:
@@ -228,32 +224,18 @@ class TestRedisBackendRespond:
         mock_pubsub.unsubscribe = AsyncMock()
         mock_pubsub.close = AsyncMock()
 
-        with patch('mcpgateway.cache.session_registry.REDIS_AVAILABLE', True):
-            with patch('mcpgateway.cache.session_registry.Redis') as MockRedis:
+        with patch("mcpgateway.cache.session_registry.REDIS_AVAILABLE", True):
+            with patch("mcpgateway.cache.session_registry.Redis") as MockRedis:
                 MockRedis.from_url.return_value = mock_redis
 
                 registry = SessionRegistry(backend="redis", redis_url="redis://localhost")
 
-                class MockTransport:
-                    async def disconnect(self):
-                        pass
-                    async def is_connected(self):
-                        return True
-                    async def send_message(self, msg):
-                        pass
-
-                transport = MockTransport()
-                await registry.add_session("test_session", transport)
+                await registry.add_session("test_session", mock_sse_transport)
 
                 # Mock generate_response to track calls
-                with patch.object(registry, 'generate_response', new_callable=AsyncMock) as mock_gen:
+                with patch.object(registry, "generate_response", new_callable=AsyncMock):
                     # Start respond task and let it process one message
-                    respond_task = asyncio.create_task(registry.respond(
-                        server_id=None,
-                        user={"token": "test"},
-                        session_id="test_session",
-                        base_url="http://localhost"
-                    ))
+                    respond_task = asyncio.create_task(registry.respond(server_id=None, user={"token": "test"}, session_id="test_session", base_url="http://localhost"))
 
                     # Give it time to process messages
                     await asyncio.sleep(0.01)
@@ -271,7 +253,7 @@ class TestRedisBackendRespond:
 
     @pytest.mark.skip("Redis pubsub mocking is complex, skipping for now")
     @pytest.mark.asyncio
-    async def test_redis_respond_method_cancelled_task(self, monkeypatch, caplog):
+    async def test_redis_respond_method_cancelled_task(self, monkeypatch, caplog, mock_sse_transport):
         """Test Redis respond method handles task cancellation."""
         mock_redis = AsyncMock()
 
@@ -291,28 +273,16 @@ class TestRedisBackendRespond:
         mock_pubsub.close = AsyncMock()
         mock_redis.pubsub.return_value = mock_pubsub
 
-        with patch('mcpgateway.cache.session_registry.REDIS_AVAILABLE', True):
-            with patch('mcpgateway.cache.session_registry.Redis') as MockRedis:
+        with patch("mcpgateway.cache.session_registry.REDIS_AVAILABLE", True):
+            with patch("mcpgateway.cache.session_registry.Redis") as MockRedis:
                 MockRedis.from_url.return_value = mock_redis
 
                 registry = SessionRegistry(backend="redis", redis_url="redis://localhost")
 
-                class MockTransport:
-                    async def disconnect(self):
-                        pass
-                    async def is_connected(self):
-                        return True
-
-                transport = MockTransport()
-                await registry.add_session("test_session", transport)
+                await registry.add_session("test_session", mock_sse_transport)
 
                 # Start respond task and cancel it
-                respond_task = asyncio.create_task(registry.respond(
-                    server_id=None,
-                    user={"token": "test"},
-                    session_id="test_session",
-                    base_url="http://localhost"
-                ))
+                respond_task = asyncio.create_task(registry.respond(server_id=None, user={"token": "test"}, session_id="test_session", base_url="http://localhost"))
 
                 await asyncio.sleep(0.01)  # Let it start
                 respond_task.cancel()
@@ -331,7 +301,7 @@ class TestDatabaseBackendRespond:
     """Test Database backend respond method."""
 
     @pytest.mark.asyncio
-    async def test_database_respond_message_check_loop(self, monkeypatch):
+    async def test_database_respond_message_check_loop(self, monkeypatch, mock_sse_transport):
         """Test Database backend respond method with message polling."""
         mock_db_session = Mock()
         call_count = 0
@@ -352,7 +322,6 @@ class TestDatabaseBackendRespond:
                 return None
 
         def mock_db_read_session(session_id):
-            nonlocal call_count
             if call_count < 3:  # Session exists for first few calls
                 return Mock()  # Non-None session record
             else:
@@ -361,16 +330,16 @@ class TestDatabaseBackendRespond:
         def mock_db_remove(session_id, message):
             pass  # Mock message removal
 
-        with patch('mcpgateway.cache.session_registry.SQLALCHEMY_AVAILABLE', True):
-            with patch('mcpgateway.cache.session_registry.get_db', mock_get_db):
-                with patch('asyncio.to_thread') as mock_to_thread:
+        with patch("mcpgateway.cache.session_registry.SQLALCHEMY_AVAILABLE", True):
+            with patch("mcpgateway.cache.session_registry.get_db", mock_get_db):
+                with patch("asyncio.to_thread") as mock_to_thread:
                     # Map asyncio.to_thread calls to appropriate functions
                     def side_effect(func, *args):
-                        if func.__name__ == '_db_read':
+                        if func.__name__ == "_db_read":
                             return mock_db_read(*args)
-                        elif func.__name__ == '_db_read_session':
+                        elif func.__name__ == "_db_read_session":
                             return mock_db_read_session(*args)
-                        elif func.__name__ == '_db_remove':
+                        elif func.__name__ == "_db_remove":
                             return mock_db_remove(*args)
                         else:
                             return func(*args)
@@ -379,26 +348,12 @@ class TestDatabaseBackendRespond:
 
                     registry = SessionRegistry(backend="database", database_url="sqlite:///test.db")
 
-                    class MockTransport:
-                        async def disconnect(self):
-                            pass
-                        async def is_connected(self):
-                            return True
-                        async def send_message(self, msg):
-                            pass
-
-                    transport = MockTransport()
-                    await registry.add_session("test_session", transport)
+                    await registry.add_session("test_session", mock_sse_transport)
 
                     # Mock generate_response to track calls
-                    with patch.object(registry, 'generate_response', new_callable=AsyncMock) as mock_gen:
+                    with patch.object(registry, "generate_response", new_callable=AsyncMock) as mock_gen:
                         # Start respond - this will create the message_check_loop task
-                        await registry.respond(
-                            server_id=None,
-                            user={"token": "test"},
-                            session_id="test_session",
-                            base_url="http://localhost"
-                        )
+                        await registry.respond(server_id=None, user={"token": "test"}, session_id="test_session", base_url="http://localhost")
 
                         # Give some time for the background task to run
                         await asyncio.sleep(0.2)
@@ -407,7 +362,7 @@ class TestDatabaseBackendRespond:
                         mock_gen.assert_called()
 
     @pytest.mark.asyncio
-    async def test_database_respond_ready_to_respond_logging(self, monkeypatch, caplog):
+    async def test_database_respond_ready_to_respond_logging(self, monkeypatch, caplog, mock_sse_transport):
         """Test database respond logs 'Ready to respond'."""
         mock_db_session = Mock()
 
@@ -426,15 +381,16 @@ class TestDatabaseBackendRespond:
         def mock_db_remove(session_id, message):
             pass
 
-        with patch('mcpgateway.cache.session_registry.SQLALCHEMY_AVAILABLE', True):
-            with patch('mcpgateway.cache.session_registry.get_db', mock_get_db):
-                with patch('asyncio.to_thread') as mock_to_thread:
+        with patch("mcpgateway.cache.session_registry.SQLALCHEMY_AVAILABLE", True):
+            with patch("mcpgateway.cache.session_registry.get_db", mock_get_db):
+                with patch("asyncio.to_thread") as mock_to_thread:
+
                     def side_effect(func, *args):
-                        if func.__name__ == '_db_read':
+                        if func.__name__ == "_db_read":
                             return mock_db_read(*args)
-                        elif func.__name__ == '_db_read_session':
+                        elif func.__name__ == "_db_read_session":
                             return mock_db_read_session(*args)
-                        elif func.__name__ == '_db_remove':
+                        elif func.__name__ == "_db_remove":
                             return mock_db_remove(*args)
                         else:
                             return func(*args)
@@ -443,25 +399,11 @@ class TestDatabaseBackendRespond:
 
                     registry = SessionRegistry(backend="database", database_url="sqlite:///test.db")
 
-                    class MockTransport:
-                        async def disconnect(self):
-                            pass
-                        async def is_connected(self):
-                            return True
-                        async def send_message(self, msg):
-                            pass
-
-                    transport = MockTransport()
-                    await registry.add_session("test_session", transport)
+                    await registry.add_session("test_session", mock_sse_transport)
 
                     # Mock generate_response
-                    with patch.object(registry, 'generate_response', new_callable=AsyncMock):
-                        await registry.respond(
-                            server_id=None,
-                            user={"token": "test"},
-                            session_id="test_session",
-                            base_url="http://localhost"
-                        )
+                    with patch.object(registry, "generate_response", new_callable=AsyncMock):
+                        await registry.respond(server_id=None, user={"token": "test"}, session_id="test_session", base_url="http://localhost")
 
                         # Give time for background task
                         await asyncio.sleep(0.1)
@@ -470,7 +412,7 @@ class TestDatabaseBackendRespond:
                         assert "Ready to respond" in caplog.text
 
     @pytest.mark.asyncio
-    async def test_database_respond_message_remove_logging(self, monkeypatch, caplog):
+    async def test_database_respond_message_remove_logging(self, monkeypatch, caplog, mock_sse_transport):
         """Test database message removal logs correctly."""
         mock_db_session = Mock()
 
@@ -479,7 +421,7 @@ class TestDatabaseBackendRespond:
 
         def mock_db_remove_with_logging(session_id, message):
             # Simulate the actual function that logs
-            logger = logging.getLogger('mcpgateway.cache.session_registry')
+            logger = logging.getLogger("mcpgateway.cache.session_registry")
             logger.info("Removed message from mcp_messages table")
 
         def mock_db_read(session_id):
@@ -490,15 +432,16 @@ class TestDatabaseBackendRespond:
         def mock_db_read_session(session_id):
             return None  # Break loop after first iteration
 
-        with patch('mcpgateway.cache.session_registry.SQLALCHEMY_AVAILABLE', True):
-            with patch('mcpgateway.cache.session_registry.get_db', mock_get_db):
-                with patch('asyncio.to_thread') as mock_to_thread:
+        with patch("mcpgateway.cache.session_registry.SQLALCHEMY_AVAILABLE", True):
+            with patch("mcpgateway.cache.session_registry.get_db", mock_get_db):
+                with patch("asyncio.to_thread") as mock_to_thread:
+
                     def side_effect(func, *args):
-                        if func.__name__ == '_db_read':
+                        if func.__name__ == "_db_read":
                             return mock_db_read(*args)
-                        elif func.__name__ == '_db_read_session':
+                        elif func.__name__ == "_db_read_session":
                             return mock_db_read_session(*args)
-                        elif func.__name__ == '_db_remove':
+                        elif func.__name__ == "_db_remove":
                             return mock_db_remove_with_logging(*args)
                         else:
                             return func(*args)
@@ -507,24 +450,10 @@ class TestDatabaseBackendRespond:
 
                     registry = SessionRegistry(backend="database", database_url="sqlite:///test.db")
 
-                    class MockTransport:
-                        async def disconnect(self):
-                            pass
-                        async def is_connected(self):
-                            return True
-                        async def send_message(self, msg):
-                            pass
+                    await registry.add_session("test_session", mock_sse_transport)
 
-                    transport = MockTransport()
-                    await registry.add_session("test_session", transport)
-
-                    with patch.object(registry, 'generate_response', new_callable=AsyncMock):
-                        await registry.respond(
-                            server_id=None,
-                            user={"token": "test"},
-                            session_id="test_session",
-                            base_url="http://localhost"
-                        )
+                    with patch.object(registry, "generate_response", new_callable=AsyncMock):
+                        await registry.respond(server_id=None, user={"token": "test"}, session_id="test_session", base_url="http://localhost")
 
                         await asyncio.sleep(0.1)
 
@@ -536,7 +465,7 @@ class TestDatabaseCleanupTask:
     """Test database cleanup task functionality."""
 
     @pytest.mark.asyncio
-    async def test_db_cleanup_task_expired_sessions(self, monkeypatch, caplog):
+    async def test_db_cleanup_task_expired_sessions(self, monkeypatch, caplog, mock_sse_transport):
         """Test database cleanup task removes expired sessions."""
         mock_db_session = Mock()
         cleanup_call_count = 0
@@ -555,13 +484,14 @@ class TestDatabaseCleanupTask:
         def mock_refresh_session(session_id):
             return True  # Session exists and was refreshed
 
-        with patch('mcpgateway.cache.session_registry.SQLALCHEMY_AVAILABLE', True):
-            with patch('mcpgateway.cache.session_registry.get_db', mock_get_db):
-                with patch('asyncio.to_thread') as mock_to_thread:
+        with patch("mcpgateway.cache.session_registry.SQLALCHEMY_AVAILABLE", True):
+            with patch("mcpgateway.cache.session_registry.get_db", mock_get_db):
+                with patch("asyncio.to_thread") as mock_to_thread:
+
                     def side_effect(func, *args):
-                        if func.__name__ == '_db_cleanup':
+                        if func.__name__ == "_db_cleanup":
                             return mock_db_cleanup()
-                        elif func.__name__ == '_refresh_session':
+                        elif func.__name__ == "_refresh_session":
                             return mock_refresh_session(*args)
                         else:
                             return func(*args)
@@ -570,14 +500,7 @@ class TestDatabaseCleanupTask:
 
                     registry = SessionRegistry(backend="database", database_url="sqlite:///test.db")
 
-                    class MockTransport:
-                        async def disconnect(self):
-                            pass
-                        async def is_connected(self):
-                            return True
-
-                    transport = MockTransport()
-                    await registry.add_session("test_session", transport)
+                    await registry.add_session("test_session", mock_sse_transport)
 
                     # Start the cleanup task
                     cleanup_task = asyncio.create_task(registry._db_cleanup_task())
@@ -595,7 +518,7 @@ class TestDatabaseCleanupTask:
                     assert "Cleaned up 5 expired database sessions" in caplog.text
 
     @pytest.mark.asyncio
-    async def test_db_cleanup_task_session_refresh(self, monkeypatch):
+    async def test_db_cleanup_task_session_refresh(self, monkeypatch, mock_sse_transport):
         """Test database cleanup task refreshes active sessions."""
         mock_db_session = Mock()
         refresh_called = False
@@ -611,13 +534,14 @@ class TestDatabaseCleanupTask:
             refresh_called = True
             return True  # Session exists and was refreshed
 
-        with patch('mcpgateway.cache.session_registry.SQLALCHEMY_AVAILABLE', True):
-            with patch('mcpgateway.cache.session_registry.get_db', mock_get_db):
-                with patch('asyncio.to_thread') as mock_to_thread:
+        with patch("mcpgateway.cache.session_registry.SQLALCHEMY_AVAILABLE", True):
+            with patch("mcpgateway.cache.session_registry.get_db", mock_get_db):
+                with patch("asyncio.to_thread") as mock_to_thread:
+
                     def side_effect(func, *args):
-                        if func.__name__ == '_db_cleanup':
+                        if func.__name__ == "_db_cleanup":
                             return mock_db_cleanup()
-                        elif func.__name__ == '_refresh_session':
+                        elif func.__name__ == "_refresh_session":
                             return mock_refresh_session(*args)
                         else:
                             return func(*args)
@@ -626,14 +550,7 @@ class TestDatabaseCleanupTask:
 
                     registry = SessionRegistry(backend="database", database_url="sqlite:///test.db")
 
-                    class MockTransport:
-                        async def disconnect(self):
-                            pass
-                        async def is_connected(self):
-                            return True
-
-                    transport = MockTransport()
-                    await registry.add_session("test_session", transport)
+                    await registry.add_session("test_session", mock_sse_transport)
 
                     # Start the cleanup task
                     cleanup_task = asyncio.create_task(registry._db_cleanup_task())
@@ -651,10 +568,9 @@ class TestDatabaseCleanupTask:
                     assert refresh_called
 
     @pytest.mark.asyncio
-    async def test_db_cleanup_task_removes_stale_sessions(self, monkeypatch):
+    async def test_db_cleanup_task_removes_stale_sessions(self, monkeypatch, mock_sse_transport):
         """Test database cleanup task removes sessions that no longer exist in DB."""
         mock_db_session = Mock()
-        remove_called = False
 
         def mock_get_db():
             yield mock_db_session
@@ -665,13 +581,14 @@ class TestDatabaseCleanupTask:
         def mock_refresh_session(*args, **kwargs):
             return False  # Session doesn't exist in database
 
-        with patch('mcpgateway.cache.session_registry.SQLALCHEMY_AVAILABLE', True):
-            with patch('mcpgateway.cache.session_registry.get_db', mock_get_db):
-                with patch('asyncio.to_thread') as mock_to_thread:
+        with patch("mcpgateway.cache.session_registry.SQLALCHEMY_AVAILABLE", True):
+            with patch("mcpgateway.cache.session_registry.get_db", mock_get_db):
+                with patch("asyncio.to_thread") as mock_to_thread:
+
                     def side_effect(func, *args):
-                        if func.__name__ == '_db_cleanup':
+                        if func.__name__ == "_db_cleanup":
                             return mock_db_cleanup()
-                        elif func.__name__ == '_refresh_session':
+                        elif func.__name__ == "_refresh_session":
                             return mock_refresh_session(*args)
                         else:
                             return func(*args)
@@ -680,17 +597,10 @@ class TestDatabaseCleanupTask:
 
                     registry = SessionRegistry(backend="database", database_url="sqlite:///test.db")
 
-                    class MockTransport:
-                        async def disconnect(self):
-                            pass
-                        async def is_connected(self):
-                            return True
-
-                    transport = MockTransport()
-                    await registry.add_session("test_session", transport)
+                    await registry.add_session("test_session", mock_sse_transport)
 
                     # Mock remove_session to track calls
-                    with patch.object(registry, 'remove_session', new_callable=AsyncMock) as mock_remove:
+                    with patch.object(registry, "remove_session", new_callable=AsyncMock) as mock_remove:
                         # Start the cleanup task
                         cleanup_task = asyncio.create_task(registry._db_cleanup_task())
 
@@ -722,9 +632,9 @@ class TestDatabaseCleanupTask:
                 raise Exception("Database cleanup error")
             return 0
 
-        with patch('mcpgateway.cache.session_registry.SQLALCHEMY_AVAILABLE', True):
-            with patch('mcpgateway.cache.session_registry.get_db', mock_get_db):
-                with patch('asyncio.to_thread') as mock_to_thread:
+        with patch("mcpgateway.cache.session_registry.SQLALCHEMY_AVAILABLE", True):
+            with patch("mcpgateway.cache.session_registry.get_db", mock_get_db):
+                with patch("asyncio.to_thread") as mock_to_thread:
                     mock_to_thread.side_effect = mock_db_cleanup
 
                     registry = SessionRegistry(backend="database", database_url="sqlite:///test.db")
@@ -775,11 +685,11 @@ class TestMemoryCleanupTask:
         connected_transport = MockTransport(connected=True)
         disconnected_transport = MockTransport(connected=False)
 
-        await registry.add_session("connected", connected_transport)
-        await registry.add_session("disconnected", disconnected_transport)
+        await registry.add_session("connected", cast(SSETransport, connected_transport))
+        await registry.add_session("disconnected", cast(SSETransport, disconnected_transport))
 
         # Mock remove_session to track calls
-        with patch.object(registry, 'remove_session', new_callable=AsyncMock) as mock_remove:
+        with patch.object(registry, "remove_session", new_callable=AsyncMock) as mock_remove:
             # Start cleanup task
             cleanup_task = asyncio.create_task(registry._memory_cleanup_task())
 
@@ -808,10 +718,10 @@ class TestMemoryCleanupTask:
                 raise Exception("Transport error")
 
         transport = MockTransport()
-        await registry.add_session("error_session", transport)
+        await registry.add_session("error_session", cast(SSETransport, transport))
 
         # Mock remove_session to track calls
-        with patch.object(registry, 'remove_session', new_callable=AsyncMock) as mock_remove:
+        with patch.object(registry, "remove_session", new_callable=AsyncMock) as mock_remove:
             # Start cleanup task
             cleanup_task = asyncio.create_task(registry._memory_cleanup_task())
 
@@ -841,7 +751,7 @@ class TestMemoryCleanupTask:
             async def __aexit__(self, exc_type, exc_val, exc_tb):
                 pass
 
-        registry._lock = MockLock()
+        registry._lock = cast(Lock, MockLock())
 
         # Start cleanup task
         cleanup_task = asyncio.create_task(registry._memory_cleanup_task())
@@ -866,10 +776,12 @@ class TestRedisSessionRefresh:
     async def test_refresh_redis_sessions_general_error(self, monkeypatch, caplog):
         """Test _refresh_redis_sessions handles general errors."""
         mock_redis = AsyncMock()
+        mock_redis.close = Mock()  # Redis close() is synchronous
+        mock_redis.pubsub = Mock(return_value=AsyncMock())  # pubsub() is synchronous, returns async object
 
-        with patch('mcpgateway.cache.session_registry.REDIS_AVAILABLE', True):
-            with patch('mcpgateway.cache.session_registry.Redis') as MockRedis:
-                MockRedis.from_url.return_value = mock_redis
+        with patch("mcpgateway.cache.session_registry.REDIS_AVAILABLE", True):
+            with patch("mcpgateway.cache.session_registry.Redis") as MockRedis:
+                MockRedis.from_url = Mock(return_value=mock_redis)  # from_url is synchronous
 
                 registry = SessionRegistry(backend="redis", redis_url="redis://localhost")
 
@@ -881,7 +793,7 @@ class TestRedisSessionRefresh:
                     async def __aexit__(self, exc_type, exc_val, exc_tb):
                         pass
 
-                registry._lock = MockLock()
+                registry._lock = cast(Lock, MockLock())
 
                 await registry._refresh_redis_sessions()
 
@@ -913,7 +825,7 @@ class TestInitializationAndShutdown:
     @pytest.mark.asyncio
     async def test_database_backend_initialization_logging(self, caplog):
         """Test database backend initialization creates cleanup task."""
-        with patch('mcpgateway.cache.session_registry.SQLALCHEMY_AVAILABLE', True):
+        with patch("mcpgateway.cache.session_registry.SQLALCHEMY_AVAILABLE", True):
             registry = SessionRegistry(backend="database", database_url="sqlite:///test.db")
             await registry.initialize()
 
@@ -936,9 +848,9 @@ class TestInitializationAndShutdown:
         mock_pubsub = AsyncMock()
         mock_redis.pubsub = Mock(return_value=mock_pubsub)  # Use Mock for sync method
 
-        with patch('mcpgateway.cache.session_registry.REDIS_AVAILABLE', True):
-            with patch('mcpgateway.cache.session_registry.Redis') as MockRedis:
-                MockRedis.from_url.return_value = mock_redis
+        with patch("mcpgateway.cache.session_registry.REDIS_AVAILABLE", True):
+            with patch("mcpgateway.cache.session_registry.Redis") as MockRedis:
+                MockRedis.from_url = Mock(return_value=mock_redis)  # from_url is synchronous
 
                 registry = SessionRegistry(backend="redis", redis_url="redis://localhost")
                 await registry.initialize()
@@ -957,6 +869,7 @@ class TestInitializationAndShutdown:
         await registry.initialize()
 
         original_task = registry._cleanup_task
+        assert original_task is not None
         assert not original_task.cancelled()
 
         await registry.shutdown()
@@ -971,6 +884,7 @@ class TestInitializationAndShutdown:
         await registry.initialize()
 
         # Cancel task before shutdown
+        assert registry._cleanup_task is not None
         registry._cleanup_task.cancel()
 
         # Shutdown should not raise error

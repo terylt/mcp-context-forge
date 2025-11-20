@@ -12,7 +12,8 @@ import os
 from pathlib import Path
 import shutil
 import subprocess
-from unittest.mock import MagicMock, Mock, patch, mock_open
+from unittest.mock import MagicMock, Mock, patch
+from mcpgateway.tools.builder.schema import MCPStackConfig
 
 # Third-Party
 import pytest
@@ -67,8 +68,8 @@ class TestLoadConfig:
         config_file.write_text(yaml.dump(config_data))
 
         result = load_config(str(config_file))
-        assert result["deployment"]["type"] == "compose"
-        assert result["gateway"]["image"] == "mcpgateway:latest"
+        assert result.deployment.type == "compose"
+        assert result.gateway.image == "mcpgateway:latest"
 
     def test_load_nonexistent_config(self):
         """Test loading non-existent configuration file."""
@@ -93,12 +94,13 @@ class TestGeneratePluginConfig:
         template_dir = tmp_path / "templates"
         template_dir.mkdir()
 
-        config = {
+        config =  MCPStackConfig.model_validate({
+            "gateway": {"image": "mcpgateway:latest"},
             "deployment": {"type": "compose"},
             "plugins": [
-                {"name": "TestPlugin", "port": 8000, "mtls_enabled": True}
+                {"name": "TestPlugin", "port": 8000, "mtls_enabled": True, "repo": "https://github.com/test/plugin.git"}
             ],
-        }
+        })
 
         with patch("mcpgateway.tools.builder.common.Path") as mock_path:
             mock_path.return_value.__truediv__.return_value = template_dir
@@ -125,12 +127,13 @@ class TestGeneratePluginConfig:
         template_dir = tmp_path / "templates"
         template_dir.mkdir()
 
-        config = {
+        config =  MCPStackConfig.model_validate({
+            "gateway": {"image": "mcpgateway:latest"},
             "deployment": {"type": "kubernetes", "namespace": "test-ns"},
             "plugins": [
-                {"name": "TestPlugin", "port": 8000, "mtls_enabled": False}
+                {"name": "TestPlugin", "port": 8000, "mtls_enabled": False, "repo": "https://github.com/test/plugin1.git"}
             ],
-        }
+        })
 
         with patch("mcpgateway.tools.builder.common.Path") as mock_path:
             mock_path.return_value.__truediv__.return_value = template_dir
@@ -157,8 +160,9 @@ class TestGeneratePluginConfig:
         template_dir = tmp_path / "templates"
         template_dir.mkdir()
 
-        config = {
+        config =  MCPStackConfig.model_validate({
             "deployment": {"type": "compose"},
+            "gateway": {"image": "mcpgateway:latest"},
             "plugins": [
                 {
                     "name": "TestPlugin",
@@ -168,9 +172,10 @@ class TestGeneratePluginConfig:
                         "mode": "enforce",
                         "tags": ["security"],
                     },
+                    "repo": "https://github.com/test/plugin1.git"
                 }
             ],
-        }
+        })
 
         with patch("mcpgateway.tools.builder.common.Path") as mock_path:
             mock_path.return_value.__truediv__.return_value = template_dir
@@ -488,7 +493,7 @@ class TestGenerateKubernetesManifests:
         output_dir = tmp_path / "manifests"
         output_dir.mkdir()
 
-        config = {
+        config = MCPStackConfig.model_validate({
             "deployment": {"type": "kubernetes", "namespace": "test-ns"},
             "gateway": {
                 "image": "mcpgateway:latest",
@@ -496,7 +501,7 @@ class TestGenerateKubernetesManifests:
                 "mtls_enabled": False,
             },
             "plugins": [],
-        }
+        })
 
         generate_kubernetes_manifests(config, output_dir)
 
@@ -529,7 +534,7 @@ class TestGenerateKubernetesManifests:
         output_dir = tmp_path / "manifests"
         output_dir.mkdir()
 
-        config = {
+        config =  MCPStackConfig.model_validate({
             "deployment": {"type": "kubernetes", "namespace": "mcp-test"},
             "gateway": {
                 "image": "mcpgateway:latest",
@@ -550,7 +555,7 @@ class TestGenerateKubernetesManifests:
                     "mtls_enabled": False,
                 },
             ],
-        }
+        })
 
         generate_kubernetes_manifests(config, output_dir)
 
@@ -602,7 +607,7 @@ class TestGenerateKubernetesManifests:
             (plugin_dir / "server.crt").write_bytes(b"fake-plugin-cert")
             (plugin_dir / "server.key").write_bytes(b"fake-plugin-key")
 
-            config = {
+            config =  MCPStackConfig.model_validate({
                 "deployment": {"type": "kubernetes", "namespace": "secure-ns"},
                 "gateway": {
                     "image": "mcpgateway:latest",
@@ -617,7 +622,7 @@ class TestGenerateKubernetesManifests:
                         "mtls_enabled": True,
                     }
                 ],
-            }
+            })
 
             generate_kubernetes_manifests(config, output_dir)
         finally:
@@ -646,7 +651,7 @@ class TestGenerateKubernetesManifests:
         output_dir = tmp_path / "manifests"
         output_dir.mkdir()
 
-        config = {
+        config =  MCPStackConfig.model_validate({
             "deployment": {"type": "kubernetes", "namespace": "infra-ns"},
             "gateway": {
                 "image": "mcpgateway:latest",
@@ -667,7 +672,7 @@ class TestGenerateKubernetesManifests:
                     "image": "redis:alpine",
                 },
             },
-        }
+        })
 
         generate_kubernetes_manifests(config, output_dir)
 
@@ -731,7 +736,7 @@ class TestGenerateComposeManifests:
         output_dir = tmp_path / "manifests"
         output_dir.mkdir()
 
-        config = {
+        config =  MCPStackConfig.model_validate({
             "deployment": {"type": "compose", "project_name": "test-mcp"},
             "gateway": {
                 "image": "mcpgateway:latest",
@@ -740,7 +745,7 @@ class TestGenerateComposeManifests:
                 "mtls_enabled": False,
             },
             "plugins": [],
-        }
+        })
 
         with patch("mcpgateway.tools.builder.common.Path.cwd", return_value=tmp_path):
             generate_compose_manifests(config, output_dir)
@@ -765,7 +770,7 @@ class TestGenerateComposeManifests:
         output_dir = tmp_path / "manifests"
         output_dir.mkdir()
 
-        config = {
+        config =  MCPStackConfig.model_validate({
             "deployment": {"type": "compose", "project_name": "mcp-stack"},
             "gateway": {
                 "image": "mcpgateway:latest",
@@ -790,7 +795,7 @@ class TestGenerateComposeManifests:
                     "mtls_enabled": False,
                 },
             ],
-        }
+        })
 
         with patch("mcpgateway.tools.builder.common.Path.cwd", return_value=tmp_path):
             generate_compose_manifests(config, output_dir)
@@ -833,7 +838,7 @@ class TestGenerateComposeManifests:
         (plugin_dir / "server.crt").write_text("fake-plugin-cert")
         (plugin_dir / "server.key").write_text("fake-plugin-key")
 
-        config = {
+        config =  MCPStackConfig.model_validate({
             "deployment": {"type": "compose"},
             "gateway": {
                 "image": "mcpgateway:latest",
@@ -849,7 +854,7 @@ class TestGenerateComposeManifests:
                     "mtls_enabled": True,
                 }
             ],
-        }
+        })
 
         with patch("mcpgateway.tools.builder.common.Path.cwd", return_value=tmp_path):
             generate_compose_manifests(config, output_dir)
@@ -882,7 +887,7 @@ class TestGenerateComposeManifests:
         (env_dir / ".env.gateway").write_text("GATEWAY_VAR=value1\n")
         (env_dir / ".env.TestPlugin").write_text("PLUGIN_VAR=value2\n")
 
-        config = {
+        config =  MCPStackConfig.model_validate({
             "deployment": {"type": "compose"},
             "gateway": {
                 "image": "mcpgateway:latest",
@@ -897,7 +902,7 @@ class TestGenerateComposeManifests:
                     "mtls_enabled": False,
                 }
             ],
-        }
+        })
 
         with patch("mcpgateway.tools.builder.common.get_deploy_dir", return_value=deploy_dir):
             with patch("mcpgateway.tools.builder.common.Path.cwd", return_value=tmp_path):
@@ -924,7 +929,7 @@ class TestGenerateComposeManifests:
         output_dir = tmp_path / "manifests"
         output_dir.mkdir()
 
-        config = {
+        config =  MCPStackConfig.model_validate({
             "deployment": {"type": "compose"},
             "gateway": {
                 "image": "mcpgateway:latest",
@@ -945,7 +950,7 @@ class TestGenerateComposeManifests:
                     "image": "redis:7-alpine",
                 },
             },
-        }
+        })
 
         with patch("mcpgateway.tools.builder.common.Path.cwd", return_value=tmp_path):
             generate_compose_manifests(config, output_dir)

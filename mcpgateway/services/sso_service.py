@@ -22,11 +22,7 @@ from typing import Any, Dict, List, Optional, Tuple
 import urllib.parse
 
 # Third-Party
-from cryptography.fernet import Fernet
-from cryptography.hazmat.primitives import hashes
-from cryptography.hazmat.primitives.kdf.pbkdf2 import PBKDF2HMAC
 import httpx
-from pydantic import SecretStr
 from sqlalchemy import and_, select
 from sqlalchemy.orm import Session
 
@@ -34,6 +30,7 @@ from sqlalchemy.orm import Session
 from mcpgateway.config import settings
 from mcpgateway.db import PendingUserApproval, SSOAuthSession, SSOProvider, utc_now
 from mcpgateway.services.email_auth_service import EmailAuthService
+from mcpgateway.services.encryption_service import get_encryption_service
 from mcpgateway.utils.create_jwt_token import create_jwt_token
 
 # Logger
@@ -64,39 +61,7 @@ class SSOService:
         """
         self.db = db
         self.auth_service = EmailAuthService(db)
-        self._encryption_key = self._get_or_create_encryption_key()
-
-    def _get_or_create_encryption_key(self) -> bytes:
-        """Get or create encryption key for client secrets.
-
-        Returns:
-            Encryption key bytes
-        """
-        # Use the same encryption secret as the auth service
-        key = settings.auth_encryption_secret
-
-        if not key:
-            # Generate a new key - in production, this should be persisted
-            key = Fernet.generate_key()
-        # Derive a proper Fernet key from the secret
-
-        # Unwrap SecretStr if necessary
-        if isinstance(key, SecretStr):
-            key = key.get_secret_value()
-
-        # Convert string to bytes
-        if isinstance(key, str):
-            key = key.encode("utf-8")
-
-        # Derive a 32-byte key using PBKDF2
-        kdf = PBKDF2HMAC(
-            algorithm=hashes.SHA256(),
-            length=32,
-            salt=b"sso_salt",  # Static salt for consistency
-            iterations=100000,
-        )
-        derived_key = base64.urlsafe_b64encode(kdf.derive(key))
-        return derived_key
+        self._encryption = get_encryption_service(settings.auth_encryption_secret)
 
     def _encrypt_secret(self, secret: str) -> str:
         """Encrypt a client secret for secure storage.
@@ -107,10 +72,9 @@ class SSOService:
         Returns:
             Encrypted secret string
         """
-        fernet = Fernet(self._encryption_key)
-        return fernet.encrypt(secret.encode()).decode()
+        return self._encryption.encrypt_secret(secret)
 
-    def _decrypt_secret(self, encrypted_secret: str) -> str:
+    def _decrypt_secret(self, encrypted_secret: str) -> Optional[str]:
         """Decrypt a client secret for use.
 
         Args:
@@ -119,8 +83,11 @@ class SSOService:
         Returns:
             Plain text client secret
         """
-        fernet = Fernet(self._encryption_key)
-        return fernet.decrypt(encrypted_secret.encode()).decode()
+        decrypted: str | None = self._encryption.decrypt_secret(encrypted_secret)
+        if decrypted:
+            return decrypted
+
+        return None
 
     def list_enabled_providers(self) -> List[SSOProvider]:
         """Get list of enabled SSO providers.
@@ -588,6 +555,67 @@ class SSOService:
                 "provider_id": user_data.get("sub"),
                 "username": user_data.get("preferred_username") or user_data.get("email", "").split("@")[0],
                 "provider": "okta",
+            }
+
+        # Handle Keycloak provider with role mapping
+        if provider.id == "keycloak":
+            metadata = provider.metadata or {}
+            username_claim = metadata.get("username_claim", "preferred_username")
+            email_claim = metadata.get("email_claim", "email")
+            groups_claim = metadata.get("groups_claim", "groups")
+
+            groups = []
+
+            # Extract realm roles
+            if metadata.get("map_realm_roles"):
+                realm_access = user_data.get("realm_access", {})
+                realm_roles = realm_access.get("roles", [])
+                groups.extend(realm_roles)
+
+            # Extract client roles
+            if metadata.get("map_client_roles"):
+                resource_access = user_data.get("resource_access", {})
+                for client, access in resource_access.items():
+                    client_roles = access.get("roles", [])
+                    # Prefix with client name to avoid conflicts
+                    groups.extend([f"{client}:{role}" for role in client_roles])
+
+            # Extract groups from custom claim
+            if groups_claim in user_data:
+                custom_groups = user_data.get(groups_claim, [])
+                if isinstance(custom_groups, list):
+                    groups.extend(custom_groups)
+
+            return {
+                "email": user_data.get(email_claim),
+                "full_name": user_data.get("name"),
+                "avatar_url": user_data.get("picture"),
+                "provider_id": user_data.get("sub"),
+                "username": user_data.get(username_claim) or user_data.get(email_claim, "").split("@")[0],
+                "provider": "keycloak",
+                "groups": list(set(groups)),  # Deduplicate
+            }
+
+        # Handle Microsoft Entra ID provider
+        if provider.id == "entra":
+            # Microsoft's userinfo endpoint often omits the email claim
+            # Fallback: preferred_username (UPN) or upn claim
+            email = user_data.get("email") or user_data.get("preferred_username") or user_data.get("upn")
+
+            # Extract username from email/UPN
+            username = None
+            if user_data.get("preferred_username"):
+                username = user_data.get("preferred_username")
+            elif email:
+                username = email.split("@")[0]
+
+            return {
+                "email": email,
+                "full_name": user_data.get("name") or email,  # Fallback to email if name missing
+                "avatar_url": user_data.get("picture"),
+                "provider_id": user_data.get("sub") or user_data.get("oid"),
+                "username": username,
+                "provider": "entra",
             }
 
         # Generic OIDC format for all other providers

@@ -26,34 +26,43 @@ import html
 import io
 import json
 import logging
+import math
 import os
 from pathlib import Path
 import tempfile
 import time
-from typing import Any, cast, Dict, List, Optional, Union
+from typing import Any
+from typing import cast as typing_cast
+from typing import Dict, List, Optional, Union
 import urllib.parse
 import uuid
 
 # Third-Party
-from fastapi import APIRouter, Depends, HTTPException, Query, Request, Response
+from fastapi import APIRouter, Body, Depends, HTTPException, Query, Request, Response
 from fastapi.encoders import jsonable_encoder
 from fastapi.responses import HTMLResponse, JSONResponse, RedirectResponse, StreamingResponse
 import httpx
 from pydantic import SecretStr, ValidationError
 from pydantic_core import ValidationError as CoreValidationError
+from sqlalchemy import and_, case, cast, desc, func, or_, select, String
 from sqlalchemy.exc import IntegrityError
-from sqlalchemy.orm import Session
+from sqlalchemy.orm import joinedload, Session
+from sqlalchemy.sql.functions import coalesce
 from starlette.datastructures import UploadFile as StarletteUploadFile
 
 # First-Party
+from mcpgateway.common.models import LogLevel
 from mcpgateway.config import settings
-from mcpgateway.db import get_db, GlobalConfig
+from mcpgateway.db import get_db, GlobalConfig, ObservabilitySavedQuery, ObservabilitySpan, ObservabilityTrace
+from mcpgateway.db import Prompt as DbPrompt
+from mcpgateway.db import Resource as DbResource
 from mcpgateway.db import Tool as DbTool
+from mcpgateway.db import utc_now
 from mcpgateway.middleware.rbac import get_current_user_with_permissions, require_permission
-from mcpgateway.models import LogLevel
 from mcpgateway.schemas import (
     A2AAgentCreate,
     A2AAgentRead,
+    A2AAgentUpdate,
     CatalogBulkRegisterRequest,
     CatalogBulkRegisterResponse,
     CatalogListRequest,
@@ -68,6 +77,7 @@ from mcpgateway.schemas import (
     GatewayUpdate,
     GlobalConfigRead,
     GlobalConfigUpdate,
+    PaginationMeta,
     PluginDetail,
     PluginListResponse,
     PluginStatsResponse,
@@ -90,16 +100,17 @@ from mcpgateway.schemas import (
 )
 from mcpgateway.services.a2a_service import A2AAgentError, A2AAgentNameConflictError, A2AAgentNotFoundError, A2AAgentService
 from mcpgateway.services.catalog_service import catalog_service
+from mcpgateway.services.encryption_service import get_encryption_service
 from mcpgateway.services.export_service import ExportError, ExportService
-from mcpgateway.services.gateway_service import GatewayConnectionError, GatewayNameConflictError, GatewayNotFoundError, GatewayService, GatewayUrlConflictError
+from mcpgateway.services.gateway_service import GatewayConnectionError, GatewayDuplicateConflictError, GatewayNameConflictError, GatewayNotFoundError, GatewayService
 from mcpgateway.services.import_service import ConflictStrategy
 from mcpgateway.services.import_service import ImportError as ImportServiceError
 from mcpgateway.services.import_service import ImportService, ImportValidationError
 from mcpgateway.services.logging_service import LoggingService
 from mcpgateway.services.oauth_manager import OAuthManager
 from mcpgateway.services.plugin_service import get_plugin_service
-from mcpgateway.services.prompt_service import PromptNotFoundError, PromptService
-from mcpgateway.services.resource_service import ResourceNotFoundError, ResourceService
+from mcpgateway.services.prompt_service import PromptNameConflictError, PromptNotFoundError, PromptService
+from mcpgateway.services.resource_service import ResourceNotFoundError, ResourceService, ResourceURIConflictError
 from mcpgateway.services.root_service import RootService
 from mcpgateway.services.server_service import ServerError, ServerNameConflictError, ServerNotFoundError, ServerService
 from mcpgateway.services.tag_service import TagService
@@ -108,10 +119,37 @@ from mcpgateway.services.tool_service import ToolError, ToolNameConflictError, T
 from mcpgateway.utils.create_jwt_token import create_jwt_token, get_jwt_token
 from mcpgateway.utils.error_formatter import ErrorFormatter
 from mcpgateway.utils.metadata_capture import MetadataCapture
-from mcpgateway.utils.oauth_encryption import get_oauth_encryption
+from mcpgateway.utils.pagination import generate_pagination_links
 from mcpgateway.utils.passthrough_headers import PassthroughHeadersError
 from mcpgateway.utils.retry_manager import ResilientHttpClient
 from mcpgateway.utils.services_auth import decode_auth
+from mcpgateway.utils.validate_signature import sign_data
+
+# Conditional imports for gRPC support (only if grpcio is installed)
+try:
+    # First-Party
+    from mcpgateway.schemas import GrpcServiceCreate, GrpcServiceRead, GrpcServiceUpdate
+    from mcpgateway.services.grpc_service import GrpcService, GrpcServiceError, GrpcServiceNameConflictError, GrpcServiceNotFoundError
+
+    GRPC_AVAILABLE = True
+except ImportError:
+    GRPC_AVAILABLE = False
+    # Define placeholder types to avoid NameError
+    GrpcServiceCreate = None  # type: ignore
+    GrpcServiceRead = None  # type: ignore
+    GrpcServiceUpdate = None  # type: ignore
+    GrpcService = None  # type: ignore
+
+    # Define placeholder exception classes that maintain the hierarchy
+    class GrpcServiceError(Exception):  # type: ignore
+        """Placeholder for GrpcServiceError when grpcio is not installed."""
+
+    class GrpcServiceNotFoundError(GrpcServiceError):  # type: ignore
+        """Placeholder for GrpcServiceNotFoundError when grpcio is not installed."""
+
+    class GrpcServiceNameConflictError(GrpcServiceError):  # type: ignore
+        """Placeholder for GrpcServiceNameConflictError when grpcio is not installed."""
+
 
 # Import the shared logging service from main
 # This will be set by main.py when it imports admin_router
@@ -177,6 +215,8 @@ export_service: ExportService = ExportService()
 import_service: ImportService = ImportService()
 # Initialize A2A service only if A2A features are enabled
 a2a_service: Optional[A2AAgentService] = A2AAgentService() if settings.mcpgateway_a2a_enabled else None
+# Initialize gRPC service only if gRPC features are enabled AND grpcio is installed
+grpc_service_mgr: Optional[Any] = GrpcService() if (settings.mcpgateway_grpc_enabled and GRPC_AVAILABLE and GrpcService is not None) else None
 
 # Set up basic authentication
 
@@ -235,17 +275,17 @@ def rate_limit(requests_per_minute: Optional[int] = None):
         True
     """
 
-    def decorator(func):
+    def decorator(func_to_wrap):
         """Decorator that wraps the function with rate limiting logic.
 
         Args:
-            func: The function to be wrapped with rate limiting
+            func_to_wrap: The function to be wrapped with rate limiting
 
         Returns:
             The wrapped function with rate limiting applied
         """
 
-        @wraps(func)
+        @wraps(func_to_wrap)
         async def wrapper(*args, request: Optional[Request] = None, **kwargs):
             """Execute the wrapped function with rate limiting enforcement.
 
@@ -273,95 +313,73 @@ def rate_limit(requests_per_minute: Optional[int] = None):
 
             # enforce
             if len(rate_limit_storage[client_ip]) >= limit:
-                LOGGER.warning(f"Rate limit exceeded for IP {client_ip} on endpoint {func.__name__}")
+                LOGGER.warning(f"Rate limit exceeded for IP {client_ip} on endpoint {func_to_wrap.__name__}")
                 raise HTTPException(
                     status_code=429,
                     detail=f"Rate limit exceeded. Maximum {limit} requests per minute.",
                 )
-
             rate_limit_storage[client_ip].append(current_time)
-
             # IMPORTANT: forward request to the real endpoint
-            return await func(*args, request=request, **kwargs)
+            return await func_to_wrap(*args, request=request, **kwargs)
 
         return wrapper
 
     return decorator
 
 
-def get_user_email(user) -> str:
-    """Extract user email from JWT payload consistently.
+def get_user_email(user: Union[str, dict, object] = None) -> str:
+    """Return the user email from a JWT payload, user object, or string.
 
     Args:
-        user: User object from JWT token (from get_current_user_with_permissions)
+        user (Union[str, dict, object], optional): User object from JWT token
+            (from get_current_user_with_permissions). Can be:
+            - dict: representing JWT payload
+            - object: with an `email` attribute
+            - str: an email string
+            - None: will return "unknown"
+            Defaults to None.
 
     Returns:
-        str: User email address
+        str: User email address, or "unknown" if no email can be determined.
+             - If `user` is a dict, returns `sub` if present, else `email`, else "unknown".
+             - If `user` has an `email` attribute, returns that.
+             - If `user` is a string, returns it.
+             - If `user` is None, returns "unknown".
+             - Otherwise, returns str(user).
 
     Examples:
-        Test with dictionary user (JWT payload) with 'sub':
-        >>> from mcpgateway import admin
-        >>> user_dict = {'sub': 'alice@example.com', 'iat': 1234567890}
-        >>> admin.get_user_email(user_dict)
+        >>> get_user_email({'sub': 'alice@example.com'})
         'alice@example.com'
-
-        Test with dictionary user with 'email' field:
-        >>> user_dict = {'email': 'bob@company.com', 'role': 'admin'}
-        >>> admin.get_user_email(user_dict)
+        >>> get_user_email({'email': 'bob@company.com'})
         'bob@company.com'
-
-        Test with dictionary user with both 'sub' and 'email' (sub takes precedence):
-        >>> user_dict = {'sub': 'charlie@primary.com', 'email': 'charlie@secondary.com'}
-        >>> admin.get_user_email(user_dict)
+        >>> get_user_email({'sub': 'charlie@primary.com', 'email': 'charlie@secondary.com'})
         'charlie@primary.com'
-
-        Test with dictionary user with no email fields:
-        >>> user_dict = {'username': 'dave', 'role': 'user'}
-        >>> admin.get_user_email(user_dict)
+        >>> get_user_email({'username': 'dave'})
         'unknown'
-
-        Test with user object having email attribute:
         >>> class MockUser:
         ...     def __init__(self, email):
         ...         self.email = email
-        >>> user_obj = MockUser('eve@test.com')
-        >>> admin.get_user_email(user_obj)
+        >>> get_user_email(MockUser('eve@test.com'))
         'eve@test.com'
-
-        Test with user object without email attribute:
-        >>> class BasicUser:
-        ...     def __init__(self, name):
-        ...         self.name = name
-        ...     def __str__(self):
-        ...         return self.name
-        >>> user_obj = BasicUser('frank')
-        >>> admin.get_user_email(user_obj)
-        'frank'
-
-        Test with None user:
-        >>> admin.get_user_email(None)
+        >>> get_user_email(None)
         'unknown'
-
-        Test with string user:
-        >>> admin.get_user_email('grace@example.org')
+        >>> get_user_email('grace@example.org')
         'grace@example.org'
-
-        Test with empty dictionary:
-        >>> admin.get_user_email({})
+        >>> get_user_email({})
         'unknown'
-
-        Test with non-string, non-dict, non-object values:
-        >>> admin.get_user_email(12345)
+        >>> get_user_email(12345)
         '12345'
     """
     if isinstance(user, dict):
-        # Standard JWT format - try 'sub' first, then 'email'
-        return user.get("sub") or user.get("email", "unknown")
+        return user.get("sub") or user.get("email") or "unknown"
+
     if hasattr(user, "email"):
-        # User object with email attribute
         return user.email
-    # Fallback to string representation
-    return str(user) if user else "unknown"
+
+    if user is None:
+        return "unknown"
+
+    return str(user)
 
 
 def serialize_datetime(obj):
@@ -587,6 +605,9 @@ async def get_configuration_settings(
             "sso_google_enabled": settings.sso_google_enabled,
             "sso_ibm_verify_enabled": settings.sso_ibm_verify_enabled,
             "sso_okta_enabled": settings.sso_okta_enabled,
+            "sso_keycloak_enabled": settings.sso_keycloak_enabled,
+            "sso_entra_enabled": settings.sso_entra_enabled,
+            "sso_generic_enabled": settings.sso_generic_enabled,
             "sso_auto_create_users": settings.sso_auto_create_users,
             "sso_preserve_admin_auth": settings.sso_preserve_admin_auth,
             "sso_require_admin_approval": settings.sso_require_admin_approval,
@@ -1006,14 +1027,49 @@ async def admin_add_server(request: Request, db: Session = Depends(get_db), user
         server_id = form.get("id")
         visibility = str(form.get("visibility", "private"))
         LOGGER.info(f" user input id::{server_id}")
+
+        # Handle "Select All" for tools
+        associated_tools_list = form.getlist("associatedTools")
+        if form.get("selectAllTools") == "true":
+            # User clicked "Select All" - get all tool IDs from hidden field
+            all_tool_ids_json = str(form.get("allToolIds", "[]"))
+            try:
+                all_tool_ids = json.loads(all_tool_ids_json)
+                associated_tools_list = all_tool_ids
+                LOGGER.info(f"Select All tools enabled: {len(all_tool_ids)} tools selected")
+            except json.JSONDecodeError:
+                LOGGER.warning("Failed to parse allToolIds JSON, falling back to checked tools")
+
+        # Handle "Select All" for resources
+        associated_resources_list = form.getlist("associatedResources")
+        if form.get("selectAllResources") == "true":
+            all_resource_ids_json = str(form.get("allResourceIds", "[]"))
+            try:
+                all_resource_ids = json.loads(all_resource_ids_json)
+                associated_resources_list = all_resource_ids
+                LOGGER.info(f"Select All resources enabled: {len(all_resource_ids)} resources selected")
+            except json.JSONDecodeError:
+                LOGGER.warning("Failed to parse allResourceIds JSON, falling back to checked resources")
+
+        # Handle "Select All" for prompts
+        associated_prompts_list = form.getlist("associatedPrompts")
+        if form.get("selectAllPrompts") == "true":
+            all_prompt_ids_json = str(form.get("allPromptIds", "[]"))
+            try:
+                all_prompt_ids = json.loads(all_prompt_ids_json)
+                associated_prompts_list = all_prompt_ids
+                LOGGER.info(f"Select All prompts enabled: {len(all_prompt_ids)} prompts selected")
+            except json.JSONDecodeError:
+                LOGGER.warning("Failed to parse allPromptIds JSON, falling back to checked prompts")
+
         server = ServerCreate(
             id=form.get("id") or None,
             name=form.get("name"),
             description=form.get("description"),
             icon=form.get("icon"),
-            associated_tools=",".join(str(x) for x in form.getlist("associatedTools")),
-            associated_resources=",".join(str(x) for x in form.getlist("associatedResources")),
-            associated_prompts=",".join(str(x) for x in form.getlist("associatedPrompts")),
+            associated_tools=",".join(str(x) for x in associated_tools_list),
+            associated_resources=",".join(str(x) for x in associated_resources_list),
+            associated_prompts=",".join(str(x) for x in associated_prompts_list),
             tags=tags,
             visibility=visibility,
         )
@@ -1033,7 +1089,7 @@ async def admin_add_server(request: Request, db: Session = Depends(get_db), user
         creation_metadata = MetadataCapture.extract_creation_metadata(request, user)
 
         # Ensure default visibility is private and assign to personal team when available
-        team_id_cast = cast(Optional[str], team_id)
+        team_id_cast = typing_cast(Optional[str], team_id)
         await server_service.register_server(
             db,
             server,
@@ -1198,14 +1254,48 @@ async def admin_edit_server(
 
         mod_metadata = MetadataCapture.extract_modification_metadata(request, user, 0)
 
+        # Handle "Select All" for tools
+        associated_tools_list = form.getlist("associatedTools")
+        if form.get("selectAllTools") == "true":
+            # User clicked "Select All" - get all tool IDs from hidden field
+            all_tool_ids_json = str(form.get("allToolIds", "[]"))
+            try:
+                all_tool_ids = json.loads(all_tool_ids_json)
+                associated_tools_list = all_tool_ids
+                LOGGER.info(f"Select All tools enabled for edit: {len(all_tool_ids)} tools selected")
+            except json.JSONDecodeError:
+                LOGGER.warning("Failed to parse allToolIds JSON, falling back to checked tools")
+
+        # Handle "Select All" for resources
+        associated_resources_list = form.getlist("associatedResources")
+        if form.get("selectAllResources") == "true":
+            all_resource_ids_json = str(form.get("allResourceIds", "[]"))
+            try:
+                all_resource_ids = json.loads(all_resource_ids_json)
+                associated_resources_list = all_resource_ids
+                LOGGER.info(f"Select All resources enabled for edit: {len(all_resource_ids)} resources selected")
+            except json.JSONDecodeError:
+                LOGGER.warning("Failed to parse allResourceIds JSON, falling back to checked resources")
+
+        # Handle "Select All" for prompts
+        associated_prompts_list = form.getlist("associatedPrompts")
+        if form.get("selectAllPrompts") == "true":
+            all_prompt_ids_json = str(form.get("allPromptIds", "[]"))
+            try:
+                all_prompt_ids = json.loads(all_prompt_ids_json)
+                associated_prompts_list = all_prompt_ids
+                LOGGER.info(f"Select All prompts enabled for edit: {len(all_prompt_ids)} prompts selected")
+            except json.JSONDecodeError:
+                LOGGER.warning("Failed to parse allPromptIds JSON, falling back to checked prompts")
+
         server = ServerUpdate(
             id=form.get("id"),
             name=form.get("name"),
             description=form.get("description"),
             icon=form.get("icon"),
-            associated_tools=",".join(str(x) for x in form.getlist("associatedTools")),
-            associated_resources=",".join(str(x) for x in form.getlist("associatedResources")),
-            associated_prompts=",".join(str(x) for x in form.getlist("associatedPrompts")),
+            associated_tools=",".join(str(x) for x in associated_tools_list),
+            associated_resources=",".join(str(x) for x in associated_resources_list),
+            associated_prompts=",".join(str(x) for x in associated_prompts_list),
             tags=tags,
             visibility=visibility,
             team_id=team_id,
@@ -1240,6 +1330,9 @@ async def admin_edit_server(
         return JSONResponse(content={"message": str(ex), "success": False}, status_code=500)
     except IntegrityError as ex:
         return JSONResponse(content=ErrorFormatter.format_database_error(ex), status_code=409)
+    except PermissionError as e:
+        LOGGER.info(f"Permission denied for user {get_user_email(user)}: {e}")
+        return JSONResponse(content={"message": str(e), "success": False}, status_code=403)
     except Exception as ex:
         return JSONResponse(content={"message": str(ex), "success": False}, status_code=500)
 
@@ -1326,7 +1419,14 @@ async def admin_toggle_server(
         >>>
         >>> async def test_admin_toggle_server_exception():
         ...     result = await admin_toggle_server(server_id, mock_request_error, mock_db, mock_user)
-        ...     return isinstance(result, RedirectResponse) and result.status_code == 303 and "/admin#catalog" in result.headers["location"]
+        ...     location_header = result.headers["location"]
+        ...     return (
+        ...         isinstance(result, RedirectResponse)
+        ...         and result.status_code == 303
+        ...         and "/admin" in location_header  # Ensure '/admin' is present
+        ...         and "error=" in location_header  # Ensure the error parameter is in the query string
+        ...         and location_header.endswith("#catalog")  # Ensure the fragment is correct
+        ...     )
         >>>
         >>> asyncio.run(test_admin_toggle_server_exception())
         True
@@ -1335,15 +1435,29 @@ async def admin_toggle_server(
         >>> server_service.toggle_server_status = original_toggle_server_status
     """
     form = await request.form()
-    LOGGER.debug(f"User {get_user_email(user)} is toggling server ID {server_id} with activate: {form.get('activate')}")
+    error_message = None
+    user_email = get_user_email(user)
+    LOGGER.debug(f"User {user_email} is toggling server ID {server_id} with activate: {form.get('activate')}")
     activate = str(form.get("activate", "true")).lower() == "true"
     is_inactive_checked = str(form.get("is_inactive_checked", "false"))
     try:
-        await server_service.toggle_server_status(db, server_id, activate)
+        await server_service.toggle_server_status(db, server_id, activate, user_email=user_email)
+    except PermissionError as e:
+        LOGGER.warning(f"Permission denied for user {user_email} toggling servers {server_id}: {e}")
+        error_message = str(e)
     except Exception as e:
         LOGGER.error(f"Error toggling server status: {e}")
+        error_message = "Error toggling server status. Please try again."
 
     root_path = request.scope.get("root_path", "")
+
+    # Build redirect URL with error message if present
+    if error_message:
+        error_param = f"?error={urllib.parse.quote(error_message)}"
+        if is_inactive_checked.lower() == "true":
+            return RedirectResponse(f"{root_path}/admin/{error_param}&include_inactive=true#catalog", status_code=303)
+        return RedirectResponse(f"{root_path}/admin/{error_param}#catalog", status_code=303)
+
     if is_inactive_checked.lower() == "true":
         return RedirectResponse(f"{root_path}/admin/?include_inactive=true#catalog", status_code=303)
     return RedirectResponse(f"{root_path}/admin#catalog", status_code=303)
@@ -1412,7 +1526,7 @@ async def admin_delete_server(server_id: str, request: Request, db: Session = De
         >>>
         >>> async def test_admin_delete_server_exception():
         ...     result = await admin_delete_server(server_id, mock_request_error, mock_db, mock_user)
-        ...     return isinstance(result, RedirectResponse) and result.status_code == 303 and "/admin#catalog" in result.headers["location"]
+        ...     return isinstance(result, RedirectResponse) and result.status_code == 303 and "#catalog" in result.headers["location"] and "error=" in result.headers["location"]
         >>>
         >>> asyncio.run(test_admin_delete_server_exception())
         True
@@ -1420,15 +1534,28 @@ async def admin_delete_server(server_id: str, request: Request, db: Session = De
         >>> # Restore original method
         >>> server_service.delete_server = original_delete_server
     """
+    error_message = None
     try:
-        LOGGER.debug(f"User {get_user_email(user)} is deleting server ID {server_id}")
-        await server_service.delete_server(db, server_id)
+        user_email = get_user_email(user)
+        LOGGER.debug(f"User {user_email} is deleting server ID {server_id}")
+        await server_service.delete_server(db, server_id, user_email=user_email)
+    except PermissionError as e:
+        LOGGER.warning(f"Permission denied for user {get_user_email(user)} deleting server {server_id}: {e}")
+        error_message = str(e)
     except Exception as e:
         LOGGER.error(f"Error deleting server: {e}")
+        error_message = "Failed to delete server. Please try again."
 
     form = await request.form()
     is_inactive_checked = str(form.get("is_inactive_checked", "false"))
     root_path = request.scope.get("root_path", "")
+
+    # Build redirect URL with error message if present
+    if error_message:
+        error_param = f"?error={urllib.parse.quote(error_message)}"
+        if is_inactive_checked.lower() == "true":
+            return RedirectResponse(f"{root_path}/admin/{error_param}&include_inactive=true#catalog", status_code=303)
+        return RedirectResponse(f"{root_path}/admin/{error_param}#catalog", status_code=303)
 
     if is_inactive_checked.lower() == "true":
         return RedirectResponse(f"{root_path}/admin/?include_inactive=true#catalog", status_code=303)
@@ -1699,9 +1826,9 @@ async def admin_list_gateways(
         ...     slug="test-gateway"
         ... )
         >>>
-        >>> # Mock the gateway_service.list_gateways method
-        >>> original_list_gateways = gateway_service.list_gateways
-        >>> gateway_service.list_gateways = AsyncMock(return_value=[mock_gateway])
+        >>> # Mock the gateway_service.list_gateways_for_user method
+        >>> original_list_gateways = gateway_service.list_gateways_for_user
+        >>> gateway_service.list_gateways_for_user = AsyncMock(return_value=[mock_gateway])
         >>>
         >>> # Test listing active gateways
         >>> async def test_admin_list_gateways_active():
@@ -1720,7 +1847,7 @@ async def admin_list_gateways(
         ...     auth_header_key=None, auth_header_value=None,
         ...     slug="test-gateway"
         ... )
-        >>> gateway_service.list_gateways = AsyncMock(return_value=[
+        >>> gateway_service.list_gateways_for_user = AsyncMock(return_value=[
         ...     mock_gateway, # Return the GatewayRead objects, not pre-dumped dicts
         ...     mock_inactive_gateway # Return the GatewayRead objects, not pre-dumped dicts
         ... ])
@@ -1732,7 +1859,7 @@ async def admin_list_gateways(
         True
         >>>
         >>> # Test empty list
-        >>> gateway_service.list_gateways = AsyncMock(return_value=[])
+        >>> gateway_service.list_gateways_for_user = AsyncMock(return_value=[])
         >>> async def test_admin_list_gateways_empty():
         ...     result = await admin_list_gateways(include_inactive=False, db=mock_db, user=mock_user)
         ...     return result == []
@@ -1741,7 +1868,7 @@ async def admin_list_gateways(
         True
         >>>
         >>> # Test exception handling
-        >>> gateway_service.list_gateways = AsyncMock(side_effect=Exception("Gateway list error"))
+        >>> gateway_service.list_gateways_for_user = AsyncMock(side_effect=Exception("Gateway list error"))
         >>> async def test_admin_list_gateways_exception():
         ...     try:
         ...         await admin_list_gateways(False, mock_db, mock_user)
@@ -1753,11 +1880,41 @@ async def admin_list_gateways(
         True
         >>>
         >>> # Restore original method
-        >>> gateway_service.list_gateways = original_list_gateways
+        >>> gateway_service.list_gateways_for_user = original_list_gateways
     """
-    LOGGER.debug(f"User {get_user_email(user)} requested gateway list")
-    gateways = await gateway_service.list_gateways(db, include_inactive=include_inactive)
+    user_email = get_user_email(user)
+    LOGGER.debug(f"User {user_email} requested gateway list")
+    gateways = await gateway_service.list_gateways_for_user(db, user_email, include_inactive=include_inactive)
     return [gateway.model_dump(by_alias=True) for gateway in gateways]
+
+
+@admin_router.get("/gateways/ids")
+async def admin_list_gateway_ids(
+    include_inactive: bool = False,
+    db: Session = Depends(get_db),
+    user=Depends(get_current_user_with_permissions),
+) -> Dict[str, Any]:
+    """
+    Return a JSON object containing a list of all gateway IDs.
+
+    This endpoint is used by the admin UI to support the "Select All" action
+    for gateways. It returns a simple JSON payload with a single key
+    `gateway_ids` containing an array of gateway identifiers.
+
+    Args:
+        include_inactive (bool): Whether to include inactive gateways in the results.
+        db (Session): Database session dependency.
+        user: Authenticated user dependency.
+
+    Returns:
+        Dict[str, Any]: JSON object containing the `gateway_ids` list and metadata.
+    """
+    user_email = get_user_email(user)
+    LOGGER.debug(f"User {user_email} requested gateway ids list")
+    gateways = await gateway_service.list_gateways_for_user(db, user_email, include_inactive=include_inactive)
+    ids = [str(g.id) for g in gateways]
+    LOGGER.info(f"Gateway IDs retrieved: {ids}")
+    return {"gateway_ids": ids}
 
 
 @admin_router.post("/gateways/{gateway_id}/toggle")
@@ -1821,18 +1978,6 @@ async def admin_toggle_gateway(
         >>> asyncio.run(test_admin_toggle_gateway_deactivate())
         True
         >>>
-        >>> # Edge case: Toggle with inactive checkbox checked
-        >>> form_data_inactive = FormData([("activate", "true"), ("is_inactive_checked", "true")])
-        >>> mock_request_inactive = MagicMock(spec=Request, scope={"root_path": ""})
-        >>> mock_request_inactive.form = AsyncMock(return_value=form_data_inactive)
-        >>>
-        >>> async def test_admin_toggle_gateway_inactive_checked():
-        ...     result = await admin_toggle_gateway(gateway_id, mock_request_inactive, mock_db, mock_user)
-        ...     return isinstance(result, RedirectResponse) and result.status_code == 303 and "/admin/?include_inactive=true#gateways" in result.headers["location"]
-        >>>
-        >>> asyncio.run(test_admin_toggle_gateway_inactive_checked())
-        True
-        >>>
         >>> # Error path: Simulate an exception during toggle
         >>> form_data_error = FormData([("activate", "true")])
         >>> mock_request_error = MagicMock(spec=Request, scope={"root_path": ""})
@@ -1841,25 +1986,45 @@ async def admin_toggle_gateway(
         >>>
         >>> async def test_admin_toggle_gateway_exception():
         ...     result = await admin_toggle_gateway(gateway_id, mock_request_error, mock_db, mock_user)
-        ...     return isinstance(result, RedirectResponse) and result.status_code == 303 and "/admin#gateways" in result.headers["location"]
+        ...     location_header = result.headers["location"]
+        ...     return (
+        ...         isinstance(result, RedirectResponse)
+        ...         and result.status_code == 303
+        ...         and "/admin" in location_header  # Ensure '/admin' is present
+        ...         and "error=" in location_header  # Ensure the error parameter is in the query string
+        ...         and location_header.endswith("#gateways")  # Ensure the fragment is correct
+        ...     )
         >>>
         >>> asyncio.run(test_admin_toggle_gateway_exception())
         True
-        >>>
         >>> # Restore original method
         >>> gateway_service.toggle_gateway_status = original_toggle_gateway_status
     """
-    LOGGER.debug(f"User {get_user_email(user)} is toggling gateway ID {gateway_id}")
+    error_message = None
+    user_email = get_user_email(user)
+    LOGGER.debug(f"User {user_email} is toggling gateway ID {gateway_id}")
     form = await request.form()
     activate = str(form.get("activate", "true")).lower() == "true"
     is_inactive_checked = str(form.get("is_inactive_checked", "false"))
 
     try:
-        await gateway_service.toggle_gateway_status(db, gateway_id, activate)
+        await gateway_service.toggle_gateway_status(db, gateway_id, activate, user_email=user_email)
+    except PermissionError as e:
+        LOGGER.warning(f"Permission denied for user {user_email} toggling gateway {gateway_id}: {e}")
+        error_message = str(e)
     except Exception as e:
         LOGGER.error(f"Error toggling gateway status: {e}")
+        error_message = "Failed to toggle gateway status. Please try again."
 
     root_path = request.scope.get("root_path", "")
+
+    # Build redirect URL with error message if present
+    if error_message:
+        error_param = f"?error={urllib.parse.quote(error_message)}"
+        if is_inactive_checked.lower() == "true":
+            return RedirectResponse(f"{root_path}/admin/{error_param}&include_inactive=true#gateways", status_code=303)
+        return RedirectResponse(f"{root_path}/admin/{error_param}#gateways", status_code=303)
+
     if is_inactive_checked.lower() == "true":
         return RedirectResponse(f"{root_path}/admin/?include_inactive=true#gateways", status_code=303)
     return RedirectResponse(f"{root_path}/admin#gateways", status_code=303)
@@ -2028,12 +2193,15 @@ async def admin_ui(
                 user_teams = []
                 for team in raw_teams:
                     try:
+                        # Get the user's role in this team
+                        user_role = await team_service.get_user_role_in_team(user_email, team.id)
                         team_dict = {
                             "id": str(team.id) if team.id else "",
                             "name": str(team.name) if team.name else "",
                             "type": str(getattr(team, "type", "organization")),
                             "is_personal": bool(getattr(team, "is_personal", False)),
                             "member_count": team.get_member_count() if hasattr(team, "get_member_count") else 0,
+                            "role": user_role or "member",
                         }
                         user_teams.append(team_dict)
                     except Exception as team_error:
@@ -2164,6 +2332,20 @@ async def admin_ui(
         """
         if not tid:
             return True
+        # If an item is explicitly public, it should be visible to any team
+        try:
+            vis = getattr(item, "visibility", None)
+            if vis is None and isinstance(item, dict):
+                vis = item.get("visibility")
+            if isinstance(vis, str) and vis.lower() == "public":
+                return True
+        except Exception as exc:  # pragma: no cover - defensive logging for unexpected types
+            LOGGER.debug(
+                "Error checking visibility on item (type=%s): %s",
+                type(item),
+                exc,
+                exc_info=True,
+            )
         # item may be a pydantic model or dict-like
         # check common fields for team membership
         candidates = []
@@ -2325,6 +2507,22 @@ async def admin_ui(
         a2a_agents = [agent.model_dump(by_alias=True) for agent in a2a_agents_raw]
         a2a_agents = _to_dict_and_filter(a2a_agents) if isinstance(a2a_agents, (list, tuple)) else a2a_agents
 
+    # Load gRPC services if enabled and available
+    grpc_services = []
+    try:
+        if GRPC_AVAILABLE and grpc_service_mgr and settings.mcpgateway_grpc_enabled:
+            grpc_services_raw = await grpc_service_mgr.list_services(
+                db,
+                include_inactive=include_inactive,
+                user_email=user_email,
+                team_id=selected_team_id,
+            )
+            grpc_services = [service.model_dump(by_alias=True) for service in grpc_services_raw]
+            grpc_services = _to_dict_and_filter(grpc_services) if isinstance(grpc_services, (list, tuple)) else grpc_services
+    except Exception as e:
+        LOGGER.exception("Failed to load gRPC services: %s", e)
+        grpc_services = []
+
     # Template variables and context: include selected_team_id so the template and frontend can read it
     root_path = settings.app_root_path
     max_name_length = settings.validation_max_name_length
@@ -2340,6 +2538,7 @@ async def admin_ui(
             "prompts": prompts,
             "gateways": gateways,
             "a2a_agents": a2a_agents,
+            "grpc_services": grpc_services,
             "roots": roots,
             "include_inactive": include_inactive,
             "root_path": root_path,
@@ -2347,7 +2546,10 @@ async def admin_ui(
             "gateway_tool_name_separator": settings.gateway_tool_name_separator,
             "bulk_import_max_tools": settings.mcpgateway_bulk_import_max_tools,
             "a2a_enabled": settings.mcpgateway_a2a_enabled,
+            "grpc_enabled": GRPC_AVAILABLE and settings.mcpgateway_grpc_enabled,
             "catalog_enabled": settings.mcpgateway_catalog_enabled,
+            "llmchat_enabled": getattr(settings, "llmchat_enabled", False),
+            "observability_enabled": getattr(settings, "observability_enabled", False),
             "current_user": get_user_email(user),
             "email_auth_enabled": getattr(settings, "email_auth_enabled", False),
             "is_admin": bool(user.get("is_admin") if isinstance(user, dict) else False),
@@ -2392,7 +2594,7 @@ async def admin_ui(
                 secure=getattr(settings, "secure_cookies", False),
                 samesite=getattr(settings, "cookie_samesite", "lax"),
                 max_age=settings.token_expiry * 60,  # Convert minutes to seconds
-                path="/",  # Make cookie available for all paths
+                path=settings.app_root_path or "/",  # Make cookie available for all paths
             )
             LOGGER.debug(f"Set comprehensive JWT token cookie for user: {admin_email}")
         except Exception as e:
@@ -2595,7 +2797,7 @@ async def admin_logout(request: Request) -> RedirectResponse:
     response = RedirectResponse(url=f"{root_path}/admin/login", status_code=303)
 
     # Clear JWT token cookie
-    response.delete_cookie("jwt_token", path="/", secure=True, httponly=True, samesite="lax")
+    response.delete_cookie("jwt_token", path=settings.app_root_path or "/", secure=True, httponly=True, samesite="lax")
 
     return response
 
@@ -3248,23 +3450,23 @@ async def admin_get_team_edit(
                 <div>
                     <label class="block text-sm font-medium text-gray-700 dark:text-gray-300">Name</label>
                     <input type="text" name="name" value="{team.name}" required
-                           class="mt-1 block w-full px-3 py-2 border border-gray-300 dark:border-gray-600 rounded-md shadow-sm focus:outline-none focus:ring-indigo-500 focus:border-indigo-500 dark:bg-gray-700 text-gray-900 dark:text-white">
+                           class="mt-1 px-1.5 block w-full px-3 py-2 border border-gray-300 dark:border-gray-600 rounded-md shadow-sm focus:outline-none focus:ring-indigo-500 focus:border-indigo-500 dark:bg-gray-700 text-gray-900 dark:text-white">
                 </div>
                 <div>
                     <label class="block text-sm font-medium text-gray-700 dark:text-gray-300">Slug</label>
                     <input type="text" name="slug" value="{team.slug}" readonly
-                           class="mt-1 block w-full px-3 py-2 border border-gray-300 dark:border-gray-600 rounded-md shadow-sm bg-gray-50 dark:bg-gray-700 text-gray-900 dark:text-white">
+                           class="mt-1 px-1.5 block w-full px-3 py-2 border border-gray-300 dark:border-gray-600 rounded-md shadow-sm bg-gray-50 dark:bg-gray-700 text-gray-900 dark:text-white">
                     <p class="text-xs text-gray-500 dark:text-gray-400 mt-1">Slug cannot be changed</p>
                 </div>
                 <div>
                     <label class="block text-sm font-medium text-gray-700 dark:text-gray-300">Description</label>
                     <textarea name="description" rows="3"
-                              class="mt-1 block w-full px-3 py-2 border border-gray-300 dark:border-gray-600 rounded-md shadow-sm focus:outline-none focus:ring-indigo-500 focus:border-indigo-500 dark:bg-gray-700 text-gray-900 dark:text-white">{team.description or ""}</textarea>
+                              class="mt-1 px-1.5 block w-full px-3 py-2 border border-gray-300 dark:border-gray-600 rounded-md shadow-sm focus:outline-none focus:ring-indigo-500 focus:border-indigo-500 dark:bg-gray-700 text-gray-900 dark:text-white">{team.description or ""}</textarea>
                 </div>
                 <div>
                     <label class="block text-sm font-medium text-gray-700 dark:text-gray-300">Visibility</label>
                     <select name="visibility"
-                            class="mt-1 block w-full px-3 py-2 border border-gray-300 dark:border-gray-600 rounded-md shadow-sm focus:outline-none focus:ring-indigo-500 focus:border-indigo-500 dark:bg-gray-700 text-gray-900 dark:text-white">
+                            class="mt-1 px-1.5 block w-full px-3 py-2 border border-gray-300 dark:border-gray-600 rounded-md shadow-sm focus:outline-none focus:ring-indigo-500 focus:border-indigo-500 dark:bg-gray-700 text-gray-900 dark:text-white">
                         <option value="private" {"selected" if team.visibility == "private" else ""}>Private</option>
                         <option value="public" {"selected" if team.visibility == "public" else ""}>Public</option>
                     </select>
@@ -4323,12 +4525,12 @@ async def admin_get_user_edit(
                 <div>
                     <label class="block text-sm font-medium text-gray-700 dark:text-gray-300">Email</label>
                     <input type="email" name="email" value="{user_obj.email}" readonly
-                           class="mt-1 block w-full px-3 py-2 border border-gray-300 dark:border-gray-600 rounded-md shadow-sm bg-gray-50 dark:bg-gray-700 text-gray-900 dark:text-white">
+                           class="mt-1 px-1.5 block w-full px-3 py-2 border border-gray-300 dark:border-gray-600 rounded-md shadow-sm bg-gray-50 dark:bg-gray-700 text-gray-900 dark:text-white">
                 </div>
                 <div>
                     <label class="block text-sm font-medium text-gray-700 dark:text-gray-300">Full Name</label>
                     <input type="text" name="full_name" value="{user_obj.full_name or ""}" required
-                           class="mt-1 block w-full px-3 py-2 border border-gray-300 dark:border-gray-600 rounded-md shadow-sm focus:outline-none focus:ring-indigo-500 focus:border-indigo-500 dark:bg-gray-700 text-gray-900 dark:text-white">
+                           class="mt-1 px-1.5 block w-full px-3 py-2 border border-gray-300 dark:border-gray-600 rounded-md shadow-sm focus:outline-none focus:ring-indigo-500 focus:border-indigo-500 dark:bg-gray-700 text-gray-900 dark:text-white">
                 </div>
                 <div>
                     <label class="block text-sm font-medium text-gray-700 dark:text-gray-300">
@@ -4339,13 +4541,13 @@ async def admin_get_user_edit(
                 <div>
                     <label class="block text-sm font-medium text-gray-700 dark:text-gray-300">New Password (leave empty to keep current)</label>
                     <input type="password" name="password" id="password-field"
-                           class="mt-1 block w-full px-3 py-2 border border-gray-300 dark:border-gray-600 rounded-md shadow-sm focus:outline-none focus:ring-indigo-500 focus:border-indigo-500 dark:bg-gray-700 text-gray-900 dark:text-white"
+                           class="mt-1 px-1.5 block w-full px-3 py-2 border border-gray-300 dark:border-gray-600 rounded-md shadow-sm focus:outline-none focus:ring-indigo-500 focus:border-indigo-500 dark:bg-gray-700 text-gray-900 dark:text-white"
                            oninput="validatePasswordMatch()">
                 </div>
                 <div>
                     <label class="block text-sm font-medium text-gray-700 dark:text-gray-300">Confirm New Password</label>
                     <input type="password" name="confirm_password" id="confirm-password-field"
-                           class="mt-1 block w-full px-3 py-2 border border-gray-300 dark:border-gray-600 rounded-md shadow-sm focus:outline-none focus:ring-indigo-500 focus:border-indigo-500 dark:bg-gray-700 text-gray-900 dark:text-white"
+                           class="mt-1 px-1.5 block w-full px-3 py-2 border border-gray-300 dark:border-gray-600 rounded-md shadow-sm focus:outline-none focus:ring-indigo-500 focus:border-indigo-500 dark:bg-gray-700 text-gray-900 dark:text-white"
                            oninput="validatePasswordMatch()">
                     <div id="password-match-message" class="mt-1 text-sm text-red-600 hidden">Passwords do not match</div>
                 </div>
@@ -4642,132 +4844,974 @@ async def admin_delete_user(
         return HTMLResponse(content=f'<div class="text-red-500">Error deleting user: {str(e)}</div>', status_code=400)
 
 
-@admin_router.get("/tools", response_model=List[ToolRead])
+@admin_router.get("/tools")
 async def admin_list_tools(
+    page: int = Query(1, ge=1, description="Page number (1-indexed)"),
+    per_page: int = Query(50, ge=1, le=500, description="Items per page"),
     include_inactive: bool = False,
     db: Session = Depends(get_db),
     user=Depends(get_current_user_with_permissions),
-) -> List[Dict[str, Any]]:
+) -> Dict[str, Any]:
     """
-    List tools for the admin UI with an option to include inactive tools.
+    List tools for the admin UI with pagination support.
 
-    This endpoint retrieves a list of tools from the database, optionally including
-    those that are inactive. The inactive filter helps administrators manage tools
-    that have been deactivated but not deleted from the system.
+    This endpoint retrieves a paginated list of tools from the database, optionally
+    including those that are inactive. Supports offset-based pagination with
+    configurable page size.
 
     Args:
+        page (int): Page number (1-indexed). Default: 1.
+        per_page (int): Items per page (1-500). Default: 50.
         include_inactive (bool): Whether to include inactive tools in the results.
         db (Session): Database session dependency.
         user (str): Authenticated user dependency.
 
     Returns:
-        List[ToolRead]: A list of tool records formatted with by_alias=True.
+        Dict with 'data', 'pagination', and 'links' keys containing paginated tools.
 
-    Examples:
-        >>> import asyncio
-        >>> from unittest.mock import AsyncMock, MagicMock
-        >>> from mcpgateway.schemas import ToolRead, ToolMetrics
-        >>> from datetime import datetime, timezone
-        >>>
-        >>> mock_db = MagicMock()
-        >>> mock_user = {"email": "test_user", "db": mock_db}
-        >>>
-        >>> # Mock tool data
-    >>> mock_tool = ToolRead(
-    ...     id="tool-1",
-    ...     name="Test Tool",
-    ...     original_name="TestTool",
-    ...     url="http://test.com/tool",
-    ...     description="A test tool",
-    ...     request_type="HTTP",
-    ...     integration_type="MCP",
-    ...     headers={},
-    ...     input_schema={},
-    ...     annotations={},
-    ...     jsonpath_filter=None,
-    ...     auth=None,
-    ...     created_at=datetime.now(timezone.utc),
-    ...     updated_at=datetime.now(timezone.utc),
-    ...     enabled=True,
-    ...     reachable=True,
-    ...     gateway_id=None,
-    ...     execution_count=0,
-    ...     metrics=ToolMetrics(
-    ...         total_executions=5, successful_executions=5, failed_executions=0,
-    ...         failure_rate=0.0, min_response_time=0.1, max_response_time=0.5,
-    ...         avg_response_time=0.3, last_execution_time=datetime.now(timezone.utc)
-    ...     ),
-    ...     gateway_slug="default",
-    ...     custom_name_slug="test-tool",
-    ...     customName="Test Tool",
-    ...     tags=[]
-    ... )  #  Added gateway_id=None
-        >>>
-        >>> # Mock the tool_service.list_tools_for_user method
-        >>> original_list_tools_for_user = tool_service.list_tools_for_user
-        >>> tool_service.list_tools_for_user = AsyncMock(return_value=[mock_tool])
-        >>>
-        >>> # Test listing active tools
-        >>> async def test_admin_list_tools_active():
-        ...     result = await admin_list_tools(include_inactive=False, db=mock_db, user=mock_user)
-        ...     return len(result) > 0 and isinstance(result[0], dict) and result[0]['name'] == "Test Tool"
-        >>>
-        >>> asyncio.run(test_admin_list_tools_active())
-        True
-        >>>
-        >>> # Test listing with inactive tools (if mock includes them)
-        >>> mock_inactive_tool = ToolRead(
-        ...     id="tool-2", name="Inactive Tool", original_name="InactiveTool", url="http://inactive.com",
-        ...     description="Another test", request_type="HTTP", integration_type="MCP",
-        ...     headers={}, input_schema={}, annotations={}, jsonpath_filter=None, auth=None,
-        ...     created_at=datetime.now(timezone.utc), updated_at=datetime.now(timezone.utc),
-        ...     enabled=False, reachable=False, gateway_id=None, execution_count=0,
-        ...     metrics=ToolMetrics(
-        ...         total_executions=0, successful_executions=0, failed_executions=0,
-        ...         failure_rate=0.0, min_response_time=0.0, max_response_time=0.0,
-        ...         avg_response_time=0.0, last_execution_time=None
-        ...     ),
-        ...     gateway_slug="default", custom_name_slug="inactive-tool",
-        ...     customName="Inactive Tool",
-        ...     tags=[]
-        ... )
-        >>> tool_service.list_tools_for_user = AsyncMock(return_value=[mock_tool, mock_inactive_tool])
-        >>> async def test_admin_list_tools_all():
-        ...     result = await admin_list_tools(include_inactive=True, db=mock_db, user=mock_user)
-        ...     return len(result) == 2 and not result[1]['enabled']
-        >>>
-        >>> asyncio.run(test_admin_list_tools_all())
-        True
-        >>>
-        >>> # Test empty list
-        >>> tool_service.list_tools_for_user = AsyncMock(return_value=[])
-        >>> async def test_admin_list_tools_empty():
-        ...     result = await admin_list_tools(include_inactive=False, db=mock_db, user=mock_user)
-        ...     return result == []
-        >>>
-        >>> asyncio.run(test_admin_list_tools_empty())
-        True
-        >>>
-        >>> # Test exception handling
-        >>> tool_service.list_tools_for_user = AsyncMock(side_effect=Exception("Tool list error"))
-        >>> async def test_admin_list_tools_exception():
-        ...     try:
-        ...         await admin_list_tools(False, mock_db, mock_user)
-        ...         return False
-        ...     except Exception as e:
-        ...         return str(e) == "Tool list error"
-        >>>
-        >>> asyncio.run(test_admin_list_tools_exception())
-        True
-        >>>
-        >>> # Restore original method
-        >>> tool_service.list_tools_for_user = original_list_tools_for_user
     """
-    LOGGER.debug(f"User {get_user_email(user)} requested tool list")
+    LOGGER.debug(f"User {get_user_email(user)} requested tool list (page={page}, per_page={per_page})")
     user_email = get_user_email(user)
-    tools = await tool_service.list_tools_for_user(db, user_email, include_inactive=include_inactive)
 
-    return [tool.model_dump(by_alias=True) for tool in tools]
+    # Validate and constrain parameters
+    page = max(1, page)
+    per_page = max(settings.pagination_min_page_size, min(per_page, settings.pagination_max_page_size))
+
+    # Build base query using tool_service's team filtering logic
+    team_service = TeamManagementService(db)
+    user_teams = await team_service.get_user_teams(user_email)
+    team_ids = [team.id for team in user_teams]
+
+    # Build query
+    query = select(DbTool)
+
+    # Apply active/inactive filter
+    if not include_inactive:
+        query = query.where(DbTool.enabled.is_(True))
+
+    # Build access conditions (same logic as tool_service.list_tools_for_user)
+    access_conditions = []
+
+    # 1. User's personal tools (owner_email matches)
+    access_conditions.append(DbTool.owner_email == user_email)
+
+    # 2. Team tools where user is member
+    if team_ids:
+        access_conditions.append(and_(DbTool.team_id.in_(team_ids), DbTool.visibility.in_(["team", "public"])))
+
+    # 3. Public tools
+    access_conditions.append(DbTool.visibility == "public")
+
+    query = query.where(or_(*access_conditions))
+
+    # Add sorting for consistent pagination (using new indexes)
+    query = query.order_by(desc(DbTool.created_at), desc(DbTool.id))
+
+    # Get total count
+    count_query = select(func.count()).select_from(query.alias())  # pylint: disable=not-callable
+    total_items = db.execute(count_query).scalar() or 0
+
+    # Calculate pagination metadata
+    total_pages = math.ceil(total_items / per_page) if total_items > 0 else 0
+    offset = (page - 1) * per_page
+
+    # Execute paginated query
+    paginated_query = query.offset(offset).limit(per_page)
+    tools = db.execute(paginated_query).scalars().all()
+
+    # Convert to ToolRead using tool_service
+    result = []
+    for t in tools:
+        team_name = tool_service._get_team_name(db, getattr(t, "team_id", None))  # pylint: disable=protected-access
+        t.team = team_name
+        result.append(tool_service._convert_tool_to_read(t))  # pylint: disable=protected-access
+
+    # Build pagination metadata
+    pagination = PaginationMeta(
+        page=page,
+        per_page=per_page,
+        total_items=total_items,
+        total_pages=total_pages,
+        has_next=page < total_pages,
+        has_prev=page > 1,
+        next_cursor=None,
+        prev_cursor=None,
+    )
+
+    # Build links
+    links = None
+    if settings.pagination_include_links:
+        links = generate_pagination_links(
+            base_url="/admin/tools",
+            page=page,
+            per_page=per_page,
+            total_pages=total_pages,
+            query_params={"include_inactive": include_inactive} if include_inactive else {},
+        )
+
+    return {
+        "data": [tool.model_dump(by_alias=True) for tool in result],
+        "pagination": pagination.model_dump(),
+        "links": links.model_dump() if links else None,
+    }
+
+
+@admin_router.get("/tools/partial", response_class=HTMLResponse)
+async def admin_tools_partial_html(
+    request: Request,
+    page: int = Query(1, ge=1, description="Page number (1-indexed)"),
+    per_page: int = Query(50, ge=1, le=500, description="Items per page"),
+    include_inactive: bool = False,
+    render: Optional[str] = Query(None, description="Render mode: 'controls' for pagination controls only"),
+    gateway_id: Optional[str] = Query(None, description="Filter by gateway ID(s), comma-separated"),
+    db: Session = Depends(get_db),
+    user=Depends(get_current_user_with_permissions),
+):
+    """
+    Return HTML partial for paginated tools list (HTMX endpoint).
+
+    This endpoint returns only the table body rows and pagination controls
+    for HTMX-based pagination in the admin UI.
+
+    Args:
+        request (Request): FastAPI request object.
+        page (int): Page number (1-indexed). Default: 1.
+        per_page (int): Items per page (1-500). Default: 50.
+        include_inactive (bool): Whether to include inactive tools in the results.
+        gateway_id (Optional[str]): Filter by gateway ID(s), comma-separated.
+        render (str): Render mode - 'controls' returns only pagination controls.
+        db (Session): Database session dependency.
+        user (str): Authenticated user dependency.
+
+    Returns:
+        HTMLResponse with tools table rows and pagination controls.
+    """
+    LOGGER.debug(f"User {get_user_email(user)} requested tools HTML partial (page={page}, per_page={per_page}, render={render}, gateway_id={gateway_id})")
+
+    # Get paginated data from the JSON endpoint logic
+    user_email = get_user_email(user)
+
+    # Validate and constrain parameters
+    page = max(1, page)
+    per_page = max(settings.pagination_min_page_size, min(per_page, settings.pagination_max_page_size))
+
+    # Build base query using tool_service's team filtering logic
+    team_service = TeamManagementService(db)
+    user_teams = await team_service.get_user_teams(user_email)
+    team_ids = [team.id for team in user_teams]
+
+    # Build query
+    query = select(DbTool)
+
+    # Apply gateway filter if provided. Support special sentinel 'null' to
+    # request tools with NULL gateway_id (e.g., RestTool/no gateway).
+    if gateway_id:
+        gateway_ids = [gid.strip() for gid in gateway_id.split(",") if gid.strip()]
+        if gateway_ids:
+            # Treat literal 'null' (case-insensitive) as a request for NULL gateway_id
+            null_requested = any(gid.lower() == "null" for gid in gateway_ids)
+            non_null_ids = [gid for gid in gateway_ids if gid.lower() != "null"]
+            if non_null_ids and null_requested:
+                query = query.where(or_(DbTool.gateway_id.in_(non_null_ids), DbTool.gateway_id.is_(None)))
+                LOGGER.debug(f"Filtering tools by gateway IDs (including NULL): {non_null_ids} + NULL")
+            elif null_requested:
+                query = query.where(DbTool.gateway_id.is_(None))
+                LOGGER.debug("Filtering tools by NULL gateway_id (RestTool)")
+            else:
+                query = query.where(DbTool.gateway_id.in_(non_null_ids))
+                LOGGER.debug(f"Filtering tools by gateway IDs: {non_null_ids}")
+
+    # Apply active/inactive filter
+    if not include_inactive:
+        query = query.where(DbTool.enabled.is_(True))
+
+    # Build access conditions (same logic as tool_service.list_tools_for_user)
+    access_conditions = []
+
+    # 1. User's personal tools (owner_email matches)
+    access_conditions.append(DbTool.owner_email == user_email)
+
+    # 2. Team tools where user is member
+    if team_ids:
+        access_conditions.append(and_(DbTool.team_id.in_(team_ids), DbTool.visibility.in_(["team", "public"])))
+
+    # 3. Public tools
+    access_conditions.append(DbTool.visibility == "public")
+
+    query = query.where(or_(*access_conditions))
+
+    # Count total items - must include gateway filter for accurate count
+    count_query = select(func.count()).select_from(DbTool).where(or_(*access_conditions))  # pylint: disable=not-callable
+    if gateway_id:
+        gateway_ids = [gid.strip() for gid in gateway_id.split(",") if gid.strip()]
+        if gateway_ids:
+            null_requested = any(gid.lower() == "null" for gid in gateway_ids)
+            non_null_ids = [gid for gid in gateway_ids if gid.lower() != "null"]
+            if non_null_ids and null_requested:
+                count_query = count_query.where(or_(DbTool.gateway_id.in_(non_null_ids), DbTool.gateway_id.is_(None)))
+            elif null_requested:
+                count_query = count_query.where(DbTool.gateway_id.is_(None))
+            else:
+                count_query = count_query.where(DbTool.gateway_id.in_(non_null_ids))
+    if not include_inactive:
+        count_query = count_query.where(DbTool.enabled.is_(True))
+
+    total_items = db.scalar(count_query) or 0
+
+    # Apply pagination
+    offset = (page - 1) * per_page
+    # Ensure deterministic pagination even when URL/name fields collide by including primary key
+    query = query.order_by(DbTool.url, DbTool.original_name, DbTool.id).offset(offset).limit(per_page)
+
+    # Execute query
+    tools_db = list(db.scalars(query).all())
+
+    # Convert to Pydantic models
+    local_tool_service = ToolService()
+    tools_pydantic = []
+    for tool_db in tools_db:
+        try:
+            tool_schema = await local_tool_service.get_tool(db, tool_db.id)
+            if tool_schema:
+                tools_pydantic.append(tool_schema)
+        except Exception as e:
+            LOGGER.warning(f"Failed to convert tool {tool_db.id} to schema: {e}")
+            continue
+
+    # Serialize tools
+    data = jsonable_encoder(tools_pydantic)
+
+    # Build pagination metadata
+    pagination = PaginationMeta(
+        page=page,
+        per_page=per_page,
+        total_items=total_items,
+        total_pages=math.ceil(total_items / per_page) if per_page > 0 else 0,
+        has_next=page < math.ceil(total_items / per_page) if per_page > 0 else False,
+        has_prev=page > 1,
+    )
+
+    # Build pagination links using helper function
+    base_url = f"{settings.app_root_path}/admin/tools/partial"
+    links = generate_pagination_links(
+        base_url=base_url,
+        page=page,
+        per_page=per_page,
+        total_pages=pagination.total_pages,
+        query_params={"include_inactive": "true"} if include_inactive else {},
+    )
+
+    # If render=controls, return only pagination controls
+    if render == "controls":
+        return request.app.state.templates.TemplateResponse(
+            "pagination_controls.html",
+            {
+                "request": request,
+                "pagination": pagination.model_dump(),
+                "base_url": base_url,
+                "hx_target": "#tools-table-body",
+                "hx_indicator": "#tools-loading",
+                "query_params": {"include_inactive": "true"} if include_inactive else {},
+                "root_path": request.scope.get("root_path", ""),
+            },
+        )
+
+    # If render=selector, return tool selector items for infinite scroll
+    if render == "selector":
+        return request.app.state.templates.TemplateResponse(
+            "tools_selector_items.html",
+            {
+                "request": request,
+                "data": data,
+                "pagination": pagination.model_dump(),
+                "root_path": request.scope.get("root_path", ""),
+                "gateway_id": gateway_id,
+            },
+        )
+
+    # Render template with paginated data
+    return request.app.state.templates.TemplateResponse(
+        "tools_partial.html",
+        {
+            "request": request,
+            "data": data,
+            "pagination": pagination.model_dump(),
+            "links": links.model_dump() if links else None,
+            "root_path": request.scope.get("root_path", ""),
+            "include_inactive": include_inactive,
+        },
+    )
+
+
+@admin_router.get("/tools/ids", response_class=JSONResponse)
+async def admin_get_all_tool_ids(
+    include_inactive: bool = False,
+    gateway_id: Optional[str] = Query(None, description="Filter by gateway ID(s), comma-separated"),
+    db: Session = Depends(get_db),
+    user=Depends(get_current_user_with_permissions),
+):
+    """
+    Return all tool IDs accessible to the current user.
+
+    This is used by "Select All" to get all tool IDs without loading full data.
+
+    Args:
+        include_inactive (bool): Whether to include inactive tools in the results
+        gateway_id (Optional[str]): Filter by gateway ID(s), comma-separated. Accepts the literal value 'null' to indicate NULL gateway_id (local tools).
+        db (Session): Database session dependency
+        user: Current user making the request
+
+    Returns:
+        JSONResponse: List of tool IDs accessible to the user
+    """
+    user_email = get_user_email(user)
+
+    # Build base query
+    team_service = TeamManagementService(db)
+    user_teams = await team_service.get_user_teams(user_email)
+    team_ids = [team.id for team in user_teams]
+
+    query = select(DbTool.id)
+
+    if not include_inactive:
+        query = query.where(DbTool.enabled.is_(True))
+
+    # Apply optional gateway/server scoping (comma-separated ids). Accepts the
+    # literal value 'null' to indicate NULL gateway_id (local tools).
+    if gateway_id:
+        gateway_ids = [gid.strip() for gid in gateway_id.split(",") if gid.strip()]
+        if gateway_ids:
+            null_requested = any(gid.lower() == "null" for gid in gateway_ids)
+            non_null_ids = [gid for gid in gateway_ids if gid.lower() != "null"]
+            if non_null_ids and null_requested:
+                query = query.where(or_(DbTool.gateway_id.in_(non_null_ids), DbTool.gateway_id.is_(None)))
+                LOGGER.debug(f"Filtering tools by gateway IDs (including NULL): {non_null_ids} + NULL")
+            elif null_requested:
+                query = query.where(DbTool.gateway_id.is_(None))
+                LOGGER.debug("Filtering tools by NULL gateway_id (local tools)")
+            else:
+                query = query.where(DbTool.gateway_id.in_(non_null_ids))
+                LOGGER.debug(f"Filtering tools by gateway IDs: {non_null_ids}")
+
+    # Build access conditions
+    access_conditions = [DbTool.owner_email == user_email, DbTool.visibility == "public"]
+    if team_ids:
+        access_conditions.append(and_(DbTool.team_id.in_(team_ids), DbTool.visibility.in_(["team", "public"])))
+
+    query = query.where(or_(*access_conditions))
+
+    # Get all IDs
+    tool_ids = [row[0] for row in db.execute(query).all()]
+
+    return {"tool_ids": tool_ids, "count": len(tool_ids)}
+
+
+@admin_router.get("/tools/search", response_class=JSONResponse)
+async def admin_search_tools(
+    q: str = Query("", description="Search query"),
+    include_inactive: bool = False,
+    limit: int = Query(100, ge=1, le=1000, description="Maximum number of results to return"),
+    db: Session = Depends(get_db),
+    user=Depends(get_current_user_with_permissions),
+):
+    """
+    Search tools by name, ID, or description.
+
+    This endpoint searches tools across all accessible tools for the current user,
+    returning both IDs and names for use in search functionality like the Add Server page.
+
+    Args:
+        q (str): Search query string to match against tool names, IDs, or descriptions
+        include_inactive (bool): Whether to include inactive tools in the search results
+        limit (int): Maximum number of results to return (1-1000)
+        db (Session): Database session dependency
+        user: Current user making the request
+
+    Returns:
+        JSONResponse: Dictionary containing list of matching tools and count
+    """
+    user_email = get_user_email(user)
+    search_query = q.strip().lower()
+
+    if not search_query:
+        # If no search query, return empty list
+        return {"tools": [], "count": 0}
+
+    # Build base query
+    team_service = TeamManagementService(db)
+    user_teams = await team_service.get_user_teams(user_email)
+    team_ids = [team.id for team in user_teams]
+
+    query = select(DbTool.id, DbTool.original_name, DbTool.custom_name, DbTool.display_name, DbTool.description)
+
+    if not include_inactive:
+        query = query.where(DbTool.enabled.is_(True))
+
+    # Build access conditions
+    access_conditions = [DbTool.owner_email == user_email, DbTool.visibility == "public"]
+    if team_ids:
+        access_conditions.append(and_(DbTool.team_id.in_(team_ids), DbTool.visibility.in_(["team", "public"])))
+
+    query = query.where(or_(*access_conditions))
+
+    # Add search conditions - search in display fields and description
+    # Using the same priority as display: displayName -> customName -> original_name
+    search_conditions = [
+        func.lower(coalesce(DbTool.display_name, "")).contains(search_query),
+        func.lower(coalesce(DbTool.custom_name, "")).contains(search_query),
+        func.lower(DbTool.original_name).contains(search_query),
+        func.lower(coalesce(DbTool.description, "")).contains(search_query),
+    ]
+
+    query = query.where(or_(*search_conditions))
+
+    # Order by relevance - prioritize matches at start of names
+    query = query.order_by(
+        case(
+            (func.lower(DbTool.original_name).startswith(search_query), 1),
+            (func.lower(coalesce(DbTool.custom_name, "")).startswith(search_query), 1),
+            (func.lower(coalesce(DbTool.display_name, "")).startswith(search_query), 1),
+            else_=2,
+        ),
+        func.lower(DbTool.original_name),
+    ).limit(limit)
+
+    # Execute query
+    results = db.execute(query).all()
+
+    # Format results
+    tools = []
+    for row in results:
+        tools.append({"id": row.id, "name": row.original_name, "display_name": row.display_name, "custom_name": row.custom_name})  # original_name for search matching
+
+    return {"tools": tools, "count": len(tools)}
+
+
+@admin_router.get("/prompts/partial", response_class=HTMLResponse)
+async def admin_prompts_partial_html(
+    request: Request,
+    page: int = Query(1, ge=1),
+    per_page: int = Query(50, ge=1),
+    include_inactive: bool = False,
+    render: Optional[str] = Query(None),
+    gateway_id: Optional[str] = Query(None, description="Filter by gateway ID(s), comma-separated"),
+    db: Session = Depends(get_db),
+    user=Depends(get_current_user_with_permissions),
+):
+    """Return paginated prompts HTML partials for the admin UI.
+
+    This HTMX endpoint returns only the partial HTML used by the admin UI for
+    prompts. It supports three render modes:
+
+    - default: full table partial (rows + controls)
+    - ``render="controls"``: return only pagination controls
+    - ``render="selector"``: return selector items for infinite scroll
+
+    Args:
+        request (Request): FastAPI request object used by the template engine.
+        page (int): Page number (1-indexed).
+        per_page (int): Number of items per page (bounded by settings).
+        include_inactive (bool): If True, include inactive prompts in results.
+        render (Optional[str]): Render mode; one of None, "controls", "selector".
+        gateway_id (Optional[str]): Filter by gateway ID(s), comma-separated.
+        db (Session): Database session (dependency-injected).
+        user: Authenticated user object from dependency injection.
+
+    Returns:
+        Union[HTMLResponse, TemplateResponse]: A rendered template response
+        containing either the table partial, pagination controls, or selector
+        items depending on ``render``. The response contains JSON-serializable
+        encoded prompt data when templates expect it.
+    """
+    LOGGER.debug(f"User {get_user_email(user)} requested prompts HTML partial (page={page}, per_page={per_page}, include_inactive={include_inactive}, render={render}, gateway_id={gateway_id})")
+    # Normalize per_page within configured bounds
+    per_page = max(settings.pagination_min_page_size, min(per_page, settings.pagination_max_page_size))
+
+    user_email = get_user_email(user)
+
+    # Team scoping
+    team_service = TeamManagementService(db)
+    user_teams = await team_service.get_user_teams(user_email)
+    team_ids = [t.id for t in user_teams]
+
+    # Build base query
+    query = select(DbPrompt)
+
+    # Apply gateway filter if provided
+    if gateway_id:
+        gateway_ids = [gid.strip() for gid in gateway_id.split(",") if gid.strip()]
+        if gateway_ids:
+            null_requested = any(gid.lower() == "null" for gid in gateway_ids)
+            non_null_ids = [gid for gid in gateway_ids if gid.lower() != "null"]
+            if non_null_ids and null_requested:
+                query = query.where(or_(DbPrompt.gateway_id.in_(non_null_ids), DbPrompt.gateway_id.is_(None)))
+                LOGGER.debug(f"Filtering prompts by gateway IDs (including NULL): {non_null_ids} + NULL")
+            elif null_requested:
+                query = query.where(DbPrompt.gateway_id.is_(None))
+                LOGGER.debug("Filtering prompts by NULL gateway_id (RestTool)")
+            else:
+                query = query.where(DbPrompt.gateway_id.in_(non_null_ids))
+                LOGGER.debug(f"Filtering prompts by gateway IDs: {non_null_ids}")
+
+    if not include_inactive:
+        query = query.where(DbPrompt.is_active.is_(True))
+
+    # Access conditions: owner, team, public
+    access_conditions = [DbPrompt.owner_email == user_email]
+    if team_ids:
+        access_conditions.append(and_(DbPrompt.team_id.in_(team_ids), DbPrompt.visibility.in_(["team", "public"])))
+    access_conditions.append(DbPrompt.visibility == "public")
+
+    query = query.where(or_(*access_conditions))
+
+    # Count total items - must include gateway filter for accurate count
+    count_query = select(func.count()).select_from(DbPrompt).where(or_(*access_conditions))  # pylint: disable=not-callable
+    if gateway_id:
+        gateway_ids = [gid.strip() for gid in gateway_id.split(",") if gid.strip()]
+        if gateway_ids:
+            null_requested = any(gid.lower() == "null" for gid in gateway_ids)
+            non_null_ids = [gid for gid in gateway_ids if gid.lower() != "null"]
+            if non_null_ids and null_requested:
+                count_query = count_query.where(or_(DbPrompt.gateway_id.in_(non_null_ids), DbPrompt.gateway_id.is_(None)))
+            elif null_requested:
+                count_query = count_query.where(DbPrompt.gateway_id.is_(None))
+            else:
+                count_query = count_query.where(DbPrompt.gateway_id.in_(non_null_ids))
+    if not include_inactive:
+        count_query = count_query.where(DbPrompt.is_active.is_(True))
+
+    total_items = db.scalar(count_query) or 0
+
+    # Apply pagination ordering and limits
+    offset = (page - 1) * per_page
+    query = query.order_by(DbPrompt.name, DbPrompt.id).offset(offset).limit(per_page)
+
+    prompts_db = list(db.scalars(query).all())
+
+    # Convert to schemas using PromptService
+    local_prompt_service = PromptService()
+    prompts_data = []
+    for p in prompts_db:
+        try:
+            prompt_dict = await local_prompt_service.get_prompt_details(db, p.id, include_inactive=include_inactive)
+            if prompt_dict:
+                prompts_data.append(prompt_dict)
+        except Exception as e:
+            LOGGER.warning(f"Failed to convert prompt {p.id} to schema: {e}")
+            continue
+
+    data = jsonable_encoder(prompts_data)
+
+    # Build pagination metadata
+    pagination = PaginationMeta(
+        page=page,
+        per_page=per_page,
+        total_items=total_items,
+        total_pages=math.ceil(total_items / per_page) if per_page > 0 else 0,
+        has_next=page < math.ceil(total_items / per_page) if per_page > 0 else False,
+        has_prev=page > 1,
+    )
+
+    base_url = f"{settings.app_root_path}/admin/prompts/partial"
+    links = generate_pagination_links(
+        base_url=base_url,
+        page=page,
+        per_page=per_page,
+        total_pages=pagination.total_pages,
+        query_params={"include_inactive": "true"} if include_inactive else {},
+    )
+
+    if render == "controls":
+        return request.app.state.templates.TemplateResponse(
+            "pagination_controls.html",
+            {
+                "request": request,
+                "pagination": pagination.model_dump(),
+                "base_url": base_url,
+                "hx_target": "#prompts-table-body",
+                "hx_indicator": "#prompts-loading",
+                "query_params": {"include_inactive": "true"} if include_inactive else {},
+                "root_path": request.scope.get("root_path", ""),
+            },
+        )
+
+    if render == "selector":
+        return request.app.state.templates.TemplateResponse(
+            "prompts_selector_items.html",
+            {
+                "request": request,
+                "data": data,
+                "pagination": pagination.model_dump(),
+                "root_path": request.scope.get("root_path", ""),
+                "gateway_id": gateway_id,
+            },
+        )
+
+    return request.app.state.templates.TemplateResponse(
+        "prompts_partial.html",
+        {
+            "request": request,
+            "data": data,
+            "pagination": pagination.model_dump(),
+            "links": links.model_dump() if links else None,
+            "root_path": request.scope.get("root_path", ""),
+            "include_inactive": include_inactive,
+        },
+    )
+
+
+@admin_router.get("/resources/partial", response_class=HTMLResponse)
+async def admin_resources_partial_html(
+    request: Request,
+    page: int = Query(1, ge=1, description="Page number (1-indexed)"),
+    per_page: int = Query(50, ge=1, le=500, description="Items per page"),
+    include_inactive: bool = False,
+    render: Optional[str] = Query(None, description="Render mode: 'controls' for pagination controls only"),
+    gateway_id: Optional[str] = Query(None, description="Filter by gateway ID(s), comma-separated"),
+    db: Session = Depends(get_db),
+    user=Depends(get_current_user_with_permissions),
+):
+    """Return HTML partial for paginated resources list (HTMX endpoint).
+
+    This endpoint mirrors the behavior of the tools and prompts partial
+    endpoints. It returns a template fragment suitable for HTMX-based
+    pagination/infinite-scroll within the admin UI.
+
+    Args:
+        request (Request): FastAPI request object used by the template engine.
+        page (int): Page number (1-indexed).
+        per_page (int): Number of items per page (bounded by settings).
+        include_inactive (bool): If True, include inactive resources in results.
+        render (Optional[str]): Render mode; when set to "controls" returns only
+            pagination controls. Other supported value: "selector" for selector
+            items used by infinite scroll selectors.
+        gateway_id (Optional[str]): Filter by gateway ID(s), comma-separated.
+        db (Session): Database session (dependency-injected).
+        user: Authenticated user object from dependency injection.
+
+    Returns:
+        Union[HTMLResponse, TemplateResponse]: Rendered template response with the
+        resources partial (rows + controls), pagination controls only, or selector
+        items depending on the ``render`` parameter.
+    """
+
+    LOGGER.debug(f"[RESOURCES FILTER DEBUG] User {get_user_email(user)} requested resources HTML partial (page={page}, per_page={per_page}, render={render}, gateway_id={gateway_id})")
+
+    # Normalize per_page
+    per_page = max(settings.pagination_min_page_size, min(per_page, settings.pagination_max_page_size))
+
+    user_email = get_user_email(user)
+
+    # Team scoping
+    team_service = TeamManagementService(db)
+    user_teams = await team_service.get_user_teams(user_email)
+    team_ids = [t.id for t in user_teams]
+
+    # Build base query
+    query = select(DbResource)
+
+    # Apply gateway filter if provided
+    if gateway_id:
+        gateway_ids = [gid.strip() for gid in gateway_id.split(",") if gid.strip()]
+        if gateway_ids:
+            null_requested = any(gid.lower() == "null" for gid in gateway_ids)
+            non_null_ids = [gid for gid in gateway_ids if gid.lower() != "null"]
+            if non_null_ids and null_requested:
+                query = query.where(or_(DbResource.gateway_id.in_(non_null_ids), DbResource.gateway_id.is_(None)))
+                LOGGER.debug(f"[RESOURCES FILTER DEBUG] Filtering resources by gateway IDs (including NULL): {non_null_ids} + NULL")
+            elif null_requested:
+                query = query.where(DbResource.gateway_id.is_(None))
+                LOGGER.debug("[RESOURCES FILTER DEBUG] Filtering resources by NULL gateway_id (RestTool)")
+            else:
+                query = query.where(DbResource.gateway_id.in_(non_null_ids))
+                LOGGER.debug(f"[RESOURCES FILTER DEBUG] Filtering resources by gateway IDs: {non_null_ids}")
+    else:
+        LOGGER.debug("[RESOURCES FILTER DEBUG] No gateway_id filter provided, showing all resources")
+
+    # Apply active/inactive filter
+    if not include_inactive:
+        query = query.where(DbResource.is_active.is_(True))
+
+    # Access conditions: owner, team, public
+    access_conditions = [DbResource.owner_email == user_email]
+    if team_ids:
+        access_conditions.append(and_(DbResource.team_id.in_(team_ids), DbResource.visibility.in_(["team", "public"])))
+    access_conditions.append(DbResource.visibility == "public")
+
+    query = query.where(or_(*access_conditions))
+
+    # Count total items - must include gateway filter for accurate count
+    count_query = select(func.count()).select_from(DbResource).where(or_(*access_conditions))  # pylint: disable=not-callable
+    if gateway_id:
+        gateway_ids = [gid.strip() for gid in gateway_id.split(",") if gid.strip()]
+        if gateway_ids:
+            null_requested = any(gid.lower() == "null" for gid in gateway_ids)
+            non_null_ids = [gid for gid in gateway_ids if gid.lower() != "null"]
+            if non_null_ids and null_requested:
+                count_query = count_query.where(or_(DbResource.gateway_id.in_(non_null_ids), DbResource.gateway_id.is_(None)))
+            elif null_requested:
+                count_query = count_query.where(DbResource.gateway_id.is_(None))
+            else:
+                count_query = count_query.where(DbResource.gateway_id.in_(non_null_ids))
+    if not include_inactive:
+        count_query = count_query.where(DbResource.is_active.is_(True))
+
+    total_items = db.scalar(count_query) or 0
+
+    # Apply pagination ordering and limits
+    offset = (page - 1) * per_page
+    query = query.order_by(DbResource.name, DbResource.id).offset(offset).limit(per_page)
+
+    resources_db = list(db.scalars(query).all())
+
+    # Convert to schemas using ResourceService
+    local_resource_service = ResourceService()
+    resources_data = []
+    for r in resources_db:
+        try:
+            resources_data.append(local_resource_service._convert_resource_to_read(r))  # pylint: disable=protected-access
+        except Exception as e:
+            LOGGER.warning(f"Failed to convert resource {getattr(r, 'id', '<unknown>')} to schema: {e}")
+            continue
+
+    data = jsonable_encoder(resources_data)
+
+    # Build pagination metadata
+    pagination = PaginationMeta(
+        page=page,
+        per_page=per_page,
+        total_items=total_items,
+        total_pages=math.ceil(total_items / per_page) if per_page > 0 else 0,
+        has_next=page < math.ceil(total_items / per_page) if per_page > 0 else False,
+        has_prev=page > 1,
+    )
+
+    base_url = f"{settings.app_root_path}/admin/resources/partial"
+    links = generate_pagination_links(
+        base_url=base_url,
+        page=page,
+        per_page=per_page,
+        total_pages=pagination.total_pages,
+        query_params={"include_inactive": "true"} if include_inactive else {},
+    )
+
+    if render == "controls":
+        return request.app.state.templates.TemplateResponse(
+            "pagination_controls.html",
+            {
+                "request": request,
+                "pagination": pagination.model_dump(),
+                "base_url": base_url,
+                "hx_target": "#resources-table-body",
+                "hx_indicator": "#resources-loading",
+                "query_params": {"include_inactive": "true"} if include_inactive else {},
+                "root_path": request.scope.get("root_path", ""),
+            },
+        )
+
+    if render == "selector":
+        return request.app.state.templates.TemplateResponse(
+            "resources_selector_items.html",
+            {
+                "request": request,
+                "data": data,
+                "pagination": pagination.model_dump(),
+                "root_path": request.scope.get("root_path", ""),
+                "gateway_id": gateway_id,
+            },
+        )
+
+    return request.app.state.templates.TemplateResponse(
+        "resources_partial.html",
+        {
+            "request": request,
+            "data": data,
+            "pagination": pagination.model_dump(),
+            "links": links.model_dump() if links else None,
+            "root_path": request.scope.get("root_path", ""),
+            "include_inactive": include_inactive,
+        },
+    )
+
+
+@admin_router.get("/prompts/ids", response_class=JSONResponse)
+async def admin_get_all_prompt_ids(
+    include_inactive: bool = False,
+    gateway_id: Optional[str] = Query(None, description="Filter by gateway ID(s), comma-separated"),
+    db: Session = Depends(get_db),
+    user=Depends(get_current_user_with_permissions),
+):
+    """Return all prompt IDs accessible to the current user (select-all helper).
+
+    This endpoint is used by UI "Select All" helpers to fetch only the IDs
+    of prompts the requesting user can access (owner, team, or public).
+
+    Args:
+        include_inactive (bool): When True include prompts that are inactive.
+        gateway_id (Optional[str]): Filter by gateway ID(s), comma-separated. Accepts the literal value 'null' to indicate NULL gateway_id (local prompts).
+        db (Session): Database session (injected dependency).
+        user: Authenticated user object from dependency injection.
+
+    Returns:
+        dict: A dictionary containing two keys:
+            - "prompt_ids": List[str] of accessible prompt IDs.
+            - "count": int number of IDs returned.
+    """
+    user_email = get_user_email(user)
+    team_service = TeamManagementService(db)
+    user_teams = await team_service.get_user_teams(user_email)
+    team_ids = [t.id for t in user_teams]
+
+    query = select(DbPrompt.id)
+
+    # Apply optional gateway/server scoping
+    if gateway_id:
+        gateway_ids = [gid.strip() for gid in gateway_id.split(",") if gid.strip()]
+        if gateway_ids:
+            null_requested = any(gid.lower() == "null" for gid in gateway_ids)
+            non_null_ids = [gid for gid in gateway_ids if gid.lower() != "null"]
+            if non_null_ids and null_requested:
+                query = query.where(or_(DbPrompt.gateway_id.in_(non_null_ids), DbPrompt.gateway_id.is_(None)))
+                LOGGER.debug(f"Filtering prompts by gateway IDs (including NULL): {non_null_ids} + NULL")
+            elif null_requested:
+                query = query.where(DbPrompt.gateway_id.is_(None))
+                LOGGER.debug("Filtering prompts by NULL gateway_id (RestTool)")
+            else:
+                query = query.where(DbPrompt.gateway_id.in_(non_null_ids))
+                LOGGER.debug(f"Filtering prompts by gateway IDs: {non_null_ids}")
+
+    if not include_inactive:
+        query = query.where(DbPrompt.is_active.is_(True))
+
+    access_conditions = [DbPrompt.owner_email == user_email, DbPrompt.visibility == "public"]
+    if team_ids:
+        access_conditions.append(and_(DbPrompt.team_id.in_(team_ids), DbPrompt.visibility.in_(["team", "public"])))
+
+    query = query.where(or_(*access_conditions))
+    prompt_ids = [row[0] for row in db.execute(query).all()]
+    return {"prompt_ids": prompt_ids, "count": len(prompt_ids)}
+
+
+@admin_router.get("/resources/ids", response_class=JSONResponse)
+async def admin_get_all_resource_ids(
+    include_inactive: bool = False,
+    gateway_id: Optional[str] = Query(None, description="Filter by gateway ID(s), comma-separated"),
+    db: Session = Depends(get_db),
+    user=Depends(get_current_user_with_permissions),
+):
+    """Return all resource IDs accessible to the current user (select-all helper).
+
+    This endpoint is used by UI "Select All" helpers to fetch only the IDs
+    of resources the requesting user can access (owner, team, or public).
+
+    Args:
+        include_inactive (bool): Whether to include inactive resources in the results.
+        gateway_id (Optional[str]): Filter by gateway ID(s), comma-separated. Accepts the literal value 'null' to indicate NULL gateway_id (local resources).
+        db (Session): Database session dependency.
+        user: Authenticated user object from dependency injection.
+
+    Returns:
+        dict: A dictionary containing two keys:
+            - "resource_ids": List[str] of accessible resource IDs.
+            - "count": int number of IDs returned.
+    """
+    user_email = get_user_email(user)
+    team_service = TeamManagementService(db)
+    user_teams = await team_service.get_user_teams(user_email)
+    team_ids = [t.id for t in user_teams]
+
+    query = select(DbResource.id)
+
+    # Apply optional gateway/server scoping
+    if gateway_id:
+        gateway_ids = [gid.strip() for gid in gateway_id.split(",") if gid.strip()]
+        if gateway_ids:
+            null_requested = any(gid.lower() == "null" for gid in gateway_ids)
+            non_null_ids = [gid for gid in gateway_ids if gid.lower() != "null"]
+            if non_null_ids and null_requested:
+                query = query.where(or_(DbResource.gateway_id.in_(non_null_ids), DbResource.gateway_id.is_(None)))
+                LOGGER.debug(f"Filtering resources by gateway IDs (including NULL): {non_null_ids} + NULL")
+            elif null_requested:
+                query = query.where(DbResource.gateway_id.is_(None))
+                LOGGER.debug("Filtering resources by NULL gateway_id (RestTool)")
+            else:
+                query = query.where(DbResource.gateway_id.in_(non_null_ids))
+                LOGGER.debug(f"Filtering resources by gateway IDs: {non_null_ids}")
+
+    if not include_inactive:
+        query = query.where(DbResource.is_active.is_(True))
+
+    access_conditions = [DbResource.owner_email == user_email, DbResource.visibility == "public"]
+    if team_ids:
+        access_conditions.append(and_(DbResource.team_id.in_(team_ids), DbResource.visibility.in_(["team", "public"])))
+
+    query = query.where(or_(*access_conditions))
+    resource_ids = [row[0] for row in db.execute(query).all()]
+    return {"resource_ids": resource_ids, "count": len(resource_ids)}
+
+
+@admin_router.get("/prompts/search", response_class=JSONResponse)
+async def admin_search_prompts(
+    q: str = Query("", description="Search query"),
+    include_inactive: bool = False,
+    limit: int = Query(100, ge=1, le=1000),
+    db: Session = Depends(get_db),
+    user=Depends(get_current_user_with_permissions),
+):
+    """Search prompts by name or description for selector search.
+
+    Performs a case-insensitive search over prompt names and descriptions
+    and returns a limited list of matching prompts suitable for selector
+    UIs (id, name, description).
+
+    Args:
+        q (str): Search query string.
+        include_inactive (bool): When True include prompts that are inactive.
+        limit (int): Maximum number of results to return (bounded by the query parameter).
+        db (Session): Database session (injected dependency).
+        user: Authenticated user object from dependency injection.
+
+    Returns:
+        dict: A dictionary containing:
+            - "prompts": List[dict] where each dict has keys "id", "name", "description".
+            - "count": int number of matched prompts returned.
+    """
+    user_email = get_user_email(user)
+    search_query = q.strip().lower()
+    if not search_query:
+        return {"prompts": [], "count": 0}
+
+    team_service = TeamManagementService(db)
+    user_teams = await team_service.get_user_teams(user_email)
+    team_ids = [t.id for t in user_teams]
+
+    query = select(DbPrompt.id, DbPrompt.name, DbPrompt.description)
+    if not include_inactive:
+        query = query.where(DbPrompt.is_active.is_(True))
+
+    access_conditions = [DbPrompt.owner_email == user_email, DbPrompt.visibility == "public"]
+    if team_ids:
+        access_conditions.append(and_(DbPrompt.team_id.in_(team_ids), DbPrompt.visibility.in_(["team", "public"])))
+
+    query = query.where(or_(*access_conditions))
+
+    search_conditions = [func.lower(DbPrompt.name).contains(search_query), func.lower(coalesce(DbPrompt.description, "")).contains(search_query)]
+    query = query.where(or_(*search_conditions))
+
+    query = query.order_by(
+        case(
+            (func.lower(DbPrompt.name).startswith(search_query), 1),
+            else_=2,
+        ),
+        func.lower(DbPrompt.name),
+    ).limit(limit)
+
+    results = db.execute(query).all()
+    prompts = []
+    for row in results:
+        prompts.append({"id": row.id, "name": row.name, "description": row.description})
+
+    return {"prompts": prompts, "count": len(prompts)}
 
 
 @admin_router.get("/tools/{tool_id}", response_model=ToolRead)
@@ -4889,6 +5933,7 @@ async def admin_add_tool(
       - integrationType (mapped to integration_type; defaults to "MCP")
       - headers (JSON string)
       - input_schema (JSON string)
+      - output_schema (JSON string, optional)
       - jsonpath_filter (optional)
       - auth_type (optional)
       - auth_username (optional)
@@ -5024,6 +6069,7 @@ async def admin_add_tool(
     # Safely parse potential JSON strings from form
     headers_raw = form.get("headers")
     input_schema_raw = form.get("input_schema")
+    output_schema_raw = form.get("output_schema")
     annotations_raw = form.get("annotations")
     tool_data: dict[str, Any] = {
         "name": form.get("name"),
@@ -5034,6 +6080,7 @@ async def admin_add_tool(
         "integration_type": integration_type,
         "headers": json.loads(headers_raw if isinstance(headers_raw, str) and headers_raw else "{}"),
         "input_schema": json.loads(input_schema_raw if isinstance(input_schema_raw, str) and input_schema_raw else "{}"),
+        "output_schema": (json.loads(output_schema_raw) if isinstance(output_schema_raw, str) and output_schema_raw else None),
         "annotations": json.loads(annotations_raw if isinstance(annotations_raw, str) and annotations_raw else "{}"),
         "jsonpath_filter": form.get("jsonpath_filter", ""),
         "auth_type": form.get("auth_type", ""),
@@ -5046,6 +6093,13 @@ async def admin_add_tool(
         "visibility": visibility,
         "team_id": team_id,
         "owner_email": user_email,
+        "query_mapping": json.loads(form.get("query_mapping") or "{}"),
+        "header_mapping": json.loads(form.get("header_mapping") or "{}"),
+        "timeout_ms": int(form.get("timeout_ms")) if form.get("timeout_ms") and form.get("timeout_ms").strip() else None,
+        "expose_passthrough": form.get("expose_passthrough", "true"),
+        "allowlist": json.loads(form.get("allowlist") or "[]"),
+        "plugin_chain_pre": json.loads(form.get("plugin_chain_pre") or "[]"),
+        "plugin_chain_post": json.loads(form.get("plugin_chain_post") or "[]"),
     }
     LOGGER.debug(f"Tool data built: {tool_data}")
     try:
@@ -5106,6 +6160,7 @@ async def admin_edit_tool(
       - integrationType (to be mapped to integration_type)
       - headers (as a JSON string)
       - input_schema (as a JSON string)
+      - output_schema (as a JSON string, optional)
       - jsonpathFilter (optional)
       - auth_type (optional, string: "basic", "bearer", or empty)
       - auth_username (optional, for basic auth)
@@ -5129,7 +6184,6 @@ async def admin_edit_tool(
             an error message if the update fails.
 
     Examples:
-            Examples:
         >>> import asyncio
         >>> from unittest.mock import AsyncMock, MagicMock
         >>> from fastapi import Request
@@ -5264,7 +6318,6 @@ async def admin_edit_tool(
 
         >>> # Restore original method
         >>> tool_service.update_tool = original_update_tool
-
     """
     LOGGER.debug(f"User {get_user_email(user)} is editing tool ID {tool_id}")
     form = await request.form()
@@ -5276,11 +6329,13 @@ async def admin_edit_tool(
     user_email = get_user_email(user)
     # Determine personal team for default assignment
     team_id = form.get("team_id", None)
+    LOGGER.info(f"before Verifying team for user {user_email} with team_id {team_id}")
     team_service = TeamManagementService(db)
     team_id = await team_service.verify_team_for_user(user_email, team_id)
 
     headers_raw2 = form.get("headers")
     input_schema_raw2 = form.get("input_schema")
+    output_schema_raw2 = form.get("output_schema")
     annotations_raw2 = form.get("annotations")
 
     tool_data: dict[str, Any] = {
@@ -5291,6 +6346,7 @@ async def admin_edit_tool(
         "description": form.get("description"),
         "headers": json.loads(headers_raw2 if isinstance(headers_raw2, str) and headers_raw2 else "{}"),
         "input_schema": json.loads(input_schema_raw2 if isinstance(input_schema_raw2, str) and input_schema_raw2 else "{}"),
+        "output_schema": (json.loads(output_schema_raw2) if isinstance(output_schema_raw2, str) and output_schema_raw2 else None),
         "annotations": json.loads(annotations_raw2 if isinstance(annotations_raw2, str) and annotations_raw2 else "{}"),
         "jsonpath_filter": form.get("jsonpathFilter", ""),
         "auth_type": form.get("auth_type", ""),
@@ -5329,8 +6385,15 @@ async def admin_edit_tool(
             modified_from_ip=mod_metadata["modified_from_ip"],
             modified_via=mod_metadata["modified_via"],
             modified_user_agent=mod_metadata["modified_user_agent"],
+            user_email=user_email,
         )
         return JSONResponse(content={"message": "Edit tool successfully", "success": True}, status_code=200)
+    except PermissionError as e:
+        LOGGER.info(f"Permission denied for user {get_user_email(user)}: {e}")
+        return JSONResponse(
+            content={"message": str(e), "success": False},
+            status_code=403,
+        )
     except IntegrityError as ex:
         error_message = ErrorFormatter.format_database_error(ex)
         LOGGER.error(f"IntegrityError in admin_tool_resource: {error_message}")
@@ -5413,7 +6476,7 @@ async def admin_delete_tool(tool_id: str, request: Request, db: Session = Depend
         >>>
         >>> async def test_admin_delete_tool_exception():
         ...     result = await admin_delete_tool(tool_id, mock_request_error, mock_db, mock_user)
-        ...     return isinstance(result, RedirectResponse) and result.status_code == 303 and "/admin#tools" in result.headers["location"]
+        ...     return isinstance(result, RedirectResponse) and result.status_code == 303 and "#tools" in result.headers["location"] and "error=" in result.headers["location"]
         >>>
         >>> asyncio.run(test_admin_delete_tool_exception())
         True
@@ -5421,15 +6484,28 @@ async def admin_delete_tool(tool_id: str, request: Request, db: Session = Depend
         >>> # Restore original method
         >>> tool_service.delete_tool = original_delete_tool
     """
-    LOGGER.debug(f"User {get_user_email(user)} is deleting tool ID {tool_id}")
+    user_email = get_user_email(user)
+    LOGGER.debug(f"User {user_email} is deleting tool ID {tool_id}")
+    error_message = None
     try:
-        await tool_service.delete_tool(db, tool_id)
+        await tool_service.delete_tool(db, tool_id, user_email=user_email)
+    except PermissionError as e:
+        LOGGER.warning(f"Permission denied for user {user_email} deleting tool {tool_id}: {e}")
+        error_message = str(e)
     except Exception as e:
         LOGGER.error(f"Error deleting tool: {e}")
+        error_message = "Failed to delete tool. Please try again."
 
     form = await request.form()
     is_inactive_checked = str(form.get("is_inactive_checked", "false"))
     root_path = request.scope.get("root_path", "")
+
+    # Build redirect URL with error message if present
+    if error_message:
+        error_param = f"?error={urllib.parse.quote(error_message)}"
+        if is_inactive_checked.lower() == "true":
+            return RedirectResponse(f"{root_path}/admin/{error_param}&include_inactive=true#tools", status_code=303)
+        return RedirectResponse(f"{root_path}/admin/{error_param}#tools", status_code=303)
 
     if is_inactive_checked.lower() == "true":
         return RedirectResponse(f"{root_path}/admin/?include_inactive=true#tools", status_code=303)
@@ -5518,7 +6594,14 @@ async def admin_toggle_tool(
         >>>
         >>> async def test_admin_toggle_tool_exception():
         ...     result = await admin_toggle_tool(tool_id, mock_request_error, mock_db, mock_user)
-        ...     return isinstance(result, RedirectResponse) and result.status_code == 303 and "/admin#tools" in result.headers["location"]
+        ...     location_header = result.headers["location"]
+        ...     return (
+        ...         isinstance(result, RedirectResponse)
+        ...         and result.status_code == 303
+        ...         and "/admin" in location_header  # Ensure '/admin' is in the URL
+        ...         and "error=" in location_header  # Ensure error query param is present
+        ...         and location_header.endswith("#tools")  # Ensure fragment is correct
+        ...     )
         >>>
         >>> asyncio.run(test_admin_toggle_tool_exception())
         True
@@ -5526,16 +6609,30 @@ async def admin_toggle_tool(
         >>> # Restore original method
         >>> tool_service.toggle_tool_status = original_toggle_tool_status
     """
-    LOGGER.debug(f"User {get_user_email(user)} is toggling tool ID {tool_id}")
+    error_message = None
+    user_email = get_user_email(user)
+    LOGGER.debug(f"User {user_email} is toggling tool ID {tool_id}")
     form = await request.form()
     activate = str(form.get("activate", "true")).lower() == "true"
     is_inactive_checked = str(form.get("is_inactive_checked", "false"))
     try:
-        await tool_service.toggle_tool_status(db, tool_id, activate, reachable=activate)
+        await tool_service.toggle_tool_status(db, tool_id, activate, reachable=activate, user_email=user_email)
+    except PermissionError as e:
+        LOGGER.warning(f"Permission denied for user {user_email} toggling tools {tool_id}: {e}")
+        error_message = str(e)
     except Exception as e:
         LOGGER.error(f"Error toggling tool status: {e}")
+        error_message = "Failed to toggle tool status. Please try again."
 
     root_path = request.scope.get("root_path", "")
+
+    # Build redirect URL with error message if present
+    if error_message:
+        error_param = f"?error={urllib.parse.quote(error_message)}"
+        if is_inactive_checked.lower() == "true":
+            return RedirectResponse(f"{root_path}/admin/{error_param}&include_inactive=true#tools", status_code=303)
+        return RedirectResponse(f"{root_path}/admin/{error_param}#tools", status_code=303)
+
     if is_inactive_checked.lower() == "true":
         return RedirectResponse(f"{root_path}/admin/?include_inactive=true#tools", status_code=303)
     return RedirectResponse(f"{root_path}/admin#tools", status_code=303)
@@ -5630,7 +6727,7 @@ async def admin_get_gateway(gateway_id: str, db: Session = Depends(get_db), user
 
 
 @admin_router.post("/gateways")
-async def admin_add_gateway(request: Request, db: Session = Depends(get_db), user=Depends(get_current_user_with_permissions)) -> JSONResponse:
+async def admin_add_gateway(request: Request, db: Session = Depends(get_db), user: dict[str, Any] = Depends(get_current_user_with_permissions)) -> JSONResponse:
     """Add a gateway via the admin UI.
 
     Expects form fields:
@@ -5769,7 +6866,7 @@ async def admin_add_gateway(request: Request, db: Session = Depends(get_db), use
                 oauth_config = json.loads(oauth_config_json)
                 # Encrypt the client secret if present
                 if oauth_config and "client_secret" in oauth_config:
-                    encryption = get_oauth_encryption(settings.auth_encryption_secret)
+                    encryption = get_encryption_service(settings.auth_encryption_secret)
                     oauth_config["client_secret"] = encryption.encrypt_secret(oauth_config["client_secret"])
             except (json.JSONDecodeError, ValueError) as e:
                 LOGGER.error(f"Failed to parse OAuth config: {e}")
@@ -5806,7 +6903,7 @@ async def admin_add_gateway(request: Request, db: Session = Depends(get_db), use
                     oauth_config["client_id"] = oauth_client_id
                 if oauth_client_secret:
                     # Encrypt the client secret
-                    encryption = get_oauth_encryption(settings.auth_encryption_secret)
+                    encryption = get_encryption_service(settings.auth_encryption_secret)
                     oauth_config["client_secret"] = encryption.encrypt_secret(oauth_client_secret)
 
                 # Add username and password for password grant type
@@ -5846,6 +6943,29 @@ async def admin_add_gateway(request: Request, db: Session = Depends(get_db), use
         elif oauth_config and auth_type_from_form:
             LOGGER.info(f"✅ OAuth config present with explicit auth_type='{auth_type_from_form}'")
 
+        ca_certificate: Optional[str] = None
+        sig: Optional[str] = None
+
+        # CA certificate(s) handled by JavaScript validation (supports single or multiple files)
+        # JavaScript validates, orders (root→intermediate→leaf), and concatenates into hidden field
+        if "ca_certificate" in form:
+            ca_cert_value = form["ca_certificate"]
+            if isinstance(ca_cert_value, str) and ca_cert_value.strip():
+                ca_certificate = ca_cert_value.strip()
+                LOGGER.info("✅ CA certificate(s) received and validated by frontend")
+
+                if settings.enable_ed25519_signing:
+                    try:
+                        private_key_pem = settings.ed25519_private_key.get_secret_value()
+                        sig = sign_data(ca_certificate.encode(), private_key_pem)
+                    except Exception as e:
+                        LOGGER.error(f"Error signing CA certificate: {e}")
+                        sig = None
+                        raise RuntimeError("Failed to sign CA certificate") from e
+                else:
+                    LOGGER.warning("⚠️  Ed25519 signing is disabled; CA certificate will be stored without signature")
+                    sig = None
+
         gateway = GatewayCreate(
             name=str(form["name"]),
             url=str(form["url"]),
@@ -5860,8 +6980,12 @@ async def admin_add_gateway(request: Request, db: Session = Depends(get_db), use
             auth_header_value=str(form.get("auth_header_value", "")),
             auth_headers=auth_headers if auth_headers else None,
             oauth_config=oauth_config,
+            one_time_auth=form.get("one_time_auth", False),
             passthrough_headers=passthrough_headers,
             visibility=visibility,
+            ca_certificate=ca_certificate,
+            ca_certificate_sig=sig if sig else None,
+            signing_algorithm="ed25519" if sig else None,
         )
     except KeyError as e:
         # Convert KeyError to ValidationError-like response
@@ -5870,6 +6994,11 @@ async def admin_add_gateway(request: Request, db: Session = Depends(get_db), use
     except ValidationError as ex:
         # --- Getting only the custom message from the ValueError ---
         error_ctx = [str(err["ctx"]["error"]) for err in ex.errors()]
+        return JSONResponse(content={"success": False, "message": "; ".join(error_ctx)}, status_code=422)
+
+    except RuntimeError as re:
+        # --- Getting only the custom message from the ValueError ---
+        error_ctx = [str(re)]
         return JSONResponse(content={"success": False, "message": "; ".join(error_ctx)}, status_code=422)
 
     user_email = get_user_email(user)
@@ -5882,7 +7011,7 @@ async def admin_add_gateway(request: Request, db: Session = Depends(get_db), use
         # Extract creation metadata
         metadata = MetadataCapture.extract_creation_metadata(request, user)
 
-        team_id_cast = cast(Optional[str], team_id)
+        team_id_cast = typing_cast(Optional[str], team_id)
         await gateway_service.register_gateway(
             db,
             gateway,
@@ -5915,7 +7044,7 @@ async def admin_add_gateway(request: Request, db: Session = Depends(get_db), use
 
     except GatewayConnectionError as ex:
         return JSONResponse(content={"message": str(ex), "success": False}, status_code=502)
-    except GatewayUrlConflictError as ex:
+    except GatewayDuplicateConflictError as ex:
         return JSONResponse(content={"message": str(ex), "success": False}, status_code=409)
     except GatewayNameConflictError as ex:
         return JSONResponse(content={"message": str(ex), "success": False}, status_code=409)
@@ -5933,8 +7062,6 @@ async def admin_add_gateway(request: Request, db: Session = Depends(get_db), use
 
 # OAuth callback is now handled by the dedicated OAuth router at /oauth/callback
 # This route has been removed to avoid conflicts with the complete implementation
-
-
 @admin_router.post("/gateways/{gateway_id}/edit")
 async def admin_edit_gateway(
     gateway_id: str,
@@ -6080,7 +7207,7 @@ async def admin_edit_gateway(
                 oauth_config = json.loads(oauth_config_json)
                 # Encrypt the client secret if present and not empty
                 if oauth_config and "client_secret" in oauth_config and oauth_config["client_secret"]:
-                    encryption = get_oauth_encryption(settings.auth_encryption_secret)
+                    encryption = get_encryption_service(settings.auth_encryption_secret)
                     oauth_config["client_secret"] = encryption.encrypt_secret(oauth_config["client_secret"])
             except (json.JSONDecodeError, ValueError) as e:
                 LOGGER.error(f"Failed to parse OAuth config: {e}")
@@ -6117,7 +7244,7 @@ async def admin_edit_gateway(
                     oauth_config["client_id"] = oauth_client_id
                 if oauth_client_secret:
                     # Encrypt the client secret
-                    encryption = get_oauth_encryption(settings.auth_encryption_secret)
+                    encryption = get_encryption_service(settings.auth_encryption_secret)
                     oauth_config["client_secret"] = encryption.encrypt_secret(oauth_client_secret)
 
                 # Add username and password for password grant type
@@ -6162,6 +7289,7 @@ async def admin_edit_gateway(
             auth_header_value=str(form.get("auth_header_value", "")),
             auth_value=str(form.get("auth_value", "")),
             auth_headers=auth_headers if auth_headers else None,
+            one_time_auth=form.get("one_time_auth", False),
             passthrough_headers=passthrough_headers,
             oauth_config=oauth_config,
             visibility=visibility,
@@ -6178,10 +7306,17 @@ async def admin_edit_gateway(
             modified_from_ip=mod_metadata["modified_from_ip"],
             modified_via=mod_metadata["modified_via"],
             modified_user_agent=mod_metadata["modified_user_agent"],
+            user_email=user_email,
         )
         return JSONResponse(
             content={"message": "Gateway updated successfully!", "success": True},
             status_code=200,
+        )
+    except PermissionError as e:
+        LOGGER.info(f"Permission denied for user {get_user_email(user)}: {e}")
+        return JSONResponse(
+            content={"message": str(e), "success": False},
+            status_code=403,
         )
     except Exception as ex:
         if isinstance(ex, GatewayConnectionError):
@@ -6261,7 +7396,7 @@ async def admin_delete_gateway(gateway_id: str, request: Request, db: Session = 
         >>>
         >>> async def test_admin_delete_gateway_exception():
         ...     result = await admin_delete_gateway(gateway_id, mock_request_error, mock_db, mock_user)
-        ...     return isinstance(result, RedirectResponse) and result.status_code == 303 and "/admin#gateways" in result.headers["location"]
+        ...     return isinstance(result, RedirectResponse) and result.status_code == 303 and "#gateways" in result.headers["location"] and "error=" in result.headers["location"]
         >>>
         >>> asyncio.run(test_admin_delete_gateway_exception())
         True
@@ -6269,27 +7404,40 @@ async def admin_delete_gateway(gateway_id: str, request: Request, db: Session = 
         >>> # Restore original method
         >>> gateway_service.delete_gateway = original_delete_gateway
     """
-    LOGGER.debug(f"User {get_user_email(user)} is deleting gateway ID {gateway_id}")
+    user_email = get_user_email(user)
+    LOGGER.debug(f"User {user_email} is deleting gateway ID {gateway_id}")
+    error_message = None
     try:
-        await gateway_service.delete_gateway(db, gateway_id)
+        await gateway_service.delete_gateway(db, gateway_id, user_email=user_email)
+    except PermissionError as e:
+        LOGGER.warning(f"Permission denied for user {user_email} deleting gateway {gateway_id}: {e}")
+        error_message = str(e)
     except Exception as e:
         LOGGER.error(f"Error deleting gateway: {e}")
+        error_message = "Failed to delete gateway. Please try again."
 
     form = await request.form()
     is_inactive_checked = str(form.get("is_inactive_checked", "false"))
     root_path = request.scope.get("root_path", "")
+
+    # Build redirect URL with error message if present
+    if error_message:
+        error_param = f"?error={urllib.parse.quote(error_message)}"
+        if is_inactive_checked.lower() == "true":
+            return RedirectResponse(f"{root_path}/admin/{error_param}&include_inactive=true#gateways", status_code=303)
+        return RedirectResponse(f"{root_path}/admin/{error_param}#gateways", status_code=303)
 
     if is_inactive_checked.lower() == "true":
         return RedirectResponse(f"{root_path}/admin/?include_inactive=true#gateways", status_code=303)
     return RedirectResponse(f"{root_path}/admin#gateways", status_code=303)
 
 
-@admin_router.get("/resources/{uri:path}")
-async def admin_get_resource(uri: str, db: Session = Depends(get_db), user=Depends(get_current_user_with_permissions)) -> Dict[str, Any]:
+@admin_router.get("/resources/{resource_id}")
+async def admin_get_resource(resource_id: int, db: Session = Depends(get_db), user=Depends(get_current_user_with_permissions)) -> Dict[str, Any]:
     """Get resource details for the admin UI.
 
     Args:
-        uri: Resource URI.
+        resource_id: Resource ID.
         db: Database session.
         user: Authenticated user.
 
@@ -6311,10 +7459,11 @@ async def admin_get_resource(uri: str, db: Session = Depends(get_db), user=Depen
         >>> mock_db = MagicMock()
         >>> mock_user = {"email": "test_user", "db": mock_db}
         >>> resource_uri = "test://resource/get"
+        >>> resource_id = 1
         >>>
         >>> # Mock resource data
         >>> mock_resource = ResourceRead(
-        ...     id=1, uri=resource_uri, name="Get Resource", description="Test",
+        ...     id=resource_id, uri=resource_uri, name="Get Resource", description="Test",
         ...     mime_type="text/plain", size=10, created_at=datetime.now(timezone.utc),
         ...     updated_at=datetime.now(timezone.utc), is_active=True, metrics=ResourceMetrics(
         ...         total_executions=0, successful_executions=0, failed_executions=0,
@@ -6323,27 +7472,27 @@ async def admin_get_resource(uri: str, db: Session = Depends(get_db), user=Depen
         ...     ),
         ...     tags=[]
         ... )
-        >>> mock_content = ResourceContent(type="resource", uri=resource_uri, mime_type="text/plain", text="Hello content")
+        >>> mock_content = ResourceContent(id=str(resource_id), type="resource", uri=resource_uri, mime_type="text/plain", text="Hello content")
         >>>
         >>> # Mock service methods
-        >>> original_get_resource_by_uri = resource_service.get_resource_by_uri
+        >>> original_get_resource_by_id = resource_service.get_resource_by_id
         >>> original_read_resource = resource_service.read_resource
-        >>> resource_service.get_resource_by_uri = AsyncMock(return_value=mock_resource)
+        >>> resource_service.get_resource_by_id = AsyncMock(return_value=mock_resource)
         >>> resource_service.read_resource = AsyncMock(return_value=mock_content)
         >>>
         >>> # Test successful retrieval
         >>> async def test_admin_get_resource_success():
-        ...     result = await admin_get_resource(resource_uri, mock_db, mock_user)
-        ...     return isinstance(result, dict) and result['resource']['uri'] == resource_uri and result['content'].text == "Hello content" # Corrected to .text
+        ...     result = await admin_get_resource(resource_id, mock_db, mock_user)
+        ...     return isinstance(result, dict) and result['resource']['id'] == resource_id and result['content'].text == "Hello content" # Corrected to .text
         >>>
         >>> asyncio.run(test_admin_get_resource_success())
         True
         >>>
         >>> # Test resource not found
-        >>> resource_service.get_resource_by_uri = AsyncMock(side_effect=ResourceNotFoundError("Resource not found"))
+        >>> resource_service.get_resource_by_id = AsyncMock(side_effect=ResourceNotFoundError("Resource not found"))
         >>> async def test_admin_get_resource_not_found():
         ...     try:
-        ...         await admin_get_resource("nonexistent://uri", mock_db, mock_user)
+        ...         await admin_get_resource(999, mock_db, mock_user)
         ...         return False
         ...     except HTTPException as e:
         ...         return e.status_code == 404 and "Resource not found" in e.detail
@@ -6352,11 +7501,11 @@ async def admin_get_resource(uri: str, db: Session = Depends(get_db), user=Depen
         True
         >>>
         >>> # Test exception during content read (resource found but content fails)
-        >>> resource_service.get_resource_by_uri = AsyncMock(return_value=mock_resource) # Resource found
+        >>> resource_service.get_resource_by_id = AsyncMock(return_value=mock_resource) # Resource found
         >>> resource_service.read_resource = AsyncMock(side_effect=Exception("Content read error"))
         >>> async def test_admin_get_resource_content_error():
         ...     try:
-        ...         await admin_get_resource(resource_uri, mock_db, mock_user)
+        ...         await admin_get_resource(resource_id, mock_db, mock_user)
         ...         return False
         ...     except Exception as e:
         ...         return str(e) == "Content read error"
@@ -6365,18 +7514,18 @@ async def admin_get_resource(uri: str, db: Session = Depends(get_db), user=Depen
         True
         >>>
         >>> # Restore original methods
-        >>> resource_service.get_resource_by_uri = original_get_resource_by_uri
+        >>> resource_service.get_resource_by_id = original_get_resource_by_id
         >>> resource_service.read_resource = original_read_resource
     """
-    LOGGER.debug(f"User {get_user_email(user)} requested details for resource URI {uri}")
+    LOGGER.debug(f"User {get_user_email(user)} requested details for resource ID {resource_id}")
     try:
-        resource = await resource_service.get_resource_by_uri(db, uri)
-        content = await resource_service.read_resource(db, uri)
+        resource = await resource_service.get_resource_by_id(db, resource_id)
+        content = await resource_service.read_resource(db, resource_id)
         return {"resource": resource.model_dump(by_alias=True), "content": content}
     except ResourceNotFoundError as e:
         raise HTTPException(status_code=404, detail=str(e))
     except Exception as e:
-        LOGGER.error(f"Error getting resource {uri}: {e}")
+        LOGGER.error(f"Error getting resource {resource_id}: {e}")
         raise e
 
 
@@ -6414,6 +7563,7 @@ async def admin_add_resource(request: Request, db: Session = Depends(get_db), us
         ...     ("name", "Test Resource"),
         ...     ("description", "A test resource"),
         ...     ("mimeType", "text/plain"),
+        ...     ("template", ""),
         ...     ("content", "Sample content"),
         ... ])
         >>> mock_request = MagicMock(spec=Request)
@@ -6445,12 +7595,16 @@ async def admin_add_resource(request: Request, db: Session = Depends(get_db), us
     team_id = await team_service.verify_team_for_user(user_email, team_id)
 
     try:
+        # Handle template field: convert empty string to None for optional field
+        template_value = form.get("template")
+        template = template_value if template_value else None
+
         resource = ResourceCreate(
             uri=str(form["uri"]),
             name=str(form["name"]),
             description=str(form.get("description", "")),
             mime_type=str(form.get("mimeType", "")),
-            template=cast(str | None, form.get("template")),
+            template=template,
             content=str(form["content"]),
             tags=tags,
             visibility=visibility,
@@ -6469,6 +7623,9 @@ async def admin_add_resource(request: Request, db: Session = Depends(get_db), us
             created_user_agent=metadata["created_user_agent"],
             import_batch_id=metadata["import_batch_id"],
             federation_source=metadata["federation_source"],
+            team_id=team_id,
+            owner_email=user_email,
+            visibility=visibility,
         )
         return JSONResponse(
             content={"message": "Add resource registered successfully!", "success": True},
@@ -6482,14 +7639,16 @@ async def admin_add_resource(request: Request, db: Session = Depends(get_db), us
             error_message = ErrorFormatter.format_database_error(ex)
             LOGGER.error(f"IntegrityError in admin_add_resource: {error_message}")
             return JSONResponse(status_code=409, content=error_message)
-
+        if isinstance(ex, ResourceURIConflictError):
+            LOGGER.error(f"ResourceURIConflictError in admin_add_resource: {ex}")
+            return JSONResponse(content={"message": str(ex), "success": False}, status_code=409)
         LOGGER.error(f"Error in admin_add_resource: {ex}")
         return JSONResponse(content={"message": str(ex), "success": False}, status_code=500)
 
 
-@admin_router.post("/resources/{uri:path}/edit")
+@admin_router.post("/resources/{resource_id}/edit")
 async def admin_edit_resource(
-    uri: str,
+    resource_id: str,
     request: Request,
     db: Session = Depends(get_db),
     user=Depends(get_current_user_with_permissions),
@@ -6504,7 +7663,7 @@ async def admin_edit_resource(
       - content
 
     Args:
-        uri: Resource URI.
+        resource_id: Resource ID.
         request: FastAPI request containing form data.
         db: Database session.
         user: Authenticated user.
@@ -6578,9 +7737,9 @@ async def admin_edit_resource(
         >>> # Reset mock
         >>> resource_service.update_resource = original_update_resource
     """
-    LOGGER.debug(f"User {get_user_email(user)} is editing resource URI {uri}")
+    LOGGER.debug(f"User {get_user_email(user)} is editing resource ID {resource_id}")
     form = await request.form()
-
+    LOGGER.info(f"Form data received for resource edit: {form}")
     visibility = str(form.get("visibility", "private"))
     # Parse tags from comma-separated string
     tags_str = str(form.get("tags", ""))
@@ -6589,27 +7748,33 @@ async def admin_edit_resource(
     try:
         mod_metadata = MetadataCapture.extract_modification_metadata(request, user, 0)
         resource = ResourceUpdate(
-            name=str(form["name"]),
+            uri=str(form.get("uri", "")),
+            name=str(form.get("name", "")),
             description=str(form.get("description")),
             mime_type=str(form.get("mimeType")),
-            content=str(form["content"]),
+            content=str(form.get("content", "")),
             template=str(form.get("template")),
             tags=tags,
             visibility=visibility,
         )
+        LOGGER.info(f"ResourceUpdate object created: {resource}")
         await resource_service.update_resource(
             db,
-            uri,
+            resource_id,
             resource,
             modified_by=mod_metadata["modified_by"],
             modified_from_ip=mod_metadata["modified_from_ip"],
             modified_via=mod_metadata["modified_via"],
             modified_user_agent=mod_metadata["modified_user_agent"],
+            user_email=get_user_email(user),
         )
         return JSONResponse(
             content={"message": "Resource updated successfully!", "success": True},
             status_code=200,
         )
+    except PermissionError as e:
+        LOGGER.info(f"Permission denied for user {get_user_email(user)}: {e}")
+        return JSONResponse(content={"message": str(e), "success": False}, status_code=403)
     except Exception as ex:
         if isinstance(ex, ValidationError):
             LOGGER.error(f"ValidationError in admin_edit_resource: {ErrorFormatter.format_validation_error(ex)}")
@@ -6618,21 +7783,24 @@ async def admin_edit_resource(
             error_message = ErrorFormatter.format_database_error(ex)
             LOGGER.error(f"IntegrityError in admin_edit_resource: {error_message}")
             return JSONResponse(status_code=409, content=error_message)
+        if isinstance(ex, ResourceURIConflictError):
+            LOGGER.error(f"ResourceURIConflictError in admin_edit_resource: {ex}")
+            return JSONResponse(status_code=409, content={"message": str(ex), "success": False})
         LOGGER.error(f"Error in admin_edit_resource: {ex}")
         return JSONResponse(content={"message": str(ex), "success": False}, status_code=500)
 
 
-@admin_router.post("/resources/{uri:path}/delete")
-async def admin_delete_resource(uri: str, request: Request, db: Session = Depends(get_db), user=Depends(get_current_user_with_permissions)) -> RedirectResponse:
+@admin_router.post("/resources/{resource_id}/delete")
+async def admin_delete_resource(resource_id: str, request: Request, db: Session = Depends(get_db), user=Depends(get_current_user_with_permissions)) -> RedirectResponse:
     """
     Delete a resource via the admin UI.
 
-    This endpoint permanently removes a resource from the database using its URI.
+    This endpoint permanently removes a resource from the database using its resource ID.
     The operation is irreversible and should be used with caution. It requires
     user authentication and logs the deletion attempt.
 
     Args:
-        uri (str): The URI of the resource to delete.
+        resource_id (str): The ID of the resource to delete.
         request (Request): FastAPI request object (not used directly but required by the route signature).
         db (Session): Database session dependency.
         user (str): Authenticated user dependency.
@@ -6677,11 +7845,29 @@ async def admin_delete_resource(uri: str, request: Request, db: Session = Depend
         True
         >>> resource_service.delete_resource = original_delete_resource
     """
-    LOGGER.debug(f"User {get_user_email(user)} is deleting resource URI {uri}")
-    await resource_service.delete_resource(user["db"] if isinstance(user, dict) else db, uri)
+
+    user_email = get_user_email(user)
+    LOGGER.debug(f"User {get_user_email(user)} is deleting resource ID {resource_id}")
+    error_message = None
+    try:
+        await resource_service.delete_resource(user["db"] if isinstance(user, dict) else db, resource_id)
+    except PermissionError as e:
+        LOGGER.warning(f"Permission denied for user {user_email} deleting resource {resource_id}: {e}")
+        error_message = str(e)
+    except Exception as e:
+        LOGGER.error(f"Error deleting resource: {e}")
+        error_message = "Failed to delete resource. Please try again."
     form = await request.form()
     is_inactive_checked: str = str(form.get("is_inactive_checked", "false"))
     root_path = request.scope.get("root_path", "")
+
+    # Build redirect URL with error message if present
+    if error_message:
+        error_param = f"?error={urllib.parse.quote(error_message)}"
+        if is_inactive_checked.lower() == "true":
+            return RedirectResponse(f"{root_path}/admin/{error_param}&include_inactive=true#resources", status_code=303)
+        return RedirectResponse(f"{root_path}/admin/{error_param}#resources", status_code=303)
+
     if is_inactive_checked.lower() == "true":
         return RedirectResponse(f"{root_path}/admin/?include_inactive=true#resources", status_code=303)
     return RedirectResponse(f"{root_path}/admin#resources", status_code=303)
@@ -6783,27 +7969,41 @@ async def admin_toggle_resource(
         True
         >>> resource_service.toggle_resource_status = original_toggle_resource_status
     """
-    LOGGER.debug(f"User {get_user_email(user)} is toggling resource ID {resource_id}")
+    user_email = get_user_email(user)
+    LOGGER.debug(f"User {user_email} is toggling resource ID {resource_id}")
     form = await request.form()
+    error_message = None
     activate = str(form.get("activate", "true")).lower() == "true"
     is_inactive_checked = str(form.get("is_inactive_checked", "false"))
     try:
-        await resource_service.toggle_resource_status(db, resource_id, activate)
+        await resource_service.toggle_resource_status(db, resource_id, activate, user_email=user_email)
+    except PermissionError as e:
+        LOGGER.warning(f"Permission denied for user {user_email} toggling resource status {resource_id}: {e}")
+        error_message = str(e)
     except Exception as e:
         LOGGER.error(f"Error toggling resource status: {e}")
+        error_message = "Failed to toggle resource status. Please try again."
 
     root_path = request.scope.get("root_path", "")
+
+    # Build redirect URL with error message if present
+    if error_message:
+        error_param = f"?error={urllib.parse.quote(error_message)}"
+        if is_inactive_checked.lower() == "true":
+            return RedirectResponse(f"{root_path}/admin/{error_param}&include_inactive=true#resources", status_code=303)
+        return RedirectResponse(f"{root_path}/admin/{error_param}#resources", status_code=303)
+
     if is_inactive_checked.lower() == "true":
         return RedirectResponse(f"{root_path}/admin/?include_inactive=true#resources", status_code=303)
     return RedirectResponse(f"{root_path}/admin#resources", status_code=303)
 
 
-@admin_router.get("/prompts/{name}")
-async def admin_get_prompt(name: str, db: Session = Depends(get_db), user=Depends(get_current_user_with_permissions)) -> Dict[str, Any]:
+@admin_router.get("/prompts/{prompt_id}")
+async def admin_get_prompt(prompt_id: int, db: Session = Depends(get_db), user=Depends(get_current_user_with_permissions)) -> Dict[str, Any]:
     """Get prompt details for the admin UI.
 
     Args:
-        name: Prompt name.
+        prompt_id: Prompt ID.
         db: Database session.
         user: Authenticated user.
 
@@ -6886,16 +8086,16 @@ async def admin_get_prompt(name: str, db: Session = Depends(get_db), user=Depend
         >>>
         >>> prompt_service.get_prompt_details = original_get_prompt_details
     """
-    LOGGER.debug(f"User {get_user_email(user)} requested details for prompt name {name}")
+    LOGGER.info(f"User {get_user_email(user)} requested details for prompt ID {prompt_id}")
     try:
-        prompt_details = await prompt_service.get_prompt_details(db, name)
+        prompt_details = await prompt_service.get_prompt_details(db, prompt_id)
         prompt = PromptRead.model_validate(prompt_details)
         return prompt.model_dump(by_alias=True)
     except PromptNotFoundError as e:
         raise HTTPException(status_code=404, detail=str(e))
     except Exception as e:
-        LOGGER.error(f"Error getting prompt {name}: {e}")
-        raise e
+        LOGGER.error(f"Error getting prompt {prompt_id}: {e}")
+        raise
 
 
 @admin_router.post("/prompts")
@@ -6988,6 +8188,9 @@ async def admin_add_prompt(request: Request, db: Session = Depends(get_db), user
             created_user_agent=metadata["created_user_agent"],
             import_batch_id=metadata["import_batch_id"],
             federation_source=metadata["federation_source"],
+            team_id=team_id,
+            owner_email=user_email,
+            visibility=visibility,
         )
         return JSONResponse(
             content={"message": "Prompt registered successfully!", "success": True},
@@ -7001,13 +8204,16 @@ async def admin_add_prompt(request: Request, db: Session = Depends(get_db), user
             error_message = ErrorFormatter.format_database_error(ex)
             LOGGER.error(f"IntegrityError in admin_add_prompt: {error_message}")
             return JSONResponse(status_code=409, content=error_message)
+        if isinstance(ex, PromptNameConflictError):
+            LOGGER.error(f"PromptNameConflictError in admin_add_prompt: {ex}")
+            return JSONResponse(status_code=409, content={"message": str(ex), "success": False})
         LOGGER.error(f"Error in admin_add_prompt: {ex}")
         return JSONResponse(content={"message": str(ex), "success": False}, status_code=500)
 
 
-@admin_router.post("/prompts/{name}/edit")
+@admin_router.post("/prompts/{prompt_id}/edit")
 async def admin_edit_prompt(
-    name: str,
+    prompt_id: str,
     request: Request,
     db: Session = Depends(get_db),
     user=Depends(get_current_user_with_permissions),
@@ -7015,21 +8221,21 @@ async def admin_edit_prompt(
     """Edit a prompt via the admin UI.
 
     Expects form fields:
-      - name
-      - description (optional)
-      - template
-      - arguments (as a JSON string representing a list)
+        - name
+        - description (optional)
+        - template
+        - arguments (as a JSON string representing a list)
 
     Args:
-        name: Prompt name.
+        prompt_id: Prompt ID.
         request: FastAPI request containing form data.
         db: Database session.
         user: Authenticated user.
 
     Returns:
-         JSONResponse: A JSON response indicating success or failure of the server update operation.
+        JSONResponse: A JSON response indicating success or failure of the server update operation.
 
-        Examples:
+    Examples:
         >>> import asyncio
         >>> from unittest.mock import AsyncMock, MagicMock
         >>> from fastapi import Request
@@ -7076,16 +8282,20 @@ async def admin_edit_prompt(
         >>> asyncio.run(test_admin_edit_prompt_inactive())
         True
         >>> prompt_service.update_prompt = original_update_prompt
+
     """
-    LOGGER.debug(f"User {get_user_email(user)} is editing prompt name {name}")
+    LOGGER.debug(f"User {get_user_email(user)} is editing prompt {prompt_id}")
     form = await request.form()
+    LOGGER.info(f"form data: {form}")
 
     visibility = str(form.get("visibility", "private"))
     user_email = get_user_email(user)
     # Determine personal team for default assignment
     team_id = form.get("team_id", None)
+    LOGGER.info(f"befor Verifying team for user {user_email} with team_id {team_id}")
     team_service = TeamManagementService(db)
     team_id = await team_service.verify_team_for_user(user_email, team_id)
+    LOGGER.info(f"Verifying team for user {user_email} with team_id {team_id}")
 
     args_json: str = str(form.get("arguments")) or "[]"
     arguments = json.loads(args_json)
@@ -7102,21 +8312,25 @@ async def admin_edit_prompt(
             tags=tags,
             visibility=visibility,
             team_id=team_id,
-            user_email=user_email,
+            owner_email=user_email,
         )
         await prompt_service.update_prompt(
             db,
-            name,
+            prompt_id,
             prompt,
             modified_by=mod_metadata["modified_by"],
             modified_from_ip=mod_metadata["modified_from_ip"],
             modified_via=mod_metadata["modified_via"],
             modified_user_agent=mod_metadata["modified_user_agent"],
+            user_email=user_email,
         )
         return JSONResponse(
             content={"message": "Prompt updated successfully!", "success": True},
             status_code=200,
         )
+    except PermissionError as e:
+        LOGGER.info(f"Permission denied for user {get_user_email(user)}: {e}")
+        return JSONResponse(content={"message": str(e), "success": False}, status_code=403)
     except Exception as ex:
         if isinstance(ex, ValidationError):
             LOGGER.error(f"ValidationError in admin_edit_prompt: {ErrorFormatter.format_validation_error(ex)}")
@@ -7125,21 +8339,24 @@ async def admin_edit_prompt(
             error_message = ErrorFormatter.format_database_error(ex)
             LOGGER.error(f"IntegrityError in admin_edit_prompt: {error_message}")
             return JSONResponse(status_code=409, content=error_message)
+        if isinstance(ex, PromptNameConflictError):
+            LOGGER.error(f"PromptNameConflictError in admin_edit_prompt: {ex}")
+            return JSONResponse(status_code=409, content={"message": str(ex), "success": False})
         LOGGER.error(f"Error in admin_edit_prompt: {ex}")
         return JSONResponse(content={"message": str(ex), "success": False}, status_code=500)
 
 
-@admin_router.post("/prompts/{name}/delete")
-async def admin_delete_prompt(name: str, request: Request, db: Session = Depends(get_db), user=Depends(get_current_user_with_permissions)) -> RedirectResponse:
+@admin_router.post("/prompts/{prompt_id}/delete")
+async def admin_delete_prompt(prompt_id: str, request: Request, db: Session = Depends(get_db), user=Depends(get_current_user_with_permissions)) -> RedirectResponse:
     """
     Delete a prompt via the admin UI.
 
-    This endpoint permanently deletes a prompt from the database using its name.
+    This endpoint permanently deletes a prompt from the database using its ID.
     Deletion is irreversible and requires authentication. All actions are logged
     for administrative auditing.
 
     Args:
-        name (str): The name of the prompt to delete.
+        prompt_id (str): The ID of the prompt to delete.
         request (Request): FastAPI request object (not used directly but required by the route signature).
         db (Session): Database session dependency.
         user (str): Authenticated user dependency.
@@ -7184,11 +8401,28 @@ async def admin_delete_prompt(name: str, request: Request, db: Session = Depends
         True
         >>> prompt_service.delete_prompt = original_delete_prompt
     """
-    LOGGER.debug(f"User {get_user_email(user)} is deleting prompt name {name}")
-    await prompt_service.delete_prompt(db, name)
+    user_email = get_user_email(user)
+    LOGGER.info(f"User {get_user_email(user)} is deleting prompt id {prompt_id}")
+    error_message = None
+    try:
+        await prompt_service.delete_prompt(db, prompt_id, user_email=user_email)
+    except PermissionError as e:
+        LOGGER.warning(f"Permission denied for user {user_email} deleting prompt {prompt_id}: {e}")
+        error_message = str(e)
+    except Exception as e:
+        LOGGER.error(f"Error deleting prompt: {e}")
+        error_message = "Failed to delete prompt. Please try again."
     form = await request.form()
     is_inactive_checked: str = str(form.get("is_inactive_checked", "false"))
     root_path = request.scope.get("root_path", "")
+
+    # Build redirect URL with error message if present
+    if error_message:
+        error_param = f"?error={urllib.parse.quote(error_message)}"
+        if is_inactive_checked.lower() == "true":
+            return RedirectResponse(f"{root_path}/admin/{error_param}&include_inactive=true#prompts", status_code=303)
+        return RedirectResponse(f"{root_path}/admin/{error_param}#prompts", status_code=303)
+
     if is_inactive_checked.lower() == "true":
         return RedirectResponse(f"{root_path}/admin/?include_inactive=true#prompts", status_code=303)
     return RedirectResponse(f"{root_path}/admin#prompts", status_code=303)
@@ -7290,16 +8524,30 @@ async def admin_toggle_prompt(
         True
         >>> prompt_service.toggle_prompt_status = original_toggle_prompt_status
     """
-    LOGGER.debug(f"User {get_user_email(user)} is toggling prompt ID {prompt_id}")
+    user_email = get_user_email(user)
+    LOGGER.debug(f"User {user_email} is toggling prompt ID {prompt_id}")
+    error_message = None
     form = await request.form()
     activate: bool = str(form.get("activate", "true")).lower() == "true"
     is_inactive_checked: str = str(form.get("is_inactive_checked", "false"))
     try:
-        await prompt_service.toggle_prompt_status(db, prompt_id, activate)
+        await prompt_service.toggle_prompt_status(db, prompt_id, activate, user_email=user_email)
+    except PermissionError as e:
+        LOGGER.warning(f"Permission denied for user {user_email} toggling prompt {prompt_id}: {e}")
+        error_message = str(e)
     except Exception as e:
         LOGGER.error(f"Error toggling prompt status: {e}")
+        error_message = "Failed to toggle prompt status. Please try again."
 
     root_path = request.scope.get("root_path", "")
+
+    # Build redirect URL with error message if present
+    if error_message:
+        error_param = f"?error={urllib.parse.quote(error_message)}"
+        if is_inactive_checked.lower() == "true":
+            return RedirectResponse(f"{root_path}/admin/{error_param}&include_inactive=true#prompts", status_code=303)
+        return RedirectResponse(f"{root_path}/admin/{error_param}#prompts", status_code=303)
+
     if is_inactive_checked.lower() == "true":
         return RedirectResponse(f"{root_path}/admin/?include_inactive=true#prompts", status_code=303)
     return RedirectResponse(f"{root_path}/admin#prompts", status_code=303)
@@ -7487,8 +8735,8 @@ async def get_aggregated_metrics(
             - 'resources': Metrics for resources.
             - 'prompts': Metrics for prompts.
             - 'servers': Metrics for servers.
-            - 'topPerformers': A nested dictionary with top 5 tools, resources, prompts,
-              and servers.
+            - 'topPerformers': A nested dictionary with all tools, resources, prompts,
+              and servers with their metrics.
     """
     metrics = {
         "tools": await tool_service.aggregate_metrics(db),
@@ -7496,13 +8744,94 @@ async def get_aggregated_metrics(
         "prompts": await prompt_service.aggregate_metrics(db),
         "servers": await server_service.aggregate_metrics(db),
         "topPerformers": {
-            "tools": await tool_service.get_top_tools(db, limit=5),
-            "resources": await resource_service.get_top_resources(db, limit=5),
-            "prompts": await prompt_service.get_top_prompts(db, limit=5),
-            "servers": await server_service.get_top_servers(db, limit=5),
+            "tools": await tool_service.get_top_tools(db, limit=None),
+            "resources": await resource_service.get_top_resources(db, limit=None),
+            "prompts": await prompt_service.get_top_prompts(db, limit=None),
+            "servers": await server_service.get_top_servers(db, limit=None),
         },
     }
     return metrics
+
+
+@admin_router.get("/metrics/partial", response_class=HTMLResponse)
+async def admin_metrics_partial_html(
+    request: Request,
+    entity_type: str = Query("tools", description="Entity type: tools, resources, prompts, or servers"),
+    page: int = Query(1, ge=1, description="Page number (1-indexed)"),
+    per_page: int = Query(10, ge=1, le=1000, description="Items per page"),
+    db: Session = Depends(get_db),
+    user=Depends(get_current_user_with_permissions),
+):
+    """
+    Return HTML partial for paginated top performers (HTMX endpoint).
+
+    Matches the /admin/tools/partial pattern for consistent pagination UX.
+
+    Args:
+        request: FastAPI request object
+        entity_type: Entity type (tools, resources, prompts, servers)
+        page: Page number (1-indexed)
+        per_page: Items per page (1-1000)
+        db: Database session
+        user: Authenticated user
+
+    Returns:
+        HTMLResponse with paginated table and OOB pagination controls
+
+    Raises:
+        HTTPException: If entity_type is not one of the valid types
+    """
+    LOGGER.debug(f"User {get_user_email(user)} requested metrics partial " f"(entity_type={entity_type}, page={page}, per_page={per_page})")
+
+    # Validate entity type
+    valid_types = ["tools", "resources", "prompts", "servers"]
+    if entity_type not in valid_types:
+        raise HTTPException(status_code=400, detail=f"Invalid entity_type. Must be one of: {', '.join(valid_types)}")
+
+    # Constrain parameters
+    page = max(1, page)
+    per_page = max(1, min(per_page, 1000))
+
+    # Get all items for this entity type
+    if entity_type == "tools":
+        all_items = await tool_service.get_top_tools(db, limit=None)
+    elif entity_type == "resources":
+        all_items = await resource_service.get_top_resources(db, limit=None)
+    elif entity_type == "prompts":
+        all_items = await prompt_service.get_top_prompts(db, limit=None)
+    else:  # servers
+        all_items = await server_service.get_top_servers(db, limit=None)
+
+    # Calculate pagination
+    total_items = len(all_items)
+    total_pages = math.ceil(total_items / per_page) if per_page > 0 else 0
+    offset = (page - 1) * per_page
+    paginated_items = all_items[offset : offset + per_page]
+
+    # Convert to JSON-serializable format
+    data = jsonable_encoder(paginated_items)
+
+    # Build pagination metadata
+    pagination = PaginationMeta(
+        page=page,
+        per_page=per_page,
+        total_items=total_items,
+        total_pages=total_pages,
+        has_next=page < total_pages,
+        has_prev=page > 1,
+    )
+
+    # Render template
+    return request.app.state.templates.TemplateResponse(
+        "metrics_top_performers_partial.html",
+        {
+            "request": request,
+            "entity_type": entity_type,
+            "data": data,
+            "pagination": pagination.model_dump(),
+            "root_path": request.scope.get("root_path", ""),
+        },
+    )
 
 
 @admin_router.post("/metrics/reset", response_model=Dict[str, object])
@@ -7754,8 +9083,27 @@ async def admin_test_gateway(request: GatewayTestRequest, team_id: Optional[str]
         else:
             headers: dict = decode_auth(gateway.auth_value if gateway else None)
 
+        # Prepare request based on content type
+        content_type = getattr(request, "content_type", "application/json")
+        request_kwargs = {"method": request.method.upper(), "url": full_url, "headers": headers}
+
+        if request.body is not None:
+            if content_type == "application/x-www-form-urlencoded":
+                # Set proper content type header and use data parameter for form encoding
+                headers["Content-Type"] = "application/x-www-form-urlencoded"
+                if isinstance(request.body, str):
+                    # Body is already form-encoded
+                    request_kwargs["data"] = request.body
+                else:
+                    # Body is a dict, convert to form data
+                    request_kwargs["data"] = request.body
+            else:
+                # Default to JSON
+                headers["Content-Type"] = "application/json"
+                request_kwargs["json"] = request.body
+
         async with ResilientHttpClient(client_args={"timeout": settings.federation_timeout, "verify": not settings.skip_ssl_verify}) as client:
-            response: httpx.Response = await client.request(method=request.method.upper(), url=full_url, headers=headers, json=request.body)
+            response: httpx.Response = await client.request(**request_kwargs)
         latency_ms = int((time.monotonic() - start_time) * 1000)
         try:
             response_body: Union[Dict[str, Any], str] = response.json()
@@ -7992,7 +9340,7 @@ async def admin_import_tools(
             },
         }
 
-        rd = cast(Dict[str, Any], response_data)
+        rd = typing_cast(Dict[str, Any], response_data)
         if len(errors) == 0:
             rd["message"] = f"Successfully imported all {len(created)} tools"
         else:
@@ -8053,7 +9401,7 @@ async def admin_get_logs(
         HTTPException: If validation fails or service unavailable
     """
     # Get log storage from logging service
-    storage = cast(Any, logging_service).get_storage()
+    storage = typing_cast(Any, logging_service).get_storage()
     if not storage:
         return {"logs": [], "total": 0, "stats": {}}
 
@@ -8131,7 +9479,7 @@ async def admin_stream_logs(
         HTTPException: If log level is invalid or service unavailable
     """
     # Get log storage from logging service
-    storage = cast(Any, logging_service).get_storage()
+    storage = typing_cast(Any, logging_service).get_storage()
     if not storage:
         raise HTTPException(503, "Log storage not available")
 
@@ -8350,7 +9698,7 @@ async def admin_export_logs(
         raise HTTPException(400, f"Invalid format: {export_format}. Use 'json' or 'csv'")
 
     # Get log storage from logging service
-    storage = cast(Any, logging_service).get_storage()
+    storage = typing_cast(Any, logging_service).get_storage()
     if not storage:
         raise HTTPException(503, "Log storage not available")
 
@@ -8444,7 +9792,7 @@ async def admin_export_logs(
 
 @admin_router.get("/export/configuration")
 async def admin_export_configuration(
-    request: Request,
+    request: Request,  # pylint: disable=unused-argument
     types: Optional[str] = None,
     exclude_types: Optional[str] = None,
     tags: Optional[str] = None,
@@ -8491,8 +9839,8 @@ async def admin_export_configuration(
         # Extract username from user (which could be string or dict with token)
         username = user if isinstance(user, str) else user.get("username", "unknown")
 
-        # Get root path for URL construction
-        root_path = request.scope.get("root_path", "") if request else ""
+        # Get root path for URL construction - prefer configured APP_ROOT_PATH
+        root_path = settings.app_root_path
 
         # Perform export
         export_data = await export_service.export_configuration(
@@ -8563,8 +9911,11 @@ async def admin_export_selective(request: Request, db: Session = Depends(get_db)
         # Extract username from user (which could be string or dict with token)
         username = user if isinstance(user, str) else user.get("username", "unknown")
 
+        # Get root path for URL construction - prefer configured APP_ROOT_PATH
+        root_path = settings.app_root_path
+
         # Perform selective export
-        export_data = await export_service.export_selective(db=db, entity_selections=entity_selections, include_dependencies=include_dependencies, exported_by=username)
+        export_data = await export_service.export_selective(db=db, entity_selections=entity_selections, include_dependencies=include_dependencies, exported_by=username, root_path=root_path)
 
         # Generate filename
         timestamp = datetime.now().strftime("%Y%m%d-%H%M%S")
@@ -8872,7 +10223,7 @@ async def admin_list_a2a_agents(
 
     Examples:
         >>> import asyncio
-        >>> from unittest.mock import AsyncMock, MagicMock
+        >>> from unittest.mock import AsyncMock, MagicMock, patch
         >>> from mcpgateway.schemas import A2AAgentRead, A2AAgentMetrics
         >>> from datetime import datetime, timezone
         >>>
@@ -8908,28 +10259,28 @@ async def admin_list_a2a_agents(
         ...     )
         ... )
         >>>
-        >>> original_list_agents_for_user = a2a_service.list_agents_for_user
-        >>> a2a_service.list_agents_for_user = AsyncMock(return_value=[mock_agent])
-        >>>
         >>> async def test_admin_list_a2a_agents_active():
-        ...     result = await admin_list_a2a_agents(include_inactive=False, db=mock_db, user=mock_user)
-        ...     return len(result) > 0 and isinstance(result[0], dict) and result[0]['name'] == "Agent1"
+        ...     fake_service = MagicMock()
+        ...     fake_service.list_agents_for_user = AsyncMock(return_value=[mock_agent])
+        ...     with patch("mcpgateway.admin.a2a_service", new=fake_service):
+        ...         result = await admin_list_a2a_agents(include_inactive=False, db=mock_db, user=mock_user)
+        ...         return len(result) > 0 and isinstance(result[0], dict) and result[0]['name'] == "Agent1"
         >>>
         >>> asyncio.run(test_admin_list_a2a_agents_active())
         True
         >>>
-        >>> a2a_service.list_agents_for_user = AsyncMock(side_effect=Exception("A2A error"))
         >>> async def test_admin_list_a2a_agents_exception():
-        ...     try:
-        ...         await admin_list_a2a_agents(False, db=mock_db, user=mock_user)
-        ...         return False
-        ...     except Exception as e:
-        ...         return "A2A error" in str(e)
+        ...     fake_service = MagicMock()
+        ...     fake_service.list_agents_for_user = AsyncMock(side_effect=Exception("A2A error"))
+        ...     with patch("mcpgateway.admin.a2a_service", new=fake_service):
+        ...         try:
+        ...             await admin_list_a2a_agents(False, db=mock_db, user=mock_user)
+        ...             return False
+        ...         except Exception as e:
+        ...             return "A2A error" in str(e)
         >>>
         >>> asyncio.run(test_admin_list_a2a_agents_exception())
         True
-        >>>
-        >>> a2a_service.list_agents_for_user = original_list_agents_for_user
     """
     if a2a_service is None:
         LOGGER.warning("A2A features are disabled, returning empty list")
@@ -8969,10 +10320,13 @@ async def admin_add_a2a_agent(
 
     if not a2a_service or not settings.mcpgateway_a2a_enabled:
         LOGGER.warning("A2A agent creation attempted but A2A features are disabled")
-        return HTMLResponse(content='<div class="text-red-500">A2A features are disabled</div>', status_code=403)
+        return JSONResponse(
+            content={"message": "A2A features are disabled!", "success": False},
+            status_code=403,
+        )
 
+    form = await request.form()
     try:
-        form = await request.form()
         LOGGER.info(f"A2A agent creation form data: {dict(form)}")
 
         user_email = get_user_email(user)
@@ -8986,17 +10340,121 @@ async def admin_add_a2a_agent(
         tags_str = ts_val if isinstance(ts_val, str) else ""
         tags = [tag.strip() for tag in tags_str.split(",") if tag.strip()] if tags_str else []
 
+        # Parse auth_headers JSON if present
+        auth_headers_json = str(form.get("auth_headers"))
+        auth_headers: list[dict[str, Any]] = []
+        if auth_headers_json:
+            try:
+                auth_headers = json.loads(auth_headers_json)
+            except (json.JSONDecodeError, ValueError):
+                auth_headers = []
+
+        # Parse OAuth configuration - support both JSON string and individual form fields
+        oauth_config_json = str(form.get("oauth_config"))
+        oauth_config: Optional[dict[str, Any]] = None
+
+        LOGGER.info(f"DEBUG: oauth_config_json from form = '{oauth_config_json}'")
+        LOGGER.info(f"DEBUG: Individual OAuth fields - grant_type='{form.get('oauth_grant_type')}', issuer='{form.get('oauth_issuer')}'")
+
+        # Option 1: Pre-assembled oauth_config JSON (from API calls)
+        if oauth_config_json and oauth_config_json != "None":
+            try:
+                oauth_config = json.loads(oauth_config_json)
+                # Encrypt the client secret if present
+                if oauth_config and "client_secret" in oauth_config:
+                    encryption = get_encryption_service(settings.auth_encryption_secret)
+                    oauth_config["client_secret"] = encryption.encrypt_secret(oauth_config["client_secret"])
+            except (json.JSONDecodeError, ValueError) as e:
+                LOGGER.error(f"Failed to parse OAuth config: {e}")
+                oauth_config = None
+
+        # Option 2: Assemble from individual UI form fields
+        if not oauth_config:
+            oauth_grant_type = str(form.get("oauth_grant_type", ""))
+            oauth_issuer = str(form.get("oauth_issuer", ""))
+            oauth_token_url = str(form.get("oauth_token_url", ""))
+            oauth_authorization_url = str(form.get("oauth_authorization_url", ""))
+            oauth_redirect_uri = str(form.get("oauth_redirect_uri", ""))
+            oauth_client_id = str(form.get("oauth_client_id", ""))
+            oauth_client_secret = str(form.get("oauth_client_secret", ""))
+            oauth_username = str(form.get("oauth_username", ""))
+            oauth_password = str(form.get("oauth_password", ""))
+            oauth_scopes_str = str(form.get("oauth_scopes", ""))
+
+            # If any OAuth field is provided, assemble oauth_config
+            if any([oauth_grant_type, oauth_issuer, oauth_token_url, oauth_authorization_url, oauth_client_id]):
+                oauth_config = {}
+
+                if oauth_grant_type:
+                    oauth_config["grant_type"] = oauth_grant_type
+                if oauth_issuer:
+                    oauth_config["issuer"] = oauth_issuer
+                if oauth_token_url:
+                    oauth_config["token_url"] = oauth_token_url  # OAuthManager expects 'token_url', not 'token_endpoint'
+                if oauth_authorization_url:
+                    oauth_config["authorization_url"] = oauth_authorization_url  # OAuthManager expects 'authorization_url', not 'authorization_endpoint'
+                if oauth_redirect_uri:
+                    oauth_config["redirect_uri"] = oauth_redirect_uri
+                if oauth_client_id:
+                    oauth_config["client_id"] = oauth_client_id
+                if oauth_client_secret:
+                    # Encrypt the client secret
+                    encryption = get_encryption_service(settings.auth_encryption_secret)
+                    oauth_config["client_secret"] = encryption.encrypt_secret(oauth_client_secret)
+
+                # Add username and password for password grant type
+                if oauth_username:
+                    oauth_config["username"] = oauth_username
+                if oauth_password:
+                    oauth_config["password"] = oauth_password
+
+                # Parse scopes (comma or space separated)
+                if oauth_scopes_str:
+                    scopes = [s.strip() for s in oauth_scopes_str.replace(",", " ").split() if s.strip()]
+                    if scopes:
+                        oauth_config["scopes"] = scopes
+
+                LOGGER.info(f"✅ Assembled OAuth config from UI form fields: grant_type={oauth_grant_type}, issuer={oauth_issuer}")
+                LOGGER.info(f"DEBUG: Complete oauth_config = {oauth_config}")
+
+        passthrough_headers = str(form.get("passthrough_headers"))
+        if passthrough_headers and passthrough_headers.strip():
+            try:
+                passthrough_headers = json.loads(passthrough_headers)
+            except (json.JSONDecodeError, ValueError):
+                # Fallback to comma-separated parsing
+                passthrough_headers = [h.strip() for h in passthrough_headers.split(",") if h.strip()]
+        else:
+            passthrough_headers = None
+
+        # Auto-detect OAuth: if oauth_config is present and auth_type not explicitly set, use "oauth"
+        auth_type_from_form = str(form.get("auth_type", ""))
+        LOGGER.info(f"DEBUG: auth_type from form: '{auth_type_from_form}', oauth_config present: {oauth_config is not None}")
+        if oauth_config and not auth_type_from_form:
+            auth_type_from_form = "oauth"
+            LOGGER.info("✅ Auto-detected OAuth configuration, setting auth_type='oauth'")
+        elif oauth_config and auth_type_from_form:
+            LOGGER.info(f"✅ OAuth config present with explicit auth_type='{auth_type_from_form}'")
+
         agent_data = A2AAgentCreate(
             name=form["name"],
             description=form.get("description"),
             endpoint_url=form["endpoint_url"],
             agent_type=form.get("agent_type", "generic"),
-            auth_type=form.get("auth_type") if form.get("auth_type") else None,
+            auth_type=auth_type_from_form,
+            auth_username=str(form.get("auth_username", "")),
+            auth_password=str(form.get("auth_password", "")),
+            auth_token=str(form.get("auth_token", "")),
+            auth_header_key=str(form.get("auth_header_key", "")),
+            auth_header_value=str(form.get("auth_header_value", "")),
+            auth_headers=auth_headers if auth_headers else None,
+            oauth_config=oauth_config,
             auth_value=form.get("auth_value") if form.get("auth_value") else None,
             tags=tags,
             visibility=form.get("visibility", "private"),
             team_id=team_id,
             owner_email=user_email,
+            passthrough_headers=passthrough_headers,
         )
 
         LOGGER.info(f"Creating A2A agent: {agent_data.name} at {agent_data.endpoint_url}")
@@ -9013,6 +10471,9 @@ async def admin_add_a2a_agent(
             created_user_agent=metadata["created_user_agent"],
             import_batch_id=metadata["import_batch_id"],
             federation_source=metadata["federation_source"],
+            team_id=team_id,
+            owner_email=user_email,
+            visibility=form.get("visibility", "private"),
         )
 
         return JSONResponse(
@@ -9044,6 +10505,290 @@ async def admin_add_a2a_agent(
         return JSONResponse(content={"message": str(ex), "success": False}, status_code=500)
 
 
+@admin_router.post("/a2a/{agent_id}/edit")
+async def admin_edit_a2a_agent(
+    agent_id: str,
+    request: Request,
+    db: Session = Depends(get_db),
+    user=Depends(get_current_user_with_permissions),
+) -> JSONResponse:
+    """
+    Edit an existing A2A agent via the admin UI.
+
+    Expects form fields:
+      - name
+      - description (optional)
+      - endpoint_url
+      - agent_type
+      - tags (optional, comma-separated)
+      - auth_type (optional)
+      - auth_username (optional)
+      - auth_password (optional)
+      - auth_token (optional)
+      - auth_header_key / auth_header_value (optional)
+      - auth_headers (JSON array, optional)
+      - oauth_config (JSON string or individual OAuth fields)
+      - visibility (optional)
+      - team_id (optional)
+      - capabilities (JSON, optional)
+      - config (JSON, optional)
+      - passthrough_headers: Optional[List[str]]
+
+    Args:
+        agent_id (str): The ID of the agent being edited.
+        request (Request): The incoming FastAPI request containing form data.
+        db (Session): Active database session.
+        user: The authenticated admin user performing the edit.
+
+    Returns:
+        JSONResponse: A JSON response indicating success or failure.
+
+    Examples:
+        >>> import asyncio, json
+        >>> from unittest.mock import AsyncMock, MagicMock, patch
+        >>> from fastapi import Request
+        >>> from fastapi.responses import JSONResponse
+        >>> from starlette.datastructures import FormData
+        >>>
+        >>> mock_db = MagicMock()
+        >>> mock_user = {"email": "test_admin_user", "db": mock_db}
+        >>> agent_id = "agent-123"
+        >>>
+        >>> # Happy path: edit A2A agent successfully
+        >>> form_data_success = FormData([
+        ...     ("name", "Updated Agent"),
+        ...     ("endpoint_url", "http://updated-agent.com"),
+        ...     ("agent_type", "generic"),
+        ...     ("auth_type", "basic"),
+        ...     ("auth_username", "user"),
+        ...     ("auth_password", "pass"),
+        ... ])
+        >>> mock_request_success = MagicMock(spec=Request, scope={"root_path": ""})
+        >>> mock_request_success.form = AsyncMock(return_value=form_data_success)
+        >>> original_update_agent = a2a_service.update_agent
+        >>> a2a_service.update_agent = AsyncMock()
+        >>>
+        >>> async def test_admin_edit_a2a_agent_success():
+        ...     response = await admin_edit_a2a_agent(agent_id, mock_request_success, mock_db, mock_user)
+        ...     body = json.loads(response.body)
+        ...     return isinstance(response, JSONResponse) and response.status_code == 200 and body["success"] is True
+        >>>
+        >>> asyncio.run(test_admin_edit_a2a_agent_success())
+        True
+        >>>
+        >>> # Error path: simulate exception during update
+        >>> form_data_error = FormData([
+        ...     ("name", "Error Agent"),
+        ...     ("endpoint_url", "http://error-agent.com"),
+        ...     ("auth_type", "basic"),
+        ...     ("auth_username", "user"),
+        ...     ("auth_password", "pass"),
+        ... ])
+        >>> mock_request_error = MagicMock(spec=Request, scope={"root_path": ""})
+        >>> mock_request_error.form = AsyncMock(return_value=form_data_error)
+        >>> a2a_service.update_agent = AsyncMock(side_effect=Exception("Update failed"))
+        >>>
+        >>> async def test_admin_edit_a2a_agent_exception():
+        ...     response = await admin_edit_a2a_agent(agent_id, mock_request_error, mock_db, mock_user)
+        ...     body = json.loads(response.body)
+        ...     return isinstance(response, JSONResponse) and response.status_code == 500 and body["success"] is False and "Update failed" in body["message"]
+        >>>
+        >>> asyncio.run(test_admin_edit_a2a_agent_exception())
+        True
+        >>>
+        >>> # Validation error path: e.g., invalid URL
+        >>> form_data_validation = FormData([
+        ...     ("name", "Bad URL Agent"),
+        ...     ("endpoint_url", "invalid-url"),
+        ...     ("auth_type", "basic"),
+        ...     ("auth_username", "user"),
+        ...     ("auth_password", "pass"),
+        ... ])
+        >>> mock_request_validation = MagicMock(spec=Request, scope={"root_path": ""})
+        >>> mock_request_validation.form = AsyncMock(return_value=form_data_validation)
+        >>>
+        >>> async def test_admin_edit_a2a_agent_validation():
+        ...     response = await admin_edit_a2a_agent(agent_id, mock_request_validation, mock_db, mock_user)
+        ...     body = json.loads(response.body)
+        ...     return isinstance(response, JSONResponse) and response.status_code in (422, 400) and body["success"] is False
+        >>>
+        >>> asyncio.run(test_admin_edit_a2a_agent_validation())
+        True
+        >>>
+        >>> # Restore original method
+        >>> a2a_service.update_agent = original_update_agent
+
+    """
+
+    try:
+        form = await request.form()
+
+        # Normalize tags
+        tags_raw = str(form.get("tags", ""))
+        tags = [t.strip() for t in tags_raw.split(",") if t.strip()] if tags_raw else []
+
+        # Visibility
+        visibility = str(form.get("visibility", "private"))
+
+        # Agent Type
+        agent_type = str(form.get("agent_type", "generic"))
+
+        # Capabilities
+        raw_capabilities = form.get("capabilities")
+        capabilities = {}
+        if raw_capabilities:
+            try:
+                capabilities = json.loads(raw_capabilities)
+            except (ValueError, json.JSONDecodeError):
+                capabilities = {}
+
+        # Config
+        raw_config = form.get("config")
+        config = {}
+        if raw_config:
+            try:
+                config = json.loads(raw_config)
+            except (ValueError, json.JSONDecodeError):
+                config = {}
+
+        # Parse auth_headers JSON if present
+        auth_headers_json = str(form.get("auth_headers"))
+        auth_headers = []
+        if auth_headers_json:
+            try:
+                auth_headers = json.loads(auth_headers_json)
+            except (json.JSONDecodeError, ValueError):
+                auth_headers = []
+
+        # Passthrough headers
+        passthrough_headers = str(form.get("passthrough_headers"))
+        if passthrough_headers and passthrough_headers.strip():
+            try:
+                passthrough_headers = json.loads(passthrough_headers)
+            except (json.JSONDecodeError, ValueError):
+                # Fallback to comma-separated parsing
+                passthrough_headers = [h.strip() for h in passthrough_headers.split(",") if h.strip()]
+        else:
+            passthrough_headers = None
+
+        # Parse OAuth configuration - support both JSON string and individual form fields
+        oauth_config_json = str(form.get("oauth_config"))
+        oauth_config: Optional[dict[str, Any]] = None
+
+        # Option 1: Pre-assembled oauth_config JSON (from API calls)
+        if oauth_config_json and oauth_config_json != "None":
+            try:
+                oauth_config = json.loads(oauth_config_json)
+                # Encrypt the client secret if present and not empty
+                if oauth_config and "client_secret" in oauth_config and oauth_config["client_secret"]:
+                    encryption = get_encryption_service(settings.auth_encryption_secret)
+                    oauth_config["client_secret"] = encryption.encrypt_secret(oauth_config["client_secret"])
+            except (json.JSONDecodeError, ValueError) as e:
+                LOGGER.error(f"Failed to parse OAuth config: {e}")
+                oauth_config = None
+
+        # Option 2: Assemble from individual UI form fields
+        if not oauth_config:
+            oauth_grant_type = str(form.get("oauth_grant_type", ""))
+            oauth_issuer = str(form.get("oauth_issuer", ""))
+            oauth_token_url = str(form.get("oauth_token_url", ""))
+            oauth_authorization_url = str(form.get("oauth_authorization_url", ""))
+            oauth_redirect_uri = str(form.get("oauth_redirect_uri", ""))
+            oauth_client_id = str(form.get("oauth_client_id", ""))
+            oauth_client_secret = str(form.get("oauth_client_secret", ""))
+            oauth_username = str(form.get("oauth_username", ""))
+            oauth_password = str(form.get("oauth_password", ""))
+            oauth_scopes_str = str(form.get("oauth_scopes", ""))
+
+            # If any OAuth field is provided, assemble oauth_config
+            if any([oauth_grant_type, oauth_issuer, oauth_token_url, oauth_authorization_url, oauth_client_id]):
+                oauth_config = {}
+
+                if oauth_grant_type:
+                    oauth_config["grant_type"] = oauth_grant_type
+                if oauth_issuer:
+                    oauth_config["issuer"] = oauth_issuer
+                if oauth_token_url:
+                    oauth_config["token_url"] = oauth_token_url  # OAuthManager expects 'token_url', not 'token_endpoint'
+                if oauth_authorization_url:
+                    oauth_config["authorization_url"] = oauth_authorization_url  # OAuthManager expects 'authorization_url', not 'authorization_endpoint'
+                if oauth_redirect_uri:
+                    oauth_config["redirect_uri"] = oauth_redirect_uri
+                if oauth_client_id:
+                    oauth_config["client_id"] = oauth_client_id
+                if oauth_client_secret:
+                    # Encrypt the client secret
+                    encryption = get_encryption_service(settings.auth_encryption_secret)
+                    oauth_config["client_secret"] = encryption.encrypt_secret(oauth_client_secret)
+
+                # Add username and password for password grant type
+                if oauth_username:
+                    oauth_config["username"] = oauth_username
+                if oauth_password:
+                    oauth_config["password"] = oauth_password
+
+                # Parse scopes (comma or space separated)
+                if oauth_scopes_str:
+                    scopes = [s.strip() for s in oauth_scopes_str.replace(",", " ").split() if s.strip()]
+                    if scopes:
+                        oauth_config["scopes"] = scopes
+
+                LOGGER.info(f"✅ Assembled OAuth config from UI form fields (edit): grant_type={oauth_grant_type}, issuer={oauth_issuer}")
+
+        user_email = get_user_email(user)
+        team_service = TeamManagementService(db)
+        team_id = await team_service.verify_team_for_user(user_email, form.get("team_id"))
+
+        # Auto-detect OAuth: if oauth_config is present and auth_type not explicitly set, use "oauth"
+        auth_type_from_form = str(form.get("auth_type", ""))
+        if oauth_config and not auth_type_from_form:
+            auth_type_from_form = "oauth"
+            LOGGER.info("Auto-detected OAuth configuration in edit, setting auth_type='oauth'")
+
+        agent_update = A2AAgentUpdate(
+            name=form.get("name"),
+            description=form.get("description"),
+            endpoint_url=form.get("endpoint_url"),
+            agent_type=agent_type,
+            tags=tags,
+            auth_type=auth_type_from_form,
+            auth_username=str(form.get("auth_username", "")),
+            auth_password=str(form.get("auth_password", "")),
+            auth_token=str(form.get("auth_token", "")),
+            auth_header_key=str(form.get("auth_header_key", "")),
+            auth_header_value=str(form.get("auth_header_value", "")),
+            auth_value=str(form.get("auth_value", "")),
+            auth_headers=auth_headers if auth_headers else None,
+            passthrough_headers=passthrough_headers,
+            oauth_config=oauth_config,
+            visibility=visibility,
+            team_id=team_id,
+            owner_email=user_email,
+            capabilities=capabilities,  # Optional, not editable via UI
+            config=config,  # Optional, not editable via UI
+        )
+
+        mod_metadata = MetadataCapture.extract_modification_metadata(request, user, 0)
+        await a2a_service.update_agent(
+            db=db,
+            agent_id=agent_id,
+            agent_data=agent_update,
+            modified_by=mod_metadata["modified_by"],
+            modified_from_ip=mod_metadata["modified_from_ip"],
+            modified_via=mod_metadata["modified_via"],
+            modified_user_agent=mod_metadata["modified_user_agent"],
+        )
+
+        return JSONResponse({"message": "A2A agent updated successfully", "success": True}, status_code=200)
+
+    except ValidationError as ve:
+        return JSONResponse({"message": str(ve), "success": False}, status_code=422)
+    except IntegrityError as ie:
+        return JSONResponse({"message": str(ie), "success": False}, status_code=409)
+    except Exception as e:
+        return JSONResponse({"message": str(e), "success": False}, status_code=500)
+
+
 @admin_router.post("/a2a/{agent_id}/toggle")
 async def admin_toggle_a2a_agent(
     agent_id: str,
@@ -9069,23 +10814,38 @@ async def admin_toggle_a2a_agent(
         root_path = request.scope.get("root_path", "")
         return RedirectResponse(f"{root_path}/admin#a2a-agents", status_code=303)
 
+    error_message = None
     try:
         form = await request.form()
         act_val = form.get("activate", "false")
         activate = act_val.lower() == "true" if isinstance(act_val, str) else False
 
-        await a2a_service.toggle_agent_status(db, agent_id, activate)
+        user_email = get_user_email(user)
+
+        await a2a_service.toggle_agent_status(db, agent_id, activate, user_email=user_email)
         root_path = request.scope.get("root_path", "")
         return RedirectResponse(f"{root_path}/admin#a2a-agents", status_code=303)
 
+    except PermissionError as e:
+        LOGGER.warning(f"Permission denied for user {user_email} toggling A2A agent status{agent_id}: {e}")
+        error_message = str(e)
     except A2AAgentNotFoundError as e:
         LOGGER.error(f"A2A agent toggle failed - not found: {e}")
         root_path = request.scope.get("root_path", "")
-        return RedirectResponse(f"{root_path}/admin#a2a-agents", status_code=303)
+        error_message = "A2A agent not found."
     except Exception as e:
         LOGGER.error(f"Error toggling A2A agent: {e}")
         root_path = request.scope.get("root_path", "")
-        return RedirectResponse(f"{root_path}/admin#a2a-agents", status_code=303)
+        error_message = "Failed to toggle status of A2A agent. Please try again."
+
+    root_path = request.scope.get("root_path", "")
+
+    # Build redirect URL with error message if present
+    if error_message:
+        error_param = f"?error={urllib.parse.quote(error_message)}"
+        return RedirectResponse(f"{root_path}/admin/{error_param}#a2a-agents", status_code=303)
+
+    return RedirectResponse(f"{root_path}/admin#a2a-agents", status_code=303)
 
 
 @admin_router.post("/a2a/{agent_id}/delete")
@@ -9113,19 +10873,28 @@ async def admin_delete_a2a_agent(
         root_path = request.scope.get("root_path", "")
         return RedirectResponse(f"{root_path}/admin#a2a-agents", status_code=303)
 
+    error_message = None
     try:
-        await a2a_service.delete_agent(db, agent_id)
-        root_path = request.scope.get("root_path", "")
-        return RedirectResponse(f"{root_path}/admin#a2a-agents", status_code=303)
-
+        user_email = get_user_email(user)
+        await a2a_service.delete_agent(db, agent_id, user_email=user_email)
+    except PermissionError as e:
+        LOGGER.warning(f"Permission denied for user {get_user_email(user)} deleting A2A agent {agent_id}: {e}")
+        error_message = str(e)
     except A2AAgentNotFoundError as e:
         LOGGER.error(f"A2A agent delete failed - not found: {e}")
-        root_path = request.scope.get("root_path", "")
-        return RedirectResponse(f"{root_path}/admin#a2a-agents", status_code=303)
+        error_message = "A2A agent not found."
     except Exception as e:
         LOGGER.error(f"Error deleting A2A agent: {e}")
-        root_path = request.scope.get("root_path", "")
-        return RedirectResponse(f"{root_path}/admin#a2a-agents", status_code=303)
+        error_message = "Failed to delete A2A agent. Please try again."
+
+    root_path = request.scope.get("root_path", "")
+
+    # Build redirect URL with error message if present
+    if error_message:
+        error_param = f"?error={urllib.parse.quote(error_message)}"
+        return RedirectResponse(f"{root_path}/admin/{error_param}#a2a-agents", status_code=303)
+
+    return RedirectResponse(f"{root_path}/admin#a2a-agents", status_code=303)
 
 
 @admin_router.post("/a2a/{agent_id}/test")
@@ -9175,6 +10944,262 @@ async def admin_test_a2a_agent(
     except Exception as e:
         LOGGER.error(f"Error testing A2A agent {agent_id}: {e}")
         return JSONResponse(content={"success": False, "error": str(e), "agent_id": agent_id}, status_code=500)
+
+
+# gRPC Service Management Endpoints
+
+
+@admin_router.get("/grpc", response_model=List[GrpcServiceRead])
+async def admin_list_grpc_services(
+    include_inactive: bool = False,
+    team_id: Optional[str] = Query(None),
+    db: Session = Depends(get_db),
+    user=Depends(get_current_user_with_permissions),
+):
+    """List all gRPC services.
+
+    Args:
+        include_inactive: Include disabled services
+        team_id: Filter by team ID
+        db: Database session
+        user: Authenticated user
+
+    Returns:
+        List of gRPC services
+
+    Raises:
+        HTTPException: If gRPC support is disabled or not available
+    """
+    if not GRPC_AVAILABLE or not settings.mcpgateway_grpc_enabled:
+        raise HTTPException(status_code=404, detail="gRPC support is not available or disabled")
+
+    user_email = get_user_email(user)
+    return await grpc_service_mgr.list_services(db, include_inactive, user_email, team_id)
+
+
+@admin_router.post("/grpc")
+async def admin_create_grpc_service(
+    service: GrpcServiceCreate,
+    request: Request,
+    db: Session = Depends(get_db),
+    user=Depends(get_current_user_with_permissions),
+):
+    """Create a new gRPC service.
+
+    Args:
+        service: gRPC service creation data
+        request: FastAPI request object
+        db: Database session
+        user: Authenticated user
+
+    Returns:
+        Created gRPC service
+
+    Raises:
+        HTTPException: If gRPC support is disabled or creation fails
+    """
+    if not GRPC_AVAILABLE or not settings.mcpgateway_grpc_enabled:
+        raise HTTPException(status_code=404, detail="gRPC support is not available or disabled")
+
+    try:
+        metadata = MetadataCapture.capture(request)  # pylint: disable=no-member
+        user_email = get_user_email(user)
+        result = await grpc_service_mgr.register_service(db, service, user_email, metadata)
+        return JSONResponse(content=jsonable_encoder(result), status_code=201)
+    except GrpcServiceNameConflictError as e:
+        raise HTTPException(status_code=409, detail=str(e))
+    except GrpcServiceError as e:
+        LOGGER.error(f"gRPC service error: {e}")
+        raise HTTPException(status_code=500, detail=str(e))
+
+
+@admin_router.get("/grpc/{service_id}", response_model=GrpcServiceRead)
+async def admin_get_grpc_service(
+    service_id: str,
+    db: Session = Depends(get_db),
+    user=Depends(get_current_user_with_permissions),
+):
+    """Get a specific gRPC service.
+
+    Args:
+        service_id: Service ID
+        db: Database session
+        user: Authenticated user
+
+    Returns:
+        The gRPC service
+
+    Raises:
+        HTTPException: If gRPC support is disabled or service not found
+    """
+    if not GRPC_AVAILABLE or not settings.mcpgateway_grpc_enabled:
+        raise HTTPException(status_code=404, detail="gRPC support is not available or disabled")
+
+    try:
+        user_email = get_user_email(user)
+        return await grpc_service_mgr.get_service(db, service_id, user_email)
+    except GrpcServiceNotFoundError as e:
+        raise HTTPException(status_code=404, detail=str(e))
+
+
+@admin_router.put("/grpc/{service_id}")
+async def admin_update_grpc_service(
+    service_id: str,
+    service: GrpcServiceUpdate,
+    request: Request,
+    db: Session = Depends(get_db),
+    user=Depends(get_current_user_with_permissions),
+):
+    """Update a gRPC service.
+
+    Args:
+        service_id: Service ID
+        service: Update data
+        request: FastAPI request object
+        db: Database session
+        user: Authenticated user
+
+    Returns:
+        Updated gRPC service
+
+    Raises:
+        HTTPException: If gRPC support is disabled or update fails
+    """
+    if not GRPC_AVAILABLE or not settings.mcpgateway_grpc_enabled:
+        raise HTTPException(status_code=404, detail="gRPC support is not available or disabled")
+
+    try:
+        metadata = MetadataCapture.capture(request)  # pylint: disable=no-member
+        user_email = get_user_email(user)
+        result = await grpc_service_mgr.update_service(db, service_id, service, user_email, metadata)
+        return JSONResponse(content=jsonable_encoder(result))
+    except GrpcServiceNotFoundError as e:
+        raise HTTPException(status_code=404, detail=str(e))
+    except GrpcServiceNameConflictError as e:
+        raise HTTPException(status_code=409, detail=str(e))
+    except GrpcServiceError as e:
+        LOGGER.error(f"gRPC service error: {e}")
+        raise HTTPException(status_code=500, detail=str(e))
+
+
+@admin_router.post("/grpc/{service_id}/toggle")
+async def admin_toggle_grpc_service(
+    service_id: str,
+    db: Session = Depends(get_db),
+    user=Depends(get_current_user_with_permissions),  # pylint: disable=unused-argument
+):
+    """Toggle a gRPC service's enabled status.
+
+    Args:
+        service_id: Service ID
+        db: Database session
+        user: Authenticated user
+
+    Returns:
+        Updated gRPC service
+
+    Raises:
+        HTTPException: If gRPC support is disabled or toggle fails
+    """
+    if not GRPC_AVAILABLE or not settings.mcpgateway_grpc_enabled:
+        raise HTTPException(status_code=404, detail="gRPC support is not available or disabled")
+
+    try:
+        service = await grpc_service_mgr.get_service(db, service_id)
+        result = await grpc_service_mgr.toggle_service(db, service_id, not service.enabled)
+        return JSONResponse(content=jsonable_encoder(result))
+    except GrpcServiceNotFoundError as e:
+        raise HTTPException(status_code=404, detail=str(e))
+
+
+@admin_router.post("/grpc/{service_id}/delete")
+async def admin_delete_grpc_service(
+    service_id: str,
+    db: Session = Depends(get_db),
+    user=Depends(get_current_user_with_permissions),  # pylint: disable=unused-argument
+):
+    """Delete a gRPC service.
+
+    Args:
+        service_id: Service ID
+        db: Database session
+        user: Authenticated user
+
+    Returns:
+        No content response
+
+    Raises:
+        HTTPException: If gRPC support is disabled or deletion fails
+    """
+    if not GRPC_AVAILABLE or not settings.mcpgateway_grpc_enabled:
+        raise HTTPException(status_code=404, detail="gRPC support is not available or disabled")
+
+    try:
+        await grpc_service_mgr.delete_service(db, service_id)
+        return Response(status_code=204)
+    except GrpcServiceNotFoundError as e:
+        raise HTTPException(status_code=404, detail=str(e))
+
+
+@admin_router.post("/grpc/{service_id}/reflect")
+async def admin_reflect_grpc_service(
+    service_id: str,
+    db: Session = Depends(get_db),
+    user=Depends(get_current_user_with_permissions),  # pylint: disable=unused-argument
+):
+    """Trigger re-reflection on a gRPC service.
+
+    Args:
+        service_id: Service ID
+        db: Database session
+        user: Authenticated user
+
+    Returns:
+        Updated gRPC service with reflection results
+
+    Raises:
+        HTTPException: If gRPC support is disabled or reflection fails
+    """
+    if not GRPC_AVAILABLE or not settings.mcpgateway_grpc_enabled:
+        raise HTTPException(status_code=404, detail="gRPC support is not available or disabled")
+
+    try:
+        result = await grpc_service_mgr.reflect_service(db, service_id)
+        return JSONResponse(content=jsonable_encoder(result))
+    except GrpcServiceNotFoundError as e:
+        raise HTTPException(status_code=404, detail=str(e))
+    except GrpcServiceError as e:
+        LOGGER.error(f"gRPC service error: {e}")
+        raise HTTPException(status_code=500, detail=str(e))
+
+
+@admin_router.get("/grpc/{service_id}/methods")
+async def admin_get_grpc_methods(
+    service_id: str,
+    db: Session = Depends(get_db),
+    user=Depends(get_current_user_with_permissions),  # pylint: disable=unused-argument
+):
+    """Get methods for a gRPC service.
+
+    Args:
+        service_id: Service ID
+        db: Database session
+        user: Authenticated user
+
+    Returns:
+        List of gRPC methods
+
+    Raises:
+        HTTPException: If gRPC support is disabled or service not found
+    """
+    if not GRPC_AVAILABLE or not settings.mcpgateway_grpc_enabled:
+        raise HTTPException(status_code=404, detail="gRPC support is not available or disabled")
+
+    try:
+        methods = await grpc_service_mgr.get_service_methods(db, service_id)
+        return JSONResponse(content={"methods": methods})
+    except GrpcServiceNotFoundError as e:
+        raise HTTPException(status_code=404, detail=str(e))
 
 
 # Team-scoped resource section endpoints
@@ -9870,6 +11895,71 @@ async def catalog_partial(
 
 
 # ===================================
+# System Metrics Endpoints
+# ===================================
+
+
+@admin_router.get("/system/stats")
+async def get_system_stats(
+    request: Request,
+    db: Session = Depends(get_db),
+    user=Depends(get_current_user_with_permissions),
+):
+    """Get comprehensive system metrics for administrators.
+
+    Returns detailed counts across all entity types including users, teams,
+    MCP resources (servers, tools, resources, prompts, A2A agents, gateways),
+    API tokens, sessions, metrics, security events, and workflow state.
+
+    Designed for capacity planning, performance optimization, and demonstrating
+    system capabilities to administrators.
+
+    Args:
+        request: FastAPI request object
+        db: Database session dependency
+        user: Authenticated user from dependency (must have admin access)
+
+    Returns:
+        HTMLResponse or JSONResponse: Comprehensive system metrics
+        Returns HTML partial when requested via HTMX, JSON otherwise
+
+    Raises:
+        HTTPException: If metrics collection fails
+
+    Examples:
+        >>> # Request system metrics via API
+        >>> # GET /admin/system/stats
+        >>> # Returns JSON with users, teams, mcp_resources, tokens, sessions, metrics, security, workflow
+    """
+    try:
+        LOGGER.info(f"System metrics requested by user: {user}")
+
+        # First-Party
+        from mcpgateway.services.system_stats_service import SystemStatsService  # pylint: disable=import-outside-toplevel
+
+        # Get metrics
+        service = SystemStatsService()
+        stats = service.get_comprehensive_stats(db)
+
+        LOGGER.info(f"System metrics retrieved successfully for user {user}")
+
+        # Check if this is an HTMX request for HTML partial
+        if request.headers.get("hx-request"):
+            # Return HTML partial for HTMX
+            return request.app.state.templates.TemplateResponse(
+                "metrics_partial.html",
+                {"request": request, "stats": stats, "root_path": request.scope.get("root_path", "")},
+            )
+
+        # Return JSON for API requests
+        return JSONResponse(content=stats)
+
+    except Exception as e:
+        LOGGER.error(f"System metrics retrieval failed for user {user}: {str(e)}", exc_info=True)
+        raise HTTPException(status_code=500, detail=f"Failed to retrieve system metrics: {str(e)}")
+
+
+# ===================================
 # Support Bundle Endpoints
 # ===================================
 
@@ -9954,3 +12044,1678 @@ async def admin_generate_support_bundle(
     except Exception as e:
         LOGGER.error(f"Support bundle generation failed for user {user}: {str(e)}", exc_info=True)
         raise HTTPException(status_code=500, detail=f"Failed to generate support bundle: {str(e)}")
+
+
+# ============================================================================
+# Observability Routes
+# ============================================================================
+
+
+@admin_router.get("/observability/partial", response_class=HTMLResponse)
+async def get_observability_partial(request: Request, _user=Depends(get_current_user_with_permissions)):
+    """Render the observability dashboard partial.
+
+    Args:
+        request: FastAPI request object
+        _user: Authenticated user with admin permissions (required by dependency)
+
+    Returns:
+        HTMLResponse: Rendered observability dashboard template
+    """
+    root_path = request.scope.get("root_path", "")
+    return request.app.state.templates.TemplateResponse("observability_partial.html", {"request": request, "root_path": root_path})
+
+
+@admin_router.get("/observability/metrics/partial", response_class=HTMLResponse)
+async def get_observability_metrics_partial(request: Request, _user=Depends(get_current_user_with_permissions)):
+    """Render the advanced metrics dashboard partial.
+
+    Args:
+        request: FastAPI request object
+        _user: Authenticated user with admin permissions (required by dependency)
+
+    Returns:
+        HTMLResponse: Rendered metrics dashboard template
+    """
+    root_path = request.scope.get("root_path", "")
+    return request.app.state.templates.TemplateResponse("observability_metrics.html", {"request": request, "root_path": root_path})
+
+
+@admin_router.get("/observability/stats", response_class=HTMLResponse)
+async def get_observability_stats(request: Request, hours: int = Query(24, ge=1, le=168), _user=Depends(get_current_user_with_permissions)):
+    """Get observability statistics for the dashboard.
+
+    Args:
+        request: FastAPI request object
+        hours: Number of hours to look back for statistics (1-168)
+        _user: Authenticated user with admin permissions (required by dependency)
+
+    Returns:
+        HTMLResponse: Rendered statistics template with trace counts and averages
+    """
+    db = next(get_db())
+    try:
+        cutoff_time = datetime.now() - timedelta(hours=hours)
+
+        # pylint: disable=not-callable
+        total_traces = db.query(func.count(ObservabilityTrace.trace_id)).filter(ObservabilityTrace.start_time >= cutoff_time).scalar() or 0
+
+        success_count = db.query(func.count(ObservabilityTrace.trace_id)).filter(ObservabilityTrace.start_time >= cutoff_time, ObservabilityTrace.status == "ok").scalar() or 0
+
+        error_count = db.query(func.count(ObservabilityTrace.trace_id)).filter(ObservabilityTrace.start_time >= cutoff_time, ObservabilityTrace.status == "error").scalar() or 0
+        # pylint: enable=not-callable
+
+        avg_duration = db.query(func.avg(ObservabilityTrace.duration_ms)).filter(ObservabilityTrace.start_time >= cutoff_time, ObservabilityTrace.duration_ms.isnot(None)).scalar() or 0
+
+        stats = {
+            "total_traces": total_traces,
+            "success_count": success_count,
+            "error_count": error_count,
+            "avg_duration_ms": avg_duration,
+        }
+
+        return request.app.state.templates.TemplateResponse("observability_stats.html", {"request": request, "stats": stats})
+    finally:
+        db.close()
+
+
+@admin_router.get("/observability/traces", response_class=HTMLResponse)
+async def get_observability_traces(
+    request: Request,
+    time_range: str = Query("24h"),
+    status_filter: str = Query("all"),
+    limit: int = Query(50),
+    min_duration: Optional[float] = Query(None),
+    max_duration: Optional[float] = Query(None),
+    http_method: Optional[str] = Query(None),
+    user_email: Optional[str] = Query(None),
+    name_search: Optional[str] = Query(None),
+    attribute_search: Optional[str] = Query(None),
+    tool_name: Optional[str] = Query(None),
+    _user=Depends(get_current_user_with_permissions),
+):
+    """Get list of traces for the dashboard.
+
+    Args:
+        request: FastAPI request object
+        time_range: Time range filter (1h, 6h, 24h, 7d)
+        status_filter: Status filter (all, ok, error)
+        limit: Maximum number of traces to return
+        min_duration: Minimum duration in ms
+        max_duration: Maximum duration in ms
+        http_method: HTTP method filter
+        user_email: User email filter
+        name_search: Trace name search
+        attribute_search: Full-text attribute search
+        tool_name: Filter by tool name (shows traces that invoked this tool)
+        _user: Authenticated user with admin permissions (required by dependency)
+
+    Returns:
+        HTMLResponse: Rendered traces list template
+    """
+    db = next(get_db())
+    try:
+        # Parse time range
+        time_map = {"1h": 1, "6h": 6, "24h": 24, "7d": 168}
+        hours = time_map.get(time_range, 24)
+        cutoff_time = datetime.now() - timedelta(hours=hours)
+
+        query = db.query(ObservabilityTrace).filter(ObservabilityTrace.start_time >= cutoff_time)
+
+        # Apply status filter
+        if status_filter != "all":
+            query = query.filter(ObservabilityTrace.status == status_filter)
+
+        # Apply duration filters
+        if min_duration is not None:
+            query = query.filter(ObservabilityTrace.duration_ms >= min_duration)
+        if max_duration is not None:
+            query = query.filter(ObservabilityTrace.duration_ms <= max_duration)
+
+        # Apply HTTP method filter
+        if http_method:
+            query = query.filter(ObservabilityTrace.http_method == http_method)
+
+        # Apply user email filter
+        if user_email:
+            query = query.filter(ObservabilityTrace.user_email.ilike(f"%{user_email}%"))
+
+        # Apply name search
+        if name_search:
+            query = query.filter(ObservabilityTrace.name.ilike(f"%{name_search}%"))
+
+        # Apply attribute search
+        if attribute_search:
+            # Escape special characters for SQL LIKE
+            safe_search = attribute_search.replace("%", "\\%").replace("_", "\\_")
+            query = query.filter(cast(ObservabilityTrace.attributes, String).ilike(f"%{safe_search}%"))
+
+        # Apply tool name filter (join with spans to find traces that invoked a specific tool)
+        if tool_name:
+            # Subquery to find trace_ids that have tool invocations matching the tool name
+            tool_trace_ids = (
+                db.query(ObservabilitySpan.trace_id)
+                .filter(
+                    ObservabilitySpan.name == "tool.invoke",
+                    func.json_extract(ObservabilitySpan.attributes, '$."tool.name"').ilike(f"%{tool_name}%"),  # pylint: disable=not-callable
+                )
+                .distinct()
+                .subquery()
+            )
+            query = query.filter(ObservabilityTrace.trace_id.in_(select(tool_trace_ids.c.trace_id)))
+
+        # Get traces ordered by most recent
+        traces = query.order_by(ObservabilityTrace.start_time.desc()).limit(limit).all()
+
+        root_path = request.scope.get("root_path", "")
+        return request.app.state.templates.TemplateResponse("observability_traces_list.html", {"request": request, "traces": traces, "root_path": root_path})
+    finally:
+        db.close()
+
+
+@admin_router.get("/observability/trace/{trace_id}", response_class=HTMLResponse)
+async def get_observability_trace_detail(request: Request, trace_id: str, _user=Depends(get_current_user_with_permissions)):
+    """Get detailed trace information with spans.
+
+    Args:
+        request: FastAPI request object
+        trace_id: UUID of the trace to retrieve
+        _user: Authenticated user with admin permissions (required by dependency)
+
+    Returns:
+        HTMLResponse: Rendered trace detail template with waterfall view
+
+    Raises:
+        HTTPException: 404 if trace not found
+    """
+    db = next(get_db())
+    try:
+        trace = db.query(ObservabilityTrace).filter_by(trace_id=trace_id).options(joinedload(ObservabilityTrace.spans).joinedload(ObservabilitySpan.events)).first()
+
+        if not trace:
+            raise HTTPException(status_code=404, detail="Trace not found")
+
+        root_path = request.scope.get("root_path", "")
+        return request.app.state.templates.TemplateResponse("observability_trace_detail.html", {"request": request, "trace": trace, "root_path": root_path})
+    finally:
+        db.close()
+
+
+@admin_router.post("/observability/queries", response_model=dict)
+async def save_observability_query(
+    request: Request,  # pylint: disable=unused-argument
+    name: str = Body(..., description="Name for the saved query"),
+    description: Optional[str] = Body(None, description="Optional description"),
+    filter_config: dict = Body(..., description="Filter configuration as JSON"),
+    is_shared: bool = Body(False, description="Whether query is shared with team"),
+    user=Depends(get_current_user_with_permissions),
+):
+    """Save a new observability query filter configuration.
+
+    Args:
+        request: FastAPI request object
+        name: User-given name for the query
+        description: Optional description
+        filter_config: Dictionary containing all filter values
+        is_shared: Whether this query is visible to other users
+        user: Authenticated user (required by dependency)
+
+    Returns:
+        dict: Created query details with id
+
+    Raises:
+        HTTPException: 400 if validation fails
+    """
+    db = next(get_db())
+    try:
+        # Get user email from authenticated user
+        user_email = user.email if hasattr(user, "email") else "unknown"
+
+        # Create new saved query
+        query = ObservabilitySavedQuery(name=name, description=description, user_email=user_email, filter_config=filter_config, is_shared=is_shared)
+
+        db.add(query)
+        db.commit()
+        db.refresh(query)
+
+        return {"id": query.id, "name": query.name, "description": query.description, "filter_config": query.filter_config, "is_shared": query.is_shared, "created_at": query.created_at.isoformat()}
+    except Exception as e:
+        db.rollback()
+        LOGGER.error(f"Failed to save query: {e}")
+        raise HTTPException(status_code=400, detail=str(e))
+    finally:
+        db.close()
+
+
+@admin_router.get("/observability/queries", response_model=list)
+async def list_observability_queries(request: Request, user=Depends(get_current_user_with_permissions)):  # pylint: disable=unused-argument
+    """List saved observability queries for the current user.
+
+    Returns user's own queries plus any shared queries.
+
+    Args:
+        request: FastAPI request object
+        user: Authenticated user (required by dependency)
+
+    Returns:
+        list: List of saved query dictionaries
+    """
+    db = next(get_db())
+    try:
+        user_email = user.email if hasattr(user, "email") else "unknown"
+
+        # Get user's own queries + shared queries
+        queries = (
+            db.query(ObservabilitySavedQuery)
+            .filter(or_(ObservabilitySavedQuery.user_email == user_email, ObservabilitySavedQuery.is_shared is True))
+            .order_by(desc(ObservabilitySavedQuery.created_at))
+            .all()
+        )
+
+        return [
+            {
+                "id": q.id,
+                "name": q.name,
+                "description": q.description,
+                "filter_config": q.filter_config,
+                "is_shared": q.is_shared,
+                "user_email": q.user_email,
+                "created_at": q.created_at.isoformat(),
+                "last_used_at": q.last_used_at.isoformat() if q.last_used_at else None,
+                "use_count": q.use_count,
+            }
+            for q in queries
+        ]
+    finally:
+        db.close()
+
+
+@admin_router.get("/observability/queries/{query_id}", response_model=dict)
+async def get_observability_query(request: Request, query_id: int, user=Depends(get_current_user_with_permissions)):  # pylint: disable=unused-argument
+    """Get a specific saved query by ID.
+
+    Args:
+        request: FastAPI request object
+        query_id: ID of the saved query
+        user: Authenticated user (required by dependency)
+
+    Returns:
+        dict: Query details
+
+    Raises:
+        HTTPException: 404 if query not found or unauthorized
+    """
+    db = next(get_db())
+    try:
+        user_email = user.email if hasattr(user, "email") else "unknown"
+
+        # Can only access own queries or shared queries
+        query = (
+            db.query(ObservabilitySavedQuery).filter(ObservabilitySavedQuery.id == query_id, or_(ObservabilitySavedQuery.user_email == user_email, ObservabilitySavedQuery.is_shared is True)).first()
+        )
+
+        if not query:
+            raise HTTPException(status_code=404, detail="Query not found or unauthorized")
+
+        return {
+            "id": query.id,
+            "name": query.name,
+            "description": query.description,
+            "filter_config": query.filter_config,
+            "is_shared": query.is_shared,
+            "user_email": query.user_email,
+            "created_at": query.created_at.isoformat(),
+            "last_used_at": query.last_used_at.isoformat() if query.last_used_at else None,
+            "use_count": query.use_count,
+        }
+    finally:
+        db.close()
+
+
+@admin_router.put("/observability/queries/{query_id}", response_model=dict)
+async def update_observability_query(
+    request: Request,  # pylint: disable=unused-argument
+    query_id: int,
+    name: Optional[str] = Body(None),
+    description: Optional[str] = Body(None),
+    filter_config: Optional[dict] = Body(None),
+    is_shared: Optional[bool] = Body(None),
+    user=Depends(get_current_user_with_permissions),
+):
+    """Update an existing saved query.
+
+    Args:
+        request: FastAPI request object
+        query_id: ID of the query to update
+        name: New name (optional)
+        description: New description (optional)
+        filter_config: New filter configuration (optional)
+        is_shared: New sharing status (optional)
+        user: Authenticated user (required by dependency)
+
+    Returns:
+        dict: Updated query details
+
+    Raises:
+        HTTPException: 404 if query not found, 403 if unauthorized
+    """
+    db = next(get_db())
+    try:
+        user_email = user.email if hasattr(user, "email") else "unknown"
+
+        # Can only update own queries
+        query = db.query(ObservabilitySavedQuery).filter(ObservabilitySavedQuery.id == query_id, ObservabilitySavedQuery.user_email == user_email).first()
+
+        if not query:
+            raise HTTPException(status_code=404, detail="Query not found or unauthorized")
+
+        # Update fields if provided
+        if name is not None:
+            query.name = name
+        if description is not None:
+            query.description = description
+        if filter_config is not None:
+            query.filter_config = filter_config
+        if is_shared is not None:
+            query.is_shared = is_shared
+
+        db.commit()
+        db.refresh(query)
+
+        return {
+            "id": query.id,
+            "name": query.name,
+            "description": query.description,
+            "filter_config": query.filter_config,
+            "is_shared": query.is_shared,
+            "updated_at": query.updated_at.isoformat(),
+        }
+    except HTTPException:
+        raise
+    except Exception as e:
+        db.rollback()
+        LOGGER.error(f"Failed to update query: {e}")
+        raise HTTPException(status_code=400, detail=str(e))
+    finally:
+        db.close()
+
+
+@admin_router.delete("/observability/queries/{query_id}", status_code=204)
+async def delete_observability_query(request: Request, query_id: int, user=Depends(get_current_user_with_permissions)):  # pylint: disable=unused-argument
+    """Delete a saved query.
+
+    Args:
+        request: FastAPI request object
+        query_id: ID of the query to delete
+        user: Authenticated user (required by dependency)
+
+    Raises:
+        HTTPException: 404 if query not found, 403 if unauthorized
+    """
+    db = next(get_db())
+    try:
+        user_email = user.email if hasattr(user, "email") else "unknown"
+
+        # Can only delete own queries
+        query = db.query(ObservabilitySavedQuery).filter(ObservabilitySavedQuery.id == query_id, ObservabilitySavedQuery.user_email == user_email).first()
+
+        if not query:
+            raise HTTPException(status_code=404, detail="Query not found or unauthorized")
+
+        db.delete(query)
+        db.commit()
+    finally:
+        db.close()
+
+
+@admin_router.post("/observability/queries/{query_id}/use", response_model=dict)
+async def track_query_usage(request: Request, query_id: int, user=Depends(get_current_user_with_permissions)):  # pylint: disable=unused-argument
+    """Track usage of a saved query (increments use count and updates last_used_at).
+
+    Args:
+        request: FastAPI request object
+        query_id: ID of the query being used
+        user: Authenticated user (required by dependency)
+
+    Returns:
+        dict: Updated query usage stats
+
+    Raises:
+        HTTPException: 404 if query not found or unauthorized
+    """
+    db = next(get_db())
+    try:
+        user_email = user.email if hasattr(user, "email") else "unknown"
+
+        # Can track usage for own queries or shared queries
+        query = (
+            db.query(ObservabilitySavedQuery).filter(ObservabilitySavedQuery.id == query_id, or_(ObservabilitySavedQuery.user_email == user_email, ObservabilitySavedQuery.is_shared is True)).first()
+        )
+
+        if not query:
+            raise HTTPException(status_code=404, detail="Query not found or unauthorized")
+
+        # Update usage tracking
+        query.use_count += 1
+        query.last_used_at = utc_now()
+
+        db.commit()
+        db.refresh(query)
+
+        return {"use_count": query.use_count, "last_used_at": query.last_used_at.isoformat()}
+    except HTTPException:
+        raise
+    except Exception as e:
+        db.rollback()
+        LOGGER.error(f"Failed to track query usage: {e}")
+        raise HTTPException(status_code=400, detail=str(e))
+    finally:
+        db.close()
+
+
+@admin_router.get("/observability/metrics/percentiles", response_model=dict)
+async def get_latency_percentiles(
+    request: Request,  # pylint: disable=unused-argument
+    hours: int = Query(24, ge=1, le=168, description="Time range in hours"),
+    interval_minutes: int = Query(60, ge=5, le=1440, description="Aggregation interval in minutes"),
+    _user=Depends(get_current_user_with_permissions),
+):
+    """Get latency percentiles (p50, p90, p95, p99) over time.
+
+    Args:
+        request: FastAPI request object
+        hours: Number of hours to look back (1-168)
+        interval_minutes: Aggregation interval in minutes (5-1440)
+        _user: Authenticated user (required by dependency)
+
+    Returns:
+        dict: Time-series data with percentiles
+
+    Raises:
+        HTTPException: 500 if calculation fails
+    """
+    db = next(get_db())
+    try:
+        cutoff_time = datetime.now(timezone.utc) - timedelta(hours=hours)
+
+        # Query all traces with duration in time range
+        traces = (
+            db.query(ObservabilityTrace.start_time, ObservabilityTrace.duration_ms)
+            .filter(ObservabilityTrace.start_time >= cutoff_time, ObservabilityTrace.duration_ms.isnot(None))
+            .order_by(ObservabilityTrace.start_time)
+            .all()
+        )
+
+        if not traces:
+            return {"timestamps": [], "p50": [], "p90": [], "p95": [], "p99": []}
+
+        # Group traces into time buckets
+        buckets: Dict[datetime, List[float]] = defaultdict(list)
+        for trace in traces:
+            # Round down to nearest interval
+            bucket_time = trace.start_time.replace(second=0, microsecond=0)
+            bucket_time = bucket_time - timedelta(minutes=bucket_time.minute % interval_minutes, seconds=bucket_time.second, microseconds=bucket_time.microsecond)
+            buckets[bucket_time].append(trace.duration_ms)
+
+        # Calculate percentiles for each bucket
+        timestamps = []
+        p50_values = []
+        p90_values = []
+        p95_values = []
+        p99_values = []
+
+        for bucket_time in sorted(buckets.keys()):
+            durations = sorted(buckets[bucket_time])
+            n = len(durations)
+
+            if n > 0:
+                # Calculate percentile indices
+                p50_idx = max(0, int(n * 0.50) - 1)
+                p90_idx = max(0, int(n * 0.90) - 1)
+                p95_idx = max(0, int(n * 0.95) - 1)
+                p99_idx = max(0, int(n * 0.99) - 1)
+
+                timestamps.append(bucket_time.isoformat())
+                p50_values.append(round(durations[p50_idx], 2))
+                p90_values.append(round(durations[p90_idx], 2))
+                p95_values.append(round(durations[p95_idx], 2))
+                p99_values.append(round(durations[p99_idx], 2))
+
+        return {"timestamps": timestamps, "p50": p50_values, "p90": p90_values, "p95": p95_values, "p99": p99_values}
+    except Exception as e:
+        LOGGER.error(f"Failed to calculate latency percentiles: {e}")
+        raise HTTPException(status_code=500, detail=str(e))
+    finally:
+        db.close()
+
+
+@admin_router.get("/observability/metrics/timeseries", response_model=dict)
+async def get_timeseries_metrics(
+    request: Request,  # pylint: disable=unused-argument
+    hours: int = Query(24, ge=1, le=168, description="Time range in hours"),
+    interval_minutes: int = Query(60, ge=5, le=1440, description="Aggregation interval in minutes"),
+    _user=Depends(get_current_user_with_permissions),
+):
+    """Get time-series metrics (request rate, error rate, throughput).
+
+    Args:
+        request: FastAPI request object
+        hours: Number of hours to look back (1-168)
+        interval_minutes: Aggregation interval in minutes (5-1440)
+        _user: Authenticated user (required by dependency)
+
+    Returns:
+        dict: Time-series data with request counts, error rates, and throughput
+
+    Raises:
+        HTTPException: 500 if calculation fails
+    """
+    db = next(get_db())
+    try:
+        cutoff_time = datetime.now(timezone.utc) - timedelta(hours=hours)
+
+        # Query traces grouped by time bucket
+        traces = db.query(ObservabilityTrace.start_time, ObservabilityTrace.status).filter(ObservabilityTrace.start_time >= cutoff_time).order_by(ObservabilityTrace.start_time).all()
+
+        if not traces:
+            return {"timestamps": [], "request_count": [], "success_count": [], "error_count": [], "error_rate": []}
+
+        # Group traces into time buckets
+        buckets: Dict[datetime, Dict[str, int]] = defaultdict(lambda: {"total": 0, "success": 0, "error": 0})
+        for trace in traces:
+            # Round down to nearest interval
+            bucket_time = trace.start_time.replace(second=0, microsecond=0)
+            bucket_time = bucket_time - timedelta(minutes=bucket_time.minute % interval_minutes, seconds=bucket_time.second, microseconds=bucket_time.microsecond)
+
+            buckets[bucket_time]["total"] += 1
+            if trace.status == "ok":
+                buckets[bucket_time]["success"] += 1
+            elif trace.status == "error":
+                buckets[bucket_time]["error"] += 1
+
+        # Build time-series arrays
+        timestamps = []
+        request_counts = []
+        success_counts = []
+        error_counts = []
+        error_rates = []
+
+        for bucket_time in sorted(buckets.keys()):
+            bucket = buckets[bucket_time]
+            error_rate = (bucket["error"] / bucket["total"] * 100) if bucket["total"] > 0 else 0
+
+            timestamps.append(bucket_time.isoformat())
+            request_counts.append(bucket["total"])
+            success_counts.append(bucket["success"])
+            error_counts.append(bucket["error"])
+            error_rates.append(round(error_rate, 2))
+
+        return {
+            "timestamps": timestamps,
+            "request_count": request_counts,
+            "success_count": success_counts,
+            "error_count": error_counts,
+            "error_rate": error_rates,
+        }
+    except Exception as e:
+        LOGGER.error(f"Failed to calculate timeseries metrics: {e}")
+        raise HTTPException(status_code=500, detail=str(e))
+    finally:
+        db.close()
+
+
+@admin_router.get("/observability/metrics/top-slow", response_model=dict)
+async def get_top_slow_endpoints(
+    request: Request,  # pylint: disable=unused-argument
+    hours: int = Query(24, ge=1, le=168, description="Time range in hours"),
+    limit: int = Query(10, ge=1, le=100, description="Number of results"),
+    _user=Depends(get_current_user_with_permissions),
+):
+    """Get top N slowest endpoints by average duration.
+
+    Args:
+        request: FastAPI request object
+        hours: Number of hours to look back (1-168)
+        limit: Number of results to return (1-100)
+        _user: Authenticated user (required by dependency)
+
+    Returns:
+        dict: List of slowest endpoints with stats
+
+    Raises:
+        HTTPException: 500 if query fails
+    """
+    db = next(get_db())
+    try:
+        cutoff_time = datetime.now(timezone.utc) - timedelta(hours=hours)
+
+        # Group by endpoint and calculate average duration
+        results = (
+            db.query(
+                ObservabilityTrace.http_url,
+                ObservabilityTrace.http_method,
+                func.count(ObservabilityTrace.trace_id).label("count"),  # pylint: disable=not-callable
+                func.avg(ObservabilityTrace.duration_ms).label("avg_duration"),
+                func.max(ObservabilityTrace.duration_ms).label("max_duration"),
+            )
+            .filter(ObservabilityTrace.start_time >= cutoff_time, ObservabilityTrace.duration_ms.isnot(None))
+            .group_by(ObservabilityTrace.http_url, ObservabilityTrace.http_method)
+            .order_by(desc("avg_duration"))
+            .limit(limit)
+            .all()
+        )
+
+        endpoints = []
+        for row in results:
+            endpoints.append(
+                {
+                    "endpoint": f"{row.http_method} {row.http_url}",
+                    "method": row.http_method,
+                    "url": row.http_url,
+                    "count": row.count,
+                    "avg_duration_ms": round(row.avg_duration, 2),
+                    "max_duration_ms": round(row.max_duration, 2),
+                }
+            )
+
+        return {"endpoints": endpoints}
+    except Exception as e:
+        LOGGER.error(f"Failed to get top slow endpoints: {e}")
+        raise HTTPException(status_code=500, detail=str(e))
+    finally:
+        db.close()
+
+
+@admin_router.get("/observability/metrics/top-volume", response_model=dict)
+async def get_top_volume_endpoints(
+    request: Request,  # pylint: disable=unused-argument
+    hours: int = Query(24, ge=1, le=168, description="Time range in hours"),
+    limit: int = Query(10, ge=1, le=100, description="Number of results"),
+    _user=Depends(get_current_user_with_permissions),
+):
+    """Get top N highest volume endpoints by request count.
+
+    Args:
+        request: FastAPI request object
+        hours: Number of hours to look back (1-168)
+        limit: Number of results to return (1-100)
+        _user: Authenticated user (required by dependency)
+
+    Returns:
+        dict: List of highest volume endpoints with stats
+
+    Raises:
+        HTTPException: 500 if query fails
+    """
+    db = next(get_db())
+    try:
+        cutoff_time = datetime.now(timezone.utc) - timedelta(hours=hours)
+
+        # Group by endpoint and count requests
+        results = (
+            db.query(
+                ObservabilityTrace.http_url,
+                ObservabilityTrace.http_method,
+                func.count(ObservabilityTrace.trace_id).label("count"),  # pylint: disable=not-callable
+                func.avg(ObservabilityTrace.duration_ms).label("avg_duration"),
+            )
+            .filter(ObservabilityTrace.start_time >= cutoff_time)
+            .group_by(ObservabilityTrace.http_url, ObservabilityTrace.http_method)
+            .order_by(desc("count"))
+            .limit(limit)
+            .all()
+        )
+
+        endpoints = []
+        for row in results:
+            endpoints.append(
+                {
+                    "endpoint": f"{row.http_method} {row.http_url}",
+                    "method": row.http_method,
+                    "url": row.http_url,
+                    "count": row.count,
+                    "avg_duration_ms": round(row.avg_duration, 2) if row.avg_duration else 0,
+                }
+            )
+
+        return {"endpoints": endpoints}
+    except Exception as e:
+        LOGGER.error(f"Failed to get top volume endpoints: {e}")
+        raise HTTPException(status_code=500, detail=str(e))
+    finally:
+        db.close()
+
+
+@admin_router.get("/observability/metrics/top-errors", response_model=dict)
+async def get_top_error_endpoints(
+    request: Request,  # pylint: disable=unused-argument
+    hours: int = Query(24, ge=1, le=168, description="Time range in hours"),
+    limit: int = Query(10, ge=1, le=100, description="Number of results"),
+    _user=Depends(get_current_user_with_permissions),
+):
+    """Get top N error-prone endpoints by error count and rate.
+
+    Args:
+        request: FastAPI request object
+        hours: Number of hours to look back (1-168)
+        limit: Number of results to return (1-100)
+        _user: Authenticated user (required by dependency)
+
+    Returns:
+        dict: List of error-prone endpoints with stats
+
+    Raises:
+        HTTPException: 500 if query fails
+    """
+    db = next(get_db())
+    try:
+        cutoff_time = datetime.now(timezone.utc) - timedelta(hours=hours)
+
+        # Group by endpoint and count errors
+        results = (
+            db.query(
+                ObservabilityTrace.http_url,
+                ObservabilityTrace.http_method,
+                func.count(ObservabilityTrace.trace_id).label("total_count"),  # pylint: disable=not-callable
+                func.sum(case((ObservabilityTrace.status == "error", 1), else_=0)).label("error_count"),
+            )
+            .filter(ObservabilityTrace.start_time >= cutoff_time)
+            .group_by(ObservabilityTrace.http_url, ObservabilityTrace.http_method)
+            .having(func.sum(case((ObservabilityTrace.status == "error", 1), else_=0)) > 0)
+            .order_by(desc("error_count"))
+            .limit(limit)
+            .all()
+        )
+
+        endpoints = []
+        for row in results:
+            error_rate = (row.error_count / row.total_count * 100) if row.total_count > 0 else 0
+            endpoints.append(
+                {
+                    "endpoint": f"{row.http_method} {row.http_url}",
+                    "method": row.http_method,
+                    "url": row.http_url,
+                    "total_count": row.total_count,
+                    "error_count": row.error_count,
+                    "error_rate": round(error_rate, 2),
+                }
+            )
+
+        return {"endpoints": endpoints}
+    except Exception as e:
+        LOGGER.error(f"Failed to get top error endpoints: {e}")
+        raise HTTPException(status_code=500, detail=str(e))
+    finally:
+        db.close()
+
+
+@admin_router.get("/observability/metrics/heatmap", response_model=dict)
+async def get_latency_heatmap(
+    request: Request,  # pylint: disable=unused-argument
+    hours: int = Query(24, ge=1, le=168, description="Time range in hours"),
+    time_buckets: int = Query(24, ge=10, le=100, description="Number of time buckets"),
+    latency_buckets: int = Query(20, ge=5, le=50, description="Number of latency buckets"),
+    _user=Depends(get_current_user_with_permissions),
+):
+    """Get latency distribution heatmap data.
+
+    Args:
+        request: FastAPI request object
+        hours: Number of hours to look back (1-168)
+        time_buckets: Number of time buckets (10-100)
+        latency_buckets: Number of latency buckets (5-50)
+        _user: Authenticated user (required by dependency)
+
+    Returns:
+        dict: Heatmap data with time and latency dimensions
+
+    Raises:
+        HTTPException: 500 if calculation fails
+    """
+    db = next(get_db())
+    try:
+        cutoff_time = datetime.now(timezone.utc) - timedelta(hours=hours)
+        # Remove timezone info for SQLite compatibility
+        cutoff_time_naive = cutoff_time.replace(tzinfo=None)
+
+        # Query all traces with duration
+        traces = (
+            db.query(ObservabilityTrace.start_time, ObservabilityTrace.duration_ms)
+            .filter(ObservabilityTrace.start_time >= cutoff_time_naive, ObservabilityTrace.duration_ms.isnot(None))
+            .order_by(ObservabilityTrace.start_time)
+            .all()
+        )
+
+        if not traces:
+            return {"time_labels": [], "latency_labels": [], "data": []}
+
+        # Calculate time bucket size
+        time_range = hours * 60  # minutes
+        time_bucket_minutes = time_range / time_buckets
+
+        # Find latency range and create buckets
+        durations = [t.duration_ms for t in traces]
+        min_duration = min(durations)
+        max_duration = max(durations)
+        latency_range = max_duration - min_duration
+        latency_bucket_size = latency_range / latency_buckets if latency_range > 0 else 1
+
+        # Initialize heatmap matrix
+        heatmap = [[0 for _ in range(time_buckets)] for _ in range(latency_buckets)]
+
+        # Populate heatmap
+        for trace in traces:
+            # Calculate time bucket index
+            time_diff = (trace.start_time - cutoff_time_naive).total_seconds() / 60  # minutes
+            time_idx = min(int(time_diff / time_bucket_minutes), time_buckets - 1)
+
+            # Calculate latency bucket index
+            latency_idx = min(int((trace.duration_ms - min_duration) / latency_bucket_size), latency_buckets - 1)
+
+            heatmap[latency_idx][time_idx] += 1
+
+        # Generate labels
+        time_labels = []
+        for i in range(time_buckets):
+            bucket_time = cutoff_time_naive + timedelta(minutes=i * time_bucket_minutes)
+            time_labels.append(bucket_time.strftime("%H:%M"))
+
+        latency_labels = []
+        for i in range(latency_buckets):
+            bucket_min = min_duration + i * latency_bucket_size
+            bucket_max = bucket_min + latency_bucket_size
+            latency_labels.append(f"{bucket_min:.0f}-{bucket_max:.0f}ms")
+
+        return {"time_labels": time_labels, "latency_labels": latency_labels, "data": heatmap}
+    except Exception as e:
+        LOGGER.error(f"Failed to generate latency heatmap: {e}")
+        raise HTTPException(status_code=500, detail=str(e))
+    finally:
+        db.close()
+
+
+@admin_router.get("/observability/tools/usage", response_model=dict)
+async def get_tool_usage(
+    request: Request,  # pylint: disable=unused-argument
+    hours: int = Query(24, ge=1, le=168, description="Time range in hours"),
+    limit: int = Query(20, ge=5, le=100, description="Number of tools to return"),
+    _user=Depends(get_current_user_with_permissions),
+):
+    """Get tool usage frequency statistics.
+
+    Args:
+        request: FastAPI request object
+        hours: Number of hours to look back (1-168)
+        limit: Maximum number of tools to return (5-100)
+        _user: Authenticated user (required by dependency)
+
+    Returns:
+        dict: Tool usage statistics with counts and percentages
+
+    Raises:
+        HTTPException: 500 if calculation fails
+    """
+    db = next(get_db())
+    try:
+        cutoff_time = datetime.now(timezone.utc) - timedelta(hours=hours)
+        cutoff_time_naive = cutoff_time.replace(tzinfo=None)
+
+        # Query tool invocations from spans
+        # Note: Using $."tool.name" because the JSON key contains a dot
+        tool_usage = (
+            db.query(
+                func.json_extract(ObservabilitySpan.attributes, '$."tool.name"').label("tool_name"),  # pylint: disable=not-callable
+                func.count(ObservabilitySpan.span_id).label("count"),  # pylint: disable=not-callable
+            )
+            .filter(
+                ObservabilitySpan.name == "tool.invoke",
+                ObservabilitySpan.start_time >= cutoff_time_naive,
+                func.json_extract(ObservabilitySpan.attributes, '$."tool.name"').isnot(None),  # pylint: disable=not-callable
+            )
+            .group_by(func.json_extract(ObservabilitySpan.attributes, '$."tool.name"'))  # pylint: disable=not-callable
+            .order_by(func.count(ObservabilitySpan.span_id).desc())  # pylint: disable=not-callable
+            .limit(limit)
+            .all()
+        )
+
+        total_invocations = sum(row.count for row in tool_usage)
+
+        tools = [
+            {
+                "tool_name": row.tool_name,
+                "count": row.count,
+                "percentage": round((row.count / total_invocations * 100) if total_invocations > 0 else 0, 2),
+            }
+            for row in tool_usage
+        ]
+
+        return {"tools": tools, "total_invocations": total_invocations, "time_range_hours": hours}
+    except Exception as e:
+        LOGGER.error(f"Failed to get tool usage statistics: {e}")
+        raise HTTPException(status_code=500, detail=str(e))
+    finally:
+        db.close()
+
+
+@admin_router.get("/observability/tools/performance", response_model=dict)
+async def get_tool_performance(
+    request: Request,  # pylint: disable=unused-argument
+    hours: int = Query(24, ge=1, le=168, description="Time range in hours"),
+    limit: int = Query(20, ge=5, le=100, description="Number of tools to return"),
+    _user=Depends(get_current_user_with_permissions),
+):
+    """Get tool performance metrics (avg, min, max duration).
+
+    Args:
+        request: FastAPI request object
+        hours: Number of hours to look back (1-168)
+        limit: Maximum number of tools to return (5-100)
+        _user: Authenticated user (required by dependency)
+
+    Returns:
+        dict: Tool performance metrics
+
+    Raises:
+        HTTPException: 500 if calculation fails
+    """
+    db = next(get_db())
+    try:
+        cutoff_time = datetime.now(timezone.utc) - timedelta(hours=hours)
+        cutoff_time_naive = cutoff_time.replace(tzinfo=None)
+
+        # First, get all tool invocations with durations
+        tool_spans = (
+            db.query(
+                func.json_extract(ObservabilitySpan.attributes, '$."tool.name"').label("tool_name"),  # pylint: disable=not-callable
+                ObservabilitySpan.duration_ms,
+            )
+            .filter(
+                ObservabilitySpan.name == "tool.invoke",
+                ObservabilitySpan.start_time >= cutoff_time_naive,
+                ObservabilitySpan.duration_ms.isnot(None),
+                func.json_extract(ObservabilitySpan.attributes, '$."tool.name"').isnot(None),  # pylint: disable=not-callable
+            )
+            .all()
+        )
+
+        # Group by tool name and calculate percentiles
+        tool_durations = defaultdict(list)
+        for span in tool_spans:
+            tool_durations[span.tool_name].append(span.duration_ms)
+
+        # Calculate metrics for each tool
+        tools_data = []
+        for tool_name, durations in tool_durations.items():
+            durations_sorted = sorted(durations)
+            n = len(durations_sorted)
+
+            if n == 0:
+                continue
+
+            # Calculate percentiles
+            def percentile(data, p):
+                if not data:
+                    return 0
+                k = (len(data) - 1) * p
+                f = int(k)
+                c = min(f + 1, len(data) - 1)
+                if f == c:
+                    return data[f]
+                return data[f] * (c - k) + data[c] * (k - f)
+
+            tools_data.append(
+                {
+                    "tool_name": tool_name,
+                    "count": n,
+                    "avg_duration_ms": round(sum(durations) / n, 2),
+                    "min_duration_ms": round(min(durations), 2),
+                    "max_duration_ms": round(max(durations), 2),
+                    "p50": round(percentile(durations_sorted, 0.50), 2),
+                    "p90": round(percentile(durations_sorted, 0.90), 2),
+                    "p95": round(percentile(durations_sorted, 0.95), 2),
+                    "p99": round(percentile(durations_sorted, 0.99), 2),
+                }
+            )
+
+        # Sort by average duration descending and limit
+        tools_data.sort(key=lambda x: x["avg_duration_ms"], reverse=True)
+        tools = tools_data[:limit]
+
+        return {"tools": tools, "time_range_hours": hours}
+    except Exception as e:
+        LOGGER.error(f"Failed to get tool performance metrics: {e}")
+        raise HTTPException(status_code=500, detail=str(e))
+    finally:
+        db.close()
+
+
+@admin_router.get("/observability/tools/errors", response_model=dict)
+async def get_tool_errors(
+    request: Request,  # pylint: disable=unused-argument
+    hours: int = Query(24, ge=1, le=168, description="Time range in hours"),
+    limit: int = Query(20, ge=5, le=100, description="Number of tools to return"),
+    _user=Depends(get_current_user_with_permissions),
+):
+    """Get tool error rates and statistics.
+
+    Args:
+        request: FastAPI request object
+        hours: Number of hours to look back (1-168)
+        limit: Maximum number of tools to return (5-100)
+        _user: Authenticated user (required by dependency)
+
+    Returns:
+        dict: Tool error statistics
+
+    Raises:
+        HTTPException: 500 if calculation fails
+    """
+    db = next(get_db())
+    try:
+        cutoff_time = datetime.now(timezone.utc) - timedelta(hours=hours)
+        cutoff_time_naive = cutoff_time.replace(tzinfo=None)
+
+        # Query tool error rates
+        tool_errors = (
+            db.query(
+                func.json_extract(ObservabilitySpan.attributes, '$."tool.name"').label("tool_name"),  # pylint: disable=not-callable
+                func.count(ObservabilitySpan.span_id).label("total_count"),  # pylint: disable=not-callable
+                func.sum(case((ObservabilitySpan.status == "error", 1), else_=0)).label("error_count"),  # pylint: disable=not-callable
+            )
+            .filter(
+                ObservabilitySpan.name == "tool.invoke",
+                ObservabilitySpan.start_time >= cutoff_time_naive,
+                func.json_extract(ObservabilitySpan.attributes, '$."tool.name"').isnot(None),  # pylint: disable=not-callable
+            )
+            .group_by(func.json_extract(ObservabilitySpan.attributes, '$."tool.name"'))  # pylint: disable=not-callable
+            .order_by(func.sum(case((ObservabilitySpan.status == "error", 1), else_=0)).desc())  # pylint: disable=not-callable
+            .limit(limit)
+            .all()
+        )
+
+        tools = [
+            {
+                "tool_name": row.tool_name,
+                "total_count": row.total_count,
+                "error_count": row.error_count or 0,
+                "error_rate": round((row.error_count / row.total_count * 100) if row.total_count > 0 and row.error_count else 0, 2),
+            }
+            for row in tool_errors
+        ]
+
+        return {"tools": tools, "time_range_hours": hours}
+    except Exception as e:
+        LOGGER.error(f"Failed to get tool error statistics: {e}")
+        raise HTTPException(status_code=500, detail=str(e))
+    finally:
+        db.close()
+
+
+@admin_router.get("/observability/tools/chains", response_model=dict)
+async def get_tool_chains(
+    request: Request,  # pylint: disable=unused-argument
+    hours: int = Query(24, ge=1, le=168, description="Time range in hours"),
+    limit: int = Query(20, ge=5, le=100, description="Number of chains to return"),
+    _user=Depends(get_current_user_with_permissions),
+):
+    """Get tool chain analysis (which tools are invoked together in the same trace).
+
+    Args:
+        request: FastAPI request object
+        hours: Number of hours to look back (1-168)
+        limit: Maximum number of chains to return (5-100)
+        _user: Authenticated user (required by dependency)
+
+    Returns:
+        dict: Tool chain statistics showing common tool sequences
+
+    Raises:
+        HTTPException: 500 if calculation fails
+    """
+    db = next(get_db())
+    try:
+        cutoff_time = datetime.now(timezone.utc) - timedelta(hours=hours)
+        cutoff_time_naive = cutoff_time.replace(tzinfo=None)
+
+        # Get all tool invocations grouped by trace_id
+        tool_spans = (
+            db.query(
+                ObservabilitySpan.trace_id,
+                func.json_extract(ObservabilitySpan.attributes, '$."tool.name"').label("tool_name"),  # pylint: disable=not-callable
+                ObservabilitySpan.start_time,
+            )
+            .filter(
+                ObservabilitySpan.name == "tool.invoke",
+                ObservabilitySpan.start_time >= cutoff_time_naive,
+                func.json_extract(ObservabilitySpan.attributes, '$."tool.name"').isnot(None),  # pylint: disable=not-callable
+            )
+            .order_by(ObservabilitySpan.trace_id, ObservabilitySpan.start_time)
+            .all()
+        )
+
+        # Group tools by trace and create chains
+        trace_tools = {}
+        for span in tool_spans:
+            if span.trace_id not in trace_tools:
+                trace_tools[span.trace_id] = []
+            trace_tools[span.trace_id].append(span.tool_name)
+
+        # Count tool chain frequencies
+        chain_counts = {}
+        for tools in trace_tools.values():
+            if len(tools) > 1:
+                # Create a chain string (sorted to treat [A,B] and [B,A] as same chain)
+                chain = " -> ".join(tools)
+                chain_counts[chain] = chain_counts.get(chain, 0) + 1
+
+        # Sort by frequency and take top N
+        sorted_chains = sorted(chain_counts.items(), key=lambda x: x[1], reverse=True)[:limit]
+
+        chains = [{"chain": chain, "count": count} for chain, count in sorted_chains]
+
+        return {"chains": chains, "total_traces_with_tools": len(trace_tools), "time_range_hours": hours}
+    except Exception as e:
+        LOGGER.error(f"Failed to get tool chain statistics: {e}")
+        raise HTTPException(status_code=500, detail=str(e))
+    finally:
+        db.close()
+
+
+@admin_router.get("/observability/tools/partial", response_class=HTMLResponse)
+async def get_tools_partial(
+    request: Request,
+    _user=Depends(get_current_user_with_permissions),
+):
+    """Render the tool invocation metrics dashboard HTML partial.
+
+    Args:
+        request: FastAPI request object
+        _user: Authenticated user (required by dependency)
+
+    Returns:
+        HTMLResponse: Rendered tool metrics dashboard partial
+    """
+    root_path = request.scope.get("root_path", "")
+    return request.app.state.templates.TemplateResponse(
+        "observability_tools.html",
+        {
+            "request": request,
+            "root_path": root_path,
+        },
+    )
+
+
+# ==============================================================================
+# Prompts Observability Endpoints
+# ==============================================================================
+
+
+@admin_router.get("/observability/prompts/usage", response_model=dict)
+async def get_prompt_usage(
+    request: Request,  # pylint: disable=unused-argument
+    hours: int = Query(24, ge=1, le=168, description="Time range in hours"),
+    limit: int = Query(20, ge=5, le=100, description="Number of prompts to return"),
+    _user=Depends(get_current_user_with_permissions),
+):
+    """Get prompt rendering frequency statistics.
+
+    Args:
+        request: FastAPI request object
+        hours: Number of hours to look back (1-168)
+        limit: Maximum number of prompts to return (5-100)
+        _user: Authenticated user (required by dependency)
+
+    Returns:
+        dict: Prompt usage statistics with counts and percentages
+
+    Raises:
+        HTTPException: 500 if calculation fails
+    """
+    db = next(get_db())
+    try:
+        cutoff_time = datetime.now(timezone.utc) - timedelta(hours=hours)
+        cutoff_time_naive = cutoff_time.replace(tzinfo=None)
+
+        # Query prompt renders from spans (looking for prompts/get calls)
+        # The prompt id should be in attributes as "prompt.id"
+        prompt_usage = (
+            db.query(
+                func.json_extract(ObservabilitySpan.attributes, '$."prompt.id"').label("prompt_id"),  # pylint: disable=not-callable
+                func.count(ObservabilitySpan.span_id).label("count"),  # pylint: disable=not-callable
+            )
+            .filter(
+                ObservabilitySpan.name.in_(["prompt.get", "prompts.get", "prompt.render"]),
+                ObservabilitySpan.start_time >= cutoff_time_naive,
+                func.json_extract(ObservabilitySpan.attributes, '$."prompt.id"').isnot(None),  # pylint: disable=not-callable
+            )
+            .group_by(func.json_extract(ObservabilitySpan.attributes, '$."prompt.id"'))  # pylint: disable=not-callable
+            .order_by(func.count(ObservabilitySpan.span_id).desc())  # pylint: disable=not-callable
+            .limit(limit)
+            .all()
+        )
+
+        total_renders = sum(row.count for row in prompt_usage)
+
+        prompts = [
+            {
+                "prompt_id": row.prompt_id,
+                "count": row.count,
+                "percentage": round((row.count / total_renders * 100) if total_renders > 0 else 0, 2),
+            }
+            for row in prompt_usage
+        ]
+
+        return {"prompts": prompts, "total_renders": total_renders, "time_range_hours": hours}
+    except Exception as e:
+        LOGGER.error(f"Failed to get prompt usage statistics: {e}")
+        raise HTTPException(status_code=500, detail=str(e))
+    finally:
+        db.close()
+
+
+@admin_router.get("/observability/prompts/performance", response_model=dict)
+async def get_prompt_performance(
+    request: Request,  # pylint: disable=unused-argument
+    hours: int = Query(24, ge=1, le=168, description="Time range in hours"),
+    limit: int = Query(20, ge=5, le=100, description="Number of prompts to return"),
+    _user=Depends(get_current_user_with_permissions),
+):
+    """Get prompt performance metrics (avg, min, max duration).
+
+    Args:
+        request: FastAPI request object
+        hours: Number of hours to look back (1-168)
+        limit: Maximum number of prompts to return (5-100)
+        _user: Authenticated user (required by dependency)
+
+    Returns:
+        dict: Prompt performance metrics
+
+    Raises:
+        HTTPException: 500 if calculation fails
+    """
+    db = next(get_db())
+    try:
+        cutoff_time = datetime.now(timezone.utc) - timedelta(hours=hours)
+        cutoff_time_naive = cutoff_time.replace(tzinfo=None)
+
+        # First, get all prompt renders with durations
+        prompt_spans = (
+            db.query(
+                func.json_extract(ObservabilitySpan.attributes, '$."prompt.id"').label("prompt_id"),  # pylint: disable=not-callable
+                ObservabilitySpan.duration_ms,
+            )
+            .filter(
+                ObservabilitySpan.name.in_(["prompt.get", "prompts.get", "prompt.render"]),
+                ObservabilitySpan.start_time >= cutoff_time_naive,
+                ObservabilitySpan.duration_ms.isnot(None),
+                func.json_extract(ObservabilitySpan.attributes, '$."prompt.id"').isnot(None),  # pylint: disable=not-callable
+            )
+            .all()
+        )
+
+        # Group by prompt id and calculate percentiles
+        prompt_durations = defaultdict(list)
+        for span in prompt_spans:
+            prompt_durations[span.prompt_id].append(span.duration_ms)
+
+        # Calculate metrics for each prompt
+        prompts_data = []
+        for prompt_id, durations in prompt_durations.items():
+            durations_sorted = sorted(durations)
+            n = len(durations_sorted)
+
+            if n == 0:
+                continue
+
+            # Calculate percentiles
+            def percentile(data, p):
+                if not data:
+                    return 0
+                k = (len(data) - 1) * p
+                f = int(k)
+                c = min(f + 1, len(data) - 1)
+                if f == c:
+                    return data[f]
+                return data[f] * (c - k) + data[c] * (k - f)
+
+            prompts_data.append(
+                {
+                    "prompt_id": prompt_id,
+                    "count": n,
+                    "avg_duration_ms": round(sum(durations) / n, 2),
+                    "min_duration_ms": round(min(durations), 2),
+                    "max_duration_ms": round(max(durations), 2),
+                    "p50": round(percentile(durations_sorted, 0.50), 2),
+                    "p90": round(percentile(durations_sorted, 0.90), 2),
+                    "p95": round(percentile(durations_sorted, 0.95), 2),
+                    "p99": round(percentile(durations_sorted, 0.99), 2),
+                }
+            )
+
+        # Sort by average duration descending and limit
+        prompts_data.sort(key=lambda x: x["avg_duration_ms"], reverse=True)
+        prompts = prompts_data[:limit]
+
+        return {"prompts": prompts, "time_range_hours": hours}
+    except Exception as e:
+        LOGGER.error(f"Failed to get prompt performance metrics: {e}")
+        raise HTTPException(status_code=500, detail=str(e))
+    finally:
+        db.close()
+
+
+@admin_router.get("/observability/prompts/errors", response_model=dict)
+async def get_prompts_errors(
+    hours: int = Query(24, description="Time range in hours"),
+    limit: int = Query(20, description="Maximum number of results"),
+    _user=Depends(get_current_user_with_permissions),
+):
+    """Get prompt error rates.
+
+    Args:
+        hours: Time range in hours to analyze
+        limit: Maximum number of prompts to return
+        _user: Authenticated user (required by dependency)
+
+    Returns:
+        dict: Prompt error statistics
+    """
+    db = next(get_db())
+    try:
+        cutoff_time = datetime.now(timezone.utc) - timedelta(hours=hours)
+        cutoff_time_naive = cutoff_time.replace(tzinfo=None)
+
+        # Get all prompt spans with their status
+        prompt_stats = (
+            db.query(
+                func.json_extract(ObservabilitySpan.attributes, '$."prompt.id"').label("prompt_id"),
+                func.count().label("total_count"),  # pylint: disable=not-callable
+                func.sum(case((ObservabilitySpan.status == "error", 1), else_=0)).label("error_count"),
+            )
+            .filter(
+                ObservabilitySpan.name == "prompt.render",
+                ObservabilitySpan.start_time >= cutoff_time_naive,
+                func.json_extract(ObservabilitySpan.attributes, '$."prompt.id"').isnot(None),
+            )
+            .group_by(func.json_extract(ObservabilitySpan.attributes, '$."prompt.id"'))
+            .all()
+        )
+
+        prompts_data = []
+        for stat in prompt_stats:
+            total = stat.total_count
+            errors = stat.error_count or 0
+            error_rate = round((errors / total * 100), 2) if total > 0 else 0
+
+            prompts_data.append({"prompt_id": stat.prompt_id, "total_count": total, "error_count": errors, "error_rate": error_rate})
+
+        # Sort by error rate descending
+        prompts_data.sort(key=lambda x: x["error_rate"], reverse=True)
+        prompts_data = prompts_data[:limit]
+
+        return {"prompts": prompts_data, "time_range_hours": hours}
+    finally:
+        db.close()
+
+
+@admin_router.get("/observability/prompts/partial", response_class=HTMLResponse)
+async def get_prompts_partial(
+    request: Request,
+    _user=Depends(get_current_user_with_permissions),
+):
+    """Render the prompt rendering metrics dashboard HTML partial.
+
+    Args:
+        request: FastAPI request object
+        _user: Authenticated user (required by dependency)
+
+    Returns:
+        HTMLResponse: Rendered prompt metrics dashboard partial
+    """
+    root_path = request.scope.get("root_path", "")
+    return request.app.state.templates.TemplateResponse(
+        "observability_prompts.html",
+        {
+            "request": request,
+            "root_path": root_path,
+        },
+    )
+
+
+# ==============================================================================
+# Resources Observability Endpoints
+# ==============================================================================
+
+
+@admin_router.get("/observability/resources/usage", response_model=dict)
+async def get_resource_usage(
+    request: Request,  # pylint: disable=unused-argument
+    hours: int = Query(24, ge=1, le=168, description="Time range in hours"),
+    limit: int = Query(20, ge=5, le=100, description="Number of resources to return"),
+    _user=Depends(get_current_user_with_permissions),
+):
+    """Get resource fetch frequency statistics.
+
+    Args:
+        request: FastAPI request object
+        hours: Number of hours to look back (1-168)
+        limit: Maximum number of resources to return (5-100)
+        _user: Authenticated user (required by dependency)
+
+    Returns:
+        dict: Resource usage statistics with counts and percentages
+
+    Raises:
+        HTTPException: 500 if calculation fails
+    """
+    db = next(get_db())
+    try:
+        cutoff_time = datetime.now(timezone.utc) - timedelta(hours=hours)
+        cutoff_time_naive = cutoff_time.replace(tzinfo=None)
+
+        # Query resource reads from spans (looking for resources/read calls)
+        # The resource URI should be in attributes
+        resource_usage = (
+            db.query(
+                func.json_extract(ObservabilitySpan.attributes, '$."resource.uri"').label("resource_uri"),  # pylint: disable=not-callable
+                func.count(ObservabilitySpan.span_id).label("count"),  # pylint: disable=not-callable
+            )
+            .filter(
+                ObservabilitySpan.name.in_(["resource.read", "resources.read", "resource.fetch"]),
+                ObservabilitySpan.start_time >= cutoff_time_naive,
+                func.json_extract(ObservabilitySpan.attributes, '$."resource.uri"').isnot(None),  # pylint: disable=not-callable
+            )
+            .group_by(func.json_extract(ObservabilitySpan.attributes, '$."resource.uri"'))  # pylint: disable=not-callable
+            .order_by(func.count(ObservabilitySpan.span_id).desc())  # pylint: disable=not-callable
+            .limit(limit)
+            .all()
+        )
+
+        total_fetches = sum(row.count for row in resource_usage)
+
+        resources = [
+            {
+                "resource_uri": row.resource_uri,
+                "count": row.count,
+                "percentage": round((row.count / total_fetches * 100) if total_fetches > 0 else 0, 2),
+            }
+            for row in resource_usage
+        ]
+
+        return {"resources": resources, "total_fetches": total_fetches, "time_range_hours": hours}
+    except Exception as e:
+        LOGGER.error(f"Failed to get resource usage statistics: {e}")
+        raise HTTPException(status_code=500, detail=str(e))
+    finally:
+        db.close()
+
+
+@admin_router.get("/observability/resources/performance", response_model=dict)
+async def get_resource_performance(
+    request: Request,  # pylint: disable=unused-argument
+    hours: int = Query(24, ge=1, le=168, description="Time range in hours"),
+    limit: int = Query(20, ge=5, le=100, description="Number of resources to return"),
+    _user=Depends(get_current_user_with_permissions),
+):
+    """Get resource performance metrics (avg, min, max duration).
+
+    Args:
+        request: FastAPI request object
+        hours: Number of hours to look back (1-168)
+        limit: Maximum number of resources to return (5-100)
+        _user: Authenticated user (required by dependency)
+
+    Returns:
+        dict: Resource performance metrics
+
+    Raises:
+        HTTPException: 500 if calculation fails
+    """
+    db = next(get_db())
+    try:
+        cutoff_time = datetime.now(timezone.utc) - timedelta(hours=hours)
+        cutoff_time_naive = cutoff_time.replace(tzinfo=None)
+
+        # First, get all resource reads with durations
+        resource_spans = (
+            db.query(
+                func.json_extract(ObservabilitySpan.attributes, '$."resource.uri"').label("resource_uri"),  # pylint: disable=not-callable
+                ObservabilitySpan.duration_ms,
+            )
+            .filter(
+                ObservabilitySpan.name.in_(["resource.read", "resources.read", "resource.fetch"]),
+                ObservabilitySpan.start_time >= cutoff_time_naive,
+                ObservabilitySpan.duration_ms.isnot(None),
+                func.json_extract(ObservabilitySpan.attributes, '$."resource.uri"').isnot(None),  # pylint: disable=not-callable
+            )
+            .all()
+        )
+
+        # Group by resource URI and calculate percentiles
+        resource_durations = defaultdict(list)
+        for span in resource_spans:
+            resource_durations[span.resource_uri].append(span.duration_ms)
+
+        # Calculate metrics for each resource
+        resources_data = []
+        for resource_uri, durations in resource_durations.items():
+            durations_sorted = sorted(durations)
+            n = len(durations_sorted)
+
+            if n == 0:
+                continue
+
+            # Calculate percentiles
+            def percentile(data, p):
+                if not data:
+                    return 0
+                k = (len(data) - 1) * p
+                f = int(k)
+                c = min(f + 1, len(data) - 1)
+                if f == c:
+                    return data[f]
+                return data[f] * (c - k) + data[c] * (k - f)
+
+            resources_data.append(
+                {
+                    "resource_uri": resource_uri,
+                    "count": n,
+                    "avg_duration_ms": round(sum(durations) / n, 2),
+                    "min_duration_ms": round(min(durations), 2),
+                    "max_duration_ms": round(max(durations), 2),
+                    "p50": round(percentile(durations_sorted, 0.50), 2),
+                    "p90": round(percentile(durations_sorted, 0.90), 2),
+                    "p95": round(percentile(durations_sorted, 0.95), 2),
+                    "p99": round(percentile(durations_sorted, 0.99), 2),
+                }
+            )
+
+        # Sort by average duration descending and limit
+        resources_data.sort(key=lambda x: x["avg_duration_ms"], reverse=True)
+        resources = resources_data[:limit]
+
+        return {"resources": resources, "time_range_hours": hours}
+    except Exception as e:
+        LOGGER.error(f"Failed to get resource performance metrics: {e}")
+        raise HTTPException(status_code=500, detail=str(e))
+    finally:
+        db.close()
+
+
+@admin_router.get("/observability/resources/errors", response_model=dict)
+async def get_resources_errors(
+    hours: int = Query(24, description="Time range in hours"),
+    limit: int = Query(20, description="Maximum number of results"),
+    _user=Depends(get_current_user_with_permissions),
+):
+    """Get resource error rates.
+
+    Args:
+        hours: Time range in hours to analyze
+        limit: Maximum number of resources to return
+        _user: Authenticated user (required by dependency)
+
+    Returns:
+        dict: Resource error statistics
+    """
+    db = next(get_db())
+    try:
+        cutoff_time = datetime.now(timezone.utc) - timedelta(hours=hours)
+        cutoff_time_naive = cutoff_time.replace(tzinfo=None)
+
+        # Get all resource spans with their status
+        resource_stats = (
+            db.query(
+                func.json_extract(ObservabilitySpan.attributes, '$."resource.uri"').label("resource_uri"),
+                func.count().label("total_count"),  # pylint: disable=not-callable
+                func.sum(case((ObservabilitySpan.status == "error", 1), else_=0)).label("error_count"),
+            )
+            .filter(
+                ObservabilitySpan.name.in_(["resource.read", "resources.read", "resource.fetch"]),
+                ObservabilitySpan.start_time >= cutoff_time_naive,
+                func.json_extract(ObservabilitySpan.attributes, '$."resource.uri"').isnot(None),
+            )
+            .group_by(func.json_extract(ObservabilitySpan.attributes, '$."resource.uri"'))
+            .all()
+        )
+
+        resources_data = []
+        for stat in resource_stats:
+            total = stat.total_count
+            errors = stat.error_count or 0
+            error_rate = round((errors / total * 100), 2) if total > 0 else 0
+
+            resources_data.append({"resource_uri": stat.resource_uri, "total_count": total, "error_count": errors, "error_rate": error_rate})
+
+        # Sort by error rate descending
+        resources_data.sort(key=lambda x: x["error_rate"], reverse=True)
+        resources_data = resources_data[:limit]
+
+        return {"resources": resources_data, "time_range_hours": hours}
+    finally:
+        db.close()
+
+
+@admin_router.get("/observability/resources/partial", response_class=HTMLResponse)
+async def get_resources_partial(
+    request: Request,
+    _user=Depends(get_current_user_with_permissions),
+):
+    """Render the resource fetch metrics dashboard HTML partial.
+
+    Args:
+        request: FastAPI request object
+        _user: Authenticated user (required by dependency)
+
+    Returns:
+        HTMLResponse: Rendered resource metrics dashboard partial
+    """
+    root_path = request.scope.get("root_path", "")
+    return request.app.state.templates.TemplateResponse(
+        "observability_resources.html",
+        {
+            "request": request,
+            "root_path": root_path,
+        },
+    )

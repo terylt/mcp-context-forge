@@ -6,12 +6,14 @@ Authors: Teryl Taylor
 
 Unit tests for plugin manager.
 """
+
 # Third-Party
 import pytest
 
 # First-Party
-from mcpgateway.models import Message, PromptResult, Role, TextContent
-from mcpgateway.plugins.framework import GlobalContext, HttpHeaderPayload, PluginManager, PluginViolationError, PromptPosthookPayload, PromptPrehookPayload, ToolPostInvokePayload, ToolPreInvokePayload
+from mcpgateway.common.models import Message, PromptResult, Role, TextContent
+from mcpgateway.plugins.framework import GlobalContext, PluginManager, PluginViolationError
+from mcpgateway.plugins.framework import PromptHookType, ToolHookType,  HttpHeaderPayload,  PromptPosthookPayload, PromptPrehookPayload, ToolPostInvokePayload, ToolPreInvokePayload
 from plugins.regex_filter.search_replace import SearchReplaceConfig
 
 
@@ -31,9 +33,9 @@ async def test_manager_single_transformer_prompt_plugin():
     assert len(srconfig.words) == 2
     assert srconfig.words[0].search == "crap"
     assert srconfig.words[0].replace == "crud"
-    prompt = PromptPrehookPayload(name="test_prompt", args={"user": "What a crapshow!"})
+    prompt = PromptPrehookPayload(prompt_id="test_prompt", args={"user": "What a crapshow!"})
     global_context = GlobalContext(request_id="1", server_id="2")
-    result, contexts = await manager.prompt_pre_fetch(prompt, global_context=global_context)
+    result, contexts = await manager.invoke_hook(PromptHookType.PROMPT_PRE_FETCH, prompt, global_context=global_context)
     assert len(result.modified_payload.args) == 1
     assert result.modified_payload.args["user"] == "What a yikesshow!"
 
@@ -41,9 +43,9 @@ async def test_manager_single_transformer_prompt_plugin():
 
     prompt_result = PromptResult(messages=[message])
 
-    payload_result = PromptPosthookPayload(name="test_prompt", result=prompt_result)
+    payload_result = PromptPosthookPayload(prompt_id="test_prompt", result=prompt_result)
 
-    result, _ = await manager.prompt_post_fetch(payload_result, global_context=global_context, local_contexts=contexts)
+    result, _ = await manager.invoke_hook(PromptHookType.PROMPT_POST_FETCH, payload_result, global_context=global_context, local_contexts=contexts)
     assert len(result.modified_payload.result.messages) == 1
     assert result.modified_payload.result.messages[0].content.text == "What a yikesshow!"
     await manager.shutdown()
@@ -79,9 +81,9 @@ async def test_manager_multiple_transformer_preprompt_plugin():
     assert srconfig.words[0].replace == "crud"
     assert manager.plugin_count == 2
 
-    prompt = PromptPrehookPayload(name="test_prompt", args={"user": "It's always happy at the crapshow."})
+    prompt = PromptPrehookPayload(prompt_id="test_prompt", args={"user": "It's always happy at the crapshow."})
     global_context = GlobalContext(request_id="1", server_id="2")
-    result, contexts = await manager.prompt_pre_fetch(prompt, global_context=global_context)
+    result, contexts = await manager.invoke_hook(PromptHookType.PROMPT_PRE_FETCH, prompt, global_context=global_context)
     assert len(result.modified_payload.args) == 1
     assert result.modified_payload.args["user"] == "It's always gleeful at the yikesshow."
 
@@ -89,9 +91,9 @@ async def test_manager_multiple_transformer_preprompt_plugin():
 
     prompt_result = PromptResult(messages=[message])
 
-    payload_result = PromptPosthookPayload(name="test_prompt", result=prompt_result)
+    payload_result = PromptPosthookPayload(prompt_id="test_prompt", result=prompt_result)
 
-    result, _ = await manager.prompt_post_fetch(payload_result, global_context=global_context, local_contexts=contexts)
+    result, _ = await manager.invoke_hook(PromptHookType.PROMPT_POST_FETCH, payload_result, global_context=global_context, local_contexts=contexts)
     assert len(result.modified_payload.result.messages) == 1
     assert result.modified_payload.result.messages[0].content.text == "It's sullen at the yikes bakery."
     await manager.shutdown()
@@ -102,9 +104,9 @@ async def test_manager_no_plugins():
     manager = PluginManager("./tests/unit/mcpgateway/plugins/fixtures/configs/valid_no_plugin.yaml")
     await manager.initialize()
     assert manager.initialized
-    prompt = PromptPrehookPayload(name="test_prompt", args={"user": "It's always happy at the crapshow."})
+    prompt = PromptPrehookPayload(prompt_id="test_prompt", args={"user": "It's always happy at the crapshow."})
     global_context = GlobalContext(request_id="1", server_id="2")
-    result, _ = await manager.prompt_pre_fetch(prompt, global_context=global_context)
+    result, _ = await manager.invoke_hook(PromptHookType.PROMPT_PRE_FETCH, prompt, global_context=global_context)
     assert result.continue_processing
     assert not result.modified_payload
     await manager.shutdown()
@@ -115,14 +117,14 @@ async def test_manager_filter_plugins():
     manager = PluginManager("./tests/unit/mcpgateway/plugins/fixtures/configs/valid_single_filter_plugin.yaml")
     await manager.initialize()
     assert manager.initialized
-    prompt = PromptPrehookPayload(name="test_prompt", args={"user": "innovative"})
+    prompt = PromptPrehookPayload(prompt_id="test_prompt", args={"user": "innovative"})
     global_context = GlobalContext(request_id="1", server_id="2")
-    result, _ = await manager.prompt_pre_fetch(prompt, global_context=global_context)
+    result, _ = await manager.invoke_hook(PromptHookType.PROMPT_PRE_FETCH, prompt, global_context=global_context)
     assert not result.continue_processing
     assert result.violation
 
     with pytest.raises(PluginViolationError) as ve:
-        result, _ = await manager.prompt_pre_fetch(prompt, global_context=global_context, violations_as_exceptions=True)
+        result, _ = await manager.invoke_hook(PromptHookType.PROMPT_PRE_FETCH, prompt, global_context=global_context, violations_as_exceptions=True)
     assert ve.value.violation
     assert ve.value.violation.reason == "Prompt not allowed"
     await manager.shutdown()
@@ -133,13 +135,13 @@ async def test_manager_multi_filter_plugins():
     manager = PluginManager("./tests/unit/mcpgateway/plugins/fixtures/configs/valid_multiple_plugins_filter.yaml")
     await manager.initialize()
     assert manager.initialized
-    prompt = PromptPrehookPayload(name="test_prompt", args={"user": "innovative crapshow."})
+    prompt = PromptPrehookPayload(prompt_id="test_prompt", args={"user": "innovative crapshow."})
     global_context = GlobalContext(request_id="1", server_id="2")
-    result, _ = await manager.prompt_pre_fetch(prompt, global_context=global_context)
+    result, _ = await manager.invoke_hook(PromptHookType.PROMPT_PRE_FETCH, prompt, global_context=global_context)
     assert not result.continue_processing
     assert result.violation
     with pytest.raises(PluginViolationError) as ve:
-        result, _ = await manager.prompt_pre_fetch(prompt, global_context=global_context, violations_as_exceptions=True)
+        result, _ = await manager.invoke_hook(PromptHookType.PROMPT_PRE_FETCH, prompt, global_context=global_context, violations_as_exceptions=True)
     assert ve.value.violation
     await manager.shutdown()
 
@@ -154,7 +156,7 @@ async def test_manager_tool_hooks_empty():
     # Test tool pre-invoke with no plugins
     tool_payload = ToolPreInvokePayload(name="calculator", args={"operation": "add", "a": 5, "b": 3})
     global_context = GlobalContext(request_id="1", server_id="2")
-    result, contexts = await manager.tool_pre_invoke(tool_payload, global_context=global_context)
+    result, contexts = await manager.invoke_hook(ToolHookType.TOOL_PRE_INVOKE, tool_payload, global_context=global_context)
 
     # Should continue processing with no modifications
     assert result.continue_processing
@@ -164,7 +166,7 @@ async def test_manager_tool_hooks_empty():
 
     # Test tool post-invoke with no plugins
     tool_result_payload = ToolPostInvokePayload(name="calculator", result={"result": 8, "status": "success"})
-    result, contexts = await manager.tool_post_invoke(tool_result_payload, global_context=global_context)
+    result, contexts = await manager.invoke_hook(ToolHookType.TOOL_POST_INVOKE, tool_result_payload, global_context=global_context)
 
     # Should continue processing with no modifications
     assert result.continue_processing
@@ -185,7 +187,7 @@ async def test_manager_tool_hooks_with_transformer_plugin():
     # Test tool pre-invoke - no plugins configured for tool hooks
     tool_payload = ToolPreInvokePayload(name="test_tool", args={"input": "This is crap data"})
     global_context = GlobalContext(request_id="1", server_id="2")
-    result, contexts = await manager.tool_pre_invoke(tool_payload, global_context=global_context)
+    result, contexts = await manager.invoke_hook(ToolHookType.TOOL_PRE_INVOKE, tool_payload, global_context=global_context)
 
     # Should continue processing with no modifications (no plugins for tool hooks)
     assert result.continue_processing
@@ -195,7 +197,7 @@ async def test_manager_tool_hooks_with_transformer_plugin():
 
     # Test tool post-invoke - no plugins configured for tool hooks
     tool_result_payload = ToolPostInvokePayload(name="test_tool", result={"output": "Result with crap in it"})
-    result, _ = await manager.tool_post_invoke(tool_result_payload, global_context=global_context, local_contexts=contexts)
+    result, _ = await manager.invoke_hook(ToolHookType.TOOL_POST_INVOKE, tool_result_payload, global_context=global_context, local_contexts=contexts)
 
     # Should continue processing with no modifications (no plugins for tool hooks)
     assert result.continue_processing
@@ -215,7 +217,7 @@ async def test_manager_tool_hooks_with_actual_plugin():
     # Test tool pre-invoke with transformation - use correct tool name from config
     tool_payload = ToolPreInvokePayload(name="test_tool", args={"input": "This is bad data", "quality": "wrong"})
     global_context = GlobalContext(request_id="1", server_id="2")
-    result, contexts = await manager.tool_pre_invoke(tool_payload, global_context=global_context)
+    result, contexts = await manager.invoke_hook(ToolHookType.TOOL_PRE_INVOKE, tool_payload, global_context=global_context)
 
     # Should continue processing with transformations applied
     assert result.continue_processing
@@ -227,7 +229,7 @@ async def test_manager_tool_hooks_with_actual_plugin():
 
     # Test tool post-invoke with transformation
     tool_result_payload = ToolPostInvokePayload(name="test_tool", result={"output": "Result was bad", "status": "wrong format"})
-    result, _ = await manager.tool_post_invoke(tool_result_payload, global_context=global_context, local_contexts=contexts)
+    result, _ = await manager.invoke_hook(ToolHookType.TOOL_POST_INVOKE, tool_result_payload, global_context=global_context, local_contexts=contexts)
 
     # Should continue processing with transformations applied
     assert result.continue_processing
@@ -250,7 +252,7 @@ async def test_manager_tool_hooks_with_header_mods():
     # Test tool pre-invoke with transformation - use correct tool name from config
     tool_payload = ToolPreInvokePayload(name="test_tool", args={"input": "This is bad data", "quality": "wrong"}, headers=None)
     global_context = GlobalContext(request_id="1", server_id="2")
-    result, contexts = await manager.tool_pre_invoke(tool_payload, global_context=global_context)
+    result, contexts = await manager.invoke_hook(ToolHookType.TOOL_PRE_INVOKE, tool_payload, global_context=global_context)
 
     # Should continue processing with transformations applied
     assert result.continue_processing
@@ -264,9 +266,9 @@ async def test_manager_tool_hooks_with_header_mods():
     assert result.modified_payload.headers["Connection"] == "keep-alive"
 
     # Test tool pre-invoke with transformation - use correct tool name from config
-    tool_payload = ToolPreInvokePayload(name="test_tool", args={"input": "This is bad data", "quality": "wrong"}, headers=HttpHeaderPayload({'Content-Type': 'application/json'}))
+    tool_payload = ToolPreInvokePayload(name="test_tool", args={"input": "This is bad data", "quality": "wrong"}, headers=HttpHeaderPayload({"Content-Type": "application/json"}))
     global_context = GlobalContext(request_id="1", server_id="2")
-    result, contexts = await manager.tool_pre_invoke(tool_payload, global_context=global_context)
+    result, contexts = await manager.invoke_hook(ToolHookType.TOOL_PRE_INVOKE, tool_payload, global_context=global_context)
 
     # Should continue processing with transformations applied
     assert result.continue_processing
@@ -278,6 +280,6 @@ async def test_manager_tool_hooks_with_header_mods():
     assert result.modified_payload.headers
     assert result.modified_payload.headers["User-Agent"] == "Mozilla/5.0"
     assert result.modified_payload.headers["Connection"] == "keep-alive"
-    assert result.modified_payload.headers['Content-Type'] == 'application/json'
+    assert result.modified_payload.headers["Content-Type"] == "application/json"
 
     await manager.shutdown()

@@ -9,20 +9,15 @@ This module tests all team management endpoints including CRUD operations,
 member management, invitations, and join requests.
 """
 
-# Standard
 from datetime import datetime, timedelta, timezone
-from unittest.mock import AsyncMock, MagicMock, Mock, patch
+from unittest.mock import AsyncMock, MagicMock, patch
 from uuid import uuid4
 
-# Third-Party
-import pytest
 from fastapi import HTTPException, status
-from fastapi.testclient import TestClient
+import pytest
 from sqlalchemy.orm import Session
 
-# First-Party
-from mcpgateway.db import EmailTeam, EmailTeamInvitation, EmailTeamJoinRequest, EmailTeamMember, EmailUser
-from mcpgateway.routers.teams import teams_router
+from mcpgateway.db import EmailTeam, EmailTeamInvitation, EmailTeamJoinRequest, EmailTeamMember
 from mcpgateway.schemas import (
     EmailUserResponse,
     TeamCreateRequest,
@@ -34,7 +29,6 @@ from mcpgateway.schemas import (
 from mcpgateway.services.team_invitation_service import TeamInvitationService
 from mcpgateway.services.team_management_service import TeamManagementService
 
-# Test utilities
 from tests.utils.rbac_mocks import patch_rbac_decorators, restore_rbac_decorators
 
 
@@ -57,13 +51,7 @@ class TestTeamsRouter:
     def mock_current_user(self):
         """Create mock current user."""
         user = EmailUserResponse(
-            email="test@example.com",
-            full_name="Test User",
-            is_admin=False,
-            is_active=True,
-            auth_provider="basic",
-            created_at=datetime.now(timezone.utc),
-            last_login=datetime.now(timezone.utc)
+            email="test@example.com", full_name="Test User", is_admin=False, is_active=True, auth_provider="basic", created_at=datetime.now(timezone.utc), last_login=datetime.now(timezone.utc)
         )
         return user
 
@@ -71,26 +59,14 @@ class TestTeamsRouter:
     def mock_admin_user(self):
         """Create mock admin user."""
         user = EmailUserResponse(
-            email="admin@example.com",
-            full_name="Admin User",
-            is_admin=True,
-            is_active=True,
-            auth_provider="basic",
-            created_at=datetime.now(timezone.utc),
-            last_login=datetime.now(timezone.utc)
+            email="admin@example.com", full_name="Admin User", is_admin=True, is_active=True, auth_provider="basic", created_at=datetime.now(timezone.utc), last_login=datetime.now(timezone.utc)
         )
         return user
 
     @pytest.fixture
     def mock_user_context(self, mock_db):
         """Create mock user context with permissions."""
-        return {
-            "email": "test@example.com",
-            "full_name": "Test User",
-            "is_admin": False,
-            "db": mock_db,
-            "permissions": ["teams.create", "teams.read", "teams.update", "teams.delete"]
-        }
+        return {"email": "test@example.com", "full_name": "Test User", "is_admin": False, "db": mock_db, "permissions": ["teams.create", "teams.read", "teams.update", "teams.delete"]}
 
     @pytest.fixture
     def mock_admin_context(self, mock_db):
@@ -100,7 +76,7 @@ class TestTeamsRouter:
             "full_name": "Admin User",
             "is_admin": True,
             "db": mock_db,
-            "permissions": ["*"]  # Admin has all permissions
+            "permissions": ["*"],  # Admin has all permissions
         }
 
     @pytest.fixture
@@ -188,14 +164,9 @@ class TestTeamsRouter:
     @pytest.mark.asyncio
     async def test_create_team_success(self, mock_user_context, mock_team):
         """Test successful team creation."""
-        request = TeamCreateRequest(
-            name="New Team",
-            description="A new team",
-            visibility="private",
-            max_members=50
-        )
+        request = TeamCreateRequest(name="New Team", description="A new team", visibility="private", max_members=50)
 
-        with patch('mcpgateway.routers.teams.TeamManagementService') as MockService:
+        with patch("mcpgateway.routers.teams.TeamManagementService") as MockService:
             mock_service = AsyncMock(spec=TeamManagementService)
             mock_service.create_team = AsyncMock(return_value=mock_team)
             MockService.return_value = mock_service
@@ -209,11 +180,7 @@ class TestTeamsRouter:
             assert result.name == mock_team.name
             assert result.description == mock_team.description
             mock_service.create_team.assert_called_once_with(
-                name=request.name,
-                description=request.description,
-                created_by=mock_user_context["email"],
-                visibility=request.visibility,
-                max_members=request.max_members
+                name=request.name, description=request.description, created_by=mock_user_context["email"], visibility=request.visibility, max_members=request.max_members
             )
 
     @pytest.mark.asyncio
@@ -223,10 +190,10 @@ class TestTeamsRouter:
             name="Valid Name",  # Valid name to pass Pydantic validation
             description="A new team",
             visibility="private",
-            max_members=50
+            max_members=50,
         )
 
-        with patch('mcpgateway.routers.teams.TeamManagementService') as MockService:
+        with patch("mcpgateway.routers.teams.TeamManagementService") as MockService:
             mock_service = AsyncMock(spec=TeamManagementService)
             mock_service.create_team = AsyncMock(side_effect=ValueError("Service validation error"))
             MockService.return_value = mock_service
@@ -242,14 +209,9 @@ class TestTeamsRouter:
     @pytest.mark.asyncio
     async def test_create_team_unexpected_error(self, mock_user_context):
         """Test team creation with unexpected error."""
-        request = TeamCreateRequest(
-            name="New Team",
-            description="A new team",
-            visibility="private",
-            max_members=50
-        )
+        request = TeamCreateRequest(name="New Team", description="A new team", visibility="private", max_members=50)
 
-        with patch('mcpgateway.routers.teams.TeamManagementService') as MockService:
+        with patch("mcpgateway.routers.teams.TeamManagementService") as MockService:
             mock_service = AsyncMock(spec=TeamManagementService)
             mock_service.create_team = AsyncMock(side_effect=Exception("Database error"))
             MockService.return_value = mock_service
@@ -268,7 +230,7 @@ class TestTeamsRouter:
         teams = [mock_team]
         total = 1
 
-        with patch('mcpgateway.routers.teams.TeamManagementService') as MockService:
+        with patch("mcpgateway.routers.teams.TeamManagementService") as MockService:
             mock_service = AsyncMock(spec=TeamManagementService)
             mock_service.list_teams = AsyncMock(return_value=(teams, total))
             MockService.return_value = mock_service
@@ -287,7 +249,7 @@ class TestTeamsRouter:
         """Test listing teams as regular user (sees only their teams)."""
         user_teams = [mock_team]
 
-        with patch('mcpgateway.routers.teams.TeamManagementService') as MockService:
+        with patch("mcpgateway.routers.teams.TeamManagementService") as MockService:
             mock_service = AsyncMock(spec=TeamManagementService)
             mock_service.get_user_teams = AsyncMock(return_value=user_teams)
             MockService.return_value = mock_service
@@ -299,10 +261,7 @@ class TestTeamsRouter:
             assert len(result.teams) == 1
             assert result.total == 1
             assert result.teams[0].id == mock_team.id
-            mock_service.get_user_teams.assert_called_once_with(
-                mock_user_context["email"],
-                include_personal=True
-            )
+            mock_service.get_user_teams.assert_called_once_with(mock_user_context["email"], include_personal=True)
 
     @pytest.mark.asyncio
     async def test_list_teams_with_pagination(self, mock_user_context):
@@ -319,13 +278,13 @@ class TestTeamsRouter:
             team.is_personal = False
             team.visibility = "private"
             team.max_members = 100
-            team.created_at = datetime.utcnow()
-            team.updated_at = datetime.utcnow()
+            team.created_at = datetime.now(timezone.utc)
+            team.updated_at = datetime.now(timezone.utc)
             team.is_active = True
             team.get_member_count = MagicMock(return_value=1)
             teams.append(team)
 
-        with patch('mcpgateway.routers.teams.TeamManagementService') as MockService:
+        with patch("mcpgateway.routers.teams.TeamManagementService") as MockService:
             mock_service = AsyncMock(spec=TeamManagementService)
             mock_service.get_user_teams = AsyncMock(return_value=teams)
             MockService.return_value = mock_service
@@ -343,7 +302,7 @@ class TestTeamsRouter:
     @pytest.mark.asyncio
     async def test_list_teams_error(self, mock_user_context):
         """Test listing teams with error."""
-        with patch('mcpgateway.routers.teams.TeamManagementService') as MockService:
+        with patch("mcpgateway.routers.teams.TeamManagementService") as MockService:
             mock_service = AsyncMock(spec=TeamManagementService)
             mock_service.get_user_teams = AsyncMock(side_effect=Exception("Database error"))
             MockService.return_value = mock_service
@@ -361,7 +320,7 @@ class TestTeamsRouter:
         """Test getting a specific team successfully."""
         team_id = mock_team.id
 
-        with patch('mcpgateway.routers.teams.TeamManagementService') as MockService:
+        with patch("mcpgateway.routers.teams.TeamManagementService") as MockService:
             mock_service = AsyncMock(spec=TeamManagementService)
             mock_service.get_team_by_id = AsyncMock(return_value=mock_team)
             mock_service.get_user_role_in_team = AsyncMock(return_value="member")
@@ -369,10 +328,9 @@ class TestTeamsRouter:
 
             # Mock the entire decorated function to bypass RBAC
             from mcpgateway.routers.teams import TeamResponse
-            from mcpgateway.routers.teams import get_team
 
             async def mock_get_team(team_id, current_user, db):
-                service = TeamManagementService(db)
+                _ = TeamManagementService(db)
                 team = await mock_service.get_team_by_id(team_id)
                 if not team:
                     raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Team not found")
@@ -394,23 +352,20 @@ class TestTeamsRouter:
                     is_active=team.is_active,
                 )
 
-            with patch('mcpgateway.routers.teams.get_team', new=mock_get_team):
+            with patch("mcpgateway.routers.teams.get_team", new=mock_get_team):
                 result = await mock_get_team(team_id, mock_current_user, mock_db)
 
             assert result.id == mock_team.id
             assert result.name == mock_team.name
             mock_service.get_team_by_id.assert_called_once_with(team_id)
-            mock_service.get_user_role_in_team.assert_called_once_with(
-                mock_current_user.email,
-                team_id
-            )
+            mock_service.get_user_role_in_team.assert_called_once_with(mock_current_user.email, team_id)
 
     @pytest.mark.asyncio
     async def test_get_team_not_found(self, mock_current_user, mock_db):
         """Test getting a non-existent team."""
         team_id = str(uuid4())
 
-        with patch('mcpgateway.routers.teams.TeamManagementService') as MockService:
+        with patch("mcpgateway.routers.teams.TeamManagementService") as MockService:
             mock_service = AsyncMock(spec=TeamManagementService)
             mock_service.get_team_by_id = AsyncMock(return_value=None)
             MockService.return_value = mock_service
@@ -428,7 +383,7 @@ class TestTeamsRouter:
         """Test getting a team without access."""
         team_id = mock_team.id
 
-        with patch('mcpgateway.routers.teams.TeamManagementService') as MockService:
+        with patch("mcpgateway.routers.teams.TeamManagementService") as MockService:
             mock_service = AsyncMock(spec=TeamManagementService)
             mock_service.get_team_by_id = AsyncMock(return_value=mock_team)
             mock_service.get_user_role_in_team = AsyncMock(return_value=None)
@@ -446,14 +401,9 @@ class TestTeamsRouter:
     async def test_update_team_success(self, mock_current_user, mock_db, mock_team):
         """Test updating a team successfully."""
         team_id = mock_team.id
-        request = TeamUpdateRequest(
-            name="Updated Team",
-            description="Updated description",
-            visibility="public",
-            max_members=200
-        )
+        request = TeamUpdateRequest(name="Updated Team", description="Updated description", visibility="public", max_members=200)
 
-        with patch('mcpgateway.routers.teams.TeamManagementService') as MockService:
+        with patch("mcpgateway.routers.teams.TeamManagementService") as MockService:
             mock_service = AsyncMock(spec=TeamManagementService)
             mock_service.get_user_role_in_team = AsyncMock(return_value="owner")
             mock_service.update_team = AsyncMock(return_value=mock_team)
@@ -464,26 +414,15 @@ class TestTeamsRouter:
             result = await update_team(team_id, request, current_user=mock_current_user, db=mock_db)
 
             assert result.id == mock_team.id
-            mock_service.update_team.assert_called_once_with(
-                team_id=team_id,
-                name=request.name,
-                description=request.description,
-                visibility=request.visibility,
-                max_members=request.max_members
-            )
+            mock_service.update_team.assert_called_once_with(team_id=team_id, name=request.name, description=request.description, visibility=request.visibility, max_members=request.max_members)
 
     @pytest.mark.asyncio
     async def test_update_team_insufficient_permissions(self, mock_current_user, mock_db):
         """Test updating a team without owner permissions."""
         team_id = str(uuid4())
-        request = TeamUpdateRequest(
-            name="Updated Team",
-            description="Updated description",
-            visibility="public",
-            max_members=200
-        )
+        request = TeamUpdateRequest(name="Updated Team", description="Updated description", visibility="public", max_members=200)
 
-        with patch('mcpgateway.routers.teams.TeamManagementService') as MockService:
+        with patch("mcpgateway.routers.teams.TeamManagementService") as MockService:
             mock_service = AsyncMock(spec=TeamManagementService)
             mock_service.get_user_role_in_team = AsyncMock(return_value="member")
             MockService.return_value = mock_service
@@ -500,14 +439,9 @@ class TestTeamsRouter:
     async def test_update_team_not_found(self, mock_current_user, mock_db):
         """Test updating a non-existent team."""
         team_id = str(uuid4())
-        request = TeamUpdateRequest(
-            name="Updated Team",
-            description="Updated description",
-            visibility="public",
-            max_members=200
-        )
+        request = TeamUpdateRequest(name="Updated Team", description="Updated description", visibility="public", max_members=200)
 
-        with patch('mcpgateway.routers.teams.TeamManagementService') as MockService:
+        with patch("mcpgateway.routers.teams.TeamManagementService") as MockService:
             mock_service = AsyncMock(spec=TeamManagementService)
             mock_service.get_user_role_in_team = AsyncMock(return_value="owner")
             mock_service.update_team = AsyncMock(return_value=None)
@@ -526,7 +460,7 @@ class TestTeamsRouter:
         """Test deleting a team successfully."""
         team_id = str(uuid4())
 
-        with patch('mcpgateway.routers.teams.TeamManagementService') as MockService:
+        with patch("mcpgateway.routers.teams.TeamManagementService") as MockService:
             mock_service = AsyncMock(spec=TeamManagementService)
             mock_service.get_user_role_in_team = AsyncMock(return_value="owner")
             mock_service.delete_team = AsyncMock(return_value=True)
@@ -544,7 +478,7 @@ class TestTeamsRouter:
         """Test deleting a team without owner permissions."""
         team_id = str(uuid4())
 
-        with patch('mcpgateway.routers.teams.TeamManagementService') as MockService:
+        with patch("mcpgateway.routers.teams.TeamManagementService") as MockService:
             mock_service = AsyncMock(spec=TeamManagementService)
             mock_service.get_user_role_in_team = AsyncMock(return_value="member")
             MockService.return_value = mock_service
@@ -562,7 +496,7 @@ class TestTeamsRouter:
         """Test deleting a non-existent team."""
         team_id = str(uuid4())
 
-        with patch('mcpgateway.routers.teams.TeamManagementService') as MockService:
+        with patch("mcpgateway.routers.teams.TeamManagementService") as MockService:
             mock_service = AsyncMock(spec=TeamManagementService)
             mock_service.get_user_role_in_team = AsyncMock(return_value="owner")
             mock_service.delete_team = AsyncMock(return_value=False)
@@ -586,7 +520,7 @@ class TestTeamsRouter:
         team_id = str(uuid4())
         members = [mock_team_member]
 
-        with patch('mcpgateway.routers.teams.TeamManagementService') as MockService:
+        with patch("mcpgateway.routers.teams.TeamManagementService") as MockService:
             mock_service = AsyncMock(spec=TeamManagementService)
             mock_service.get_user_role_in_team = AsyncMock(return_value="member")
             mock_service.get_team_members = AsyncMock(return_value=members)
@@ -605,7 +539,7 @@ class TestTeamsRouter:
         """Test listing team members without access."""
         team_id = str(uuid4())
 
-        with patch('mcpgateway.routers.teams.TeamManagementService') as MockService:
+        with patch("mcpgateway.routers.teams.TeamManagementService") as MockService:
             mock_service = AsyncMock(spec=TeamManagementService)
             mock_service.get_user_role_in_team = AsyncMock(return_value=None)
             MockService.return_value = mock_service
@@ -628,7 +562,7 @@ class TestTeamsRouter:
 
         mock_team_member.role = "owner"  # Updated role
 
-        with patch('mcpgateway.routers.teams.TeamManagementService') as MockService:
+        with patch("mcpgateway.routers.teams.TeamManagementService") as MockService:
             mock_service = AsyncMock(spec=TeamManagementService)
             mock_service.get_user_role_in_team = AsyncMock(return_value="owner")
             mock_service.update_member_role = AsyncMock(return_value=mock_team_member)
@@ -649,7 +583,7 @@ class TestTeamsRouter:
         user_email = "member@example.com"
         request = TeamMemberUpdateRequest(role="owner")
 
-        with patch('mcpgateway.routers.teams.TeamManagementService') as MockService:
+        with patch("mcpgateway.routers.teams.TeamManagementService") as MockService:
             mock_service = AsyncMock(spec=TeamManagementService)
             mock_service.get_user_role_in_team = AsyncMock(return_value="member")
             MockService.return_value = mock_service
@@ -670,7 +604,7 @@ class TestTeamsRouter:
         user_email = "nonexistent@example.com"
         request = TeamMemberUpdateRequest(role="owner")
 
-        with patch('mcpgateway.routers.teams.TeamManagementService') as MockService:
+        with patch("mcpgateway.routers.teams.TeamManagementService") as MockService:
             mock_service = AsyncMock(spec=TeamManagementService)
             mock_service.get_user_role_in_team = AsyncMock(return_value="owner")
             mock_service.update_member_role = AsyncMock(return_value=None)
@@ -690,7 +624,7 @@ class TestTeamsRouter:
         team_id = str(uuid4())
         user_email = "member@example.com"
 
-        with patch('mcpgateway.routers.teams.TeamManagementService') as MockService:
+        with patch("mcpgateway.routers.teams.TeamManagementService") as MockService:
             mock_service = AsyncMock(spec=TeamManagementService)
             mock_service.get_user_role_in_team = AsyncMock(return_value="owner")
             mock_service.remove_member_from_team = AsyncMock(return_value=True)
@@ -709,7 +643,7 @@ class TestTeamsRouter:
         team_id = str(uuid4())
         user_email = mock_current_user.email  # Removing self
 
-        with patch('mcpgateway.routers.teams.TeamManagementService') as MockService:
+        with patch("mcpgateway.routers.teams.TeamManagementService") as MockService:
             mock_service = AsyncMock(spec=TeamManagementService)
             mock_service.get_user_role_in_team = AsyncMock(return_value="member")
             mock_service.remove_member_from_team = AsyncMock(return_value=True)
@@ -727,7 +661,7 @@ class TestTeamsRouter:
         team_id = str(uuid4())
         user_email = "other@example.com"  # Trying to remove someone else
 
-        with patch('mcpgateway.routers.teams.TeamManagementService') as MockService:
+        with patch("mcpgateway.routers.teams.TeamManagementService") as MockService:
             mock_service = AsyncMock(spec=TeamManagementService)
             mock_service.get_user_role_in_team = AsyncMock(return_value="member")
             MockService.return_value = mock_service
@@ -748,14 +682,9 @@ class TestTeamsRouter:
     async def test_invite_team_member_success(self, mock_current_user, mock_db, mock_invitation, mock_team):
         """Test inviting a user to join a team."""
         team_id = mock_team.id
-        request = TeamInviteRequest(
-            email="invited@example.com",
-            role="member"
-        )
+        request = TeamInviteRequest(email="invited@example.com", role="member")
 
-        with patch('mcpgateway.routers.teams.TeamManagementService') as MockTeamService, \
-             patch('mcpgateway.routers.teams.TeamInvitationService') as MockInviteService:
-
+        with patch("mcpgateway.routers.teams.TeamManagementService") as MockTeamService, patch("mcpgateway.routers.teams.TeamInvitationService") as MockInviteService:
             mock_team_service = AsyncMock(spec=TeamManagementService)
             mock_team_service.get_user_role_in_team = AsyncMock(return_value="owner")
             mock_team_service.get_team_by_id = AsyncMock(return_value=mock_team)
@@ -778,12 +707,9 @@ class TestTeamsRouter:
     async def test_invite_team_member_insufficient_permissions(self, mock_current_user, mock_db):
         """Test inviting a user without owner permissions."""
         team_id = str(uuid4())
-        request = TeamInviteRequest(
-            email="invited@example.com",
-            role="member"
-        )
+        request = TeamInviteRequest(email="invited@example.com", role="member")
 
-        with patch('mcpgateway.routers.teams.TeamManagementService') as MockTeamService:
+        with patch("mcpgateway.routers.teams.TeamManagementService") as MockTeamService:
             mock_team_service = AsyncMock(spec=TeamManagementService)
             mock_team_service.get_user_role_in_team = AsyncMock(return_value="member")
             MockTeamService.return_value = mock_team_service
@@ -802,9 +728,7 @@ class TestTeamsRouter:
         team_id = mock_team.id
         invitations = [mock_invitation]
 
-        with patch('mcpgateway.routers.teams.TeamManagementService') as MockTeamService, \
-             patch('mcpgateway.routers.teams.TeamInvitationService') as MockInviteService:
-
+        with patch("mcpgateway.routers.teams.TeamManagementService") as MockTeamService, patch("mcpgateway.routers.teams.TeamInvitationService") as MockInviteService:
             mock_team_service = AsyncMock(spec=TeamManagementService)
             mock_team_service.get_user_role_in_team = AsyncMock(return_value="owner")
             mock_team_service.get_team_by_id = AsyncMock(return_value=mock_team)
@@ -827,7 +751,7 @@ class TestTeamsRouter:
         """Test accepting a team invitation."""
         token = "test-token-123"
 
-        with patch('mcpgateway.routers.teams.TeamInvitationService') as MockInviteService:
+        with patch("mcpgateway.routers.teams.TeamInvitationService") as MockInviteService:
             mock_invite_service = AsyncMock(spec=TeamInvitationService)
             mock_invite_service.accept_invitation = AsyncMock(return_value=mock_team_member)
             MockInviteService.return_value = mock_invite_service
@@ -845,7 +769,7 @@ class TestTeamsRouter:
         """Test accepting an invitation with invalid token."""
         token = "invalid-token"
 
-        with patch('mcpgateway.routers.teams.TeamInvitationService') as MockInviteService:
+        with patch("mcpgateway.routers.teams.TeamInvitationService") as MockInviteService:
             mock_invite_service = AsyncMock(spec=TeamInvitationService)
             mock_invite_service.accept_invitation = AsyncMock(return_value=None)
             MockInviteService.return_value = mock_invite_service
@@ -870,9 +794,7 @@ class TestTeamsRouter:
         mock_filter.first = MagicMock(return_value=mock_invitation)
         mock_db.query = MagicMock(return_value=mock_query)
 
-        with patch('mcpgateway.routers.teams.TeamManagementService') as MockTeamService, \
-             patch('mcpgateway.routers.teams.TeamInvitationService') as MockInviteService:
-
+        with patch("mcpgateway.routers.teams.TeamManagementService") as MockTeamService, patch("mcpgateway.routers.teams.TeamInvitationService") as MockInviteService:
             mock_team_service = AsyncMock(spec=TeamManagementService)
             mock_team_service.get_user_role_in_team = AsyncMock(return_value="owner")
             MockTeamService.return_value = mock_team_service
@@ -896,7 +818,7 @@ class TestTeamsRouter:
         """Test discovering public teams."""
         public_teams = [mock_public_team]
 
-        with patch('mcpgateway.routers.teams.TeamManagementService') as MockService:
+        with patch("mcpgateway.routers.teams.TeamManagementService") as MockService:
             mock_service = AsyncMock(spec=TeamManagementService)
             mock_service.discover_public_teams = AsyncMock(return_value=public_teams)
             MockService.return_value = mock_service
@@ -915,7 +837,7 @@ class TestTeamsRouter:
         team_id = mock_public_team.id
         join_request = TeamJoinRequest(message="I'd like to join")
 
-        with patch('mcpgateway.routers.teams.TeamManagementService') as MockService:
+        with patch("mcpgateway.routers.teams.TeamManagementService") as MockService:
             mock_service = AsyncMock(spec=TeamManagementService)
             mock_service.get_team_by_id = AsyncMock(return_value=mock_public_team)
             mock_service.get_user_role_in_team = AsyncMock(return_value=None)  # Not a member
@@ -936,7 +858,7 @@ class TestTeamsRouter:
         team_id = mock_team.id  # Private team
         join_request = TeamJoinRequest(message="I'd like to join")
 
-        with patch('mcpgateway.routers.teams.TeamManagementService') as MockService:
+        with patch("mcpgateway.routers.teams.TeamManagementService") as MockService:
             mock_service = AsyncMock(spec=TeamManagementService)
             mock_service.get_team_by_id = AsyncMock(return_value=mock_team)
             MockService.return_value = mock_service
@@ -955,7 +877,7 @@ class TestTeamsRouter:
         team_id = mock_public_team.id
         join_request = TeamJoinRequest(message="I'd like to join")
 
-        with patch('mcpgateway.routers.teams.TeamManagementService') as MockService:
+        with patch("mcpgateway.routers.teams.TeamManagementService") as MockService:
             mock_service = AsyncMock(spec=TeamManagementService)
             mock_service.get_team_by_id = AsyncMock(return_value=mock_public_team)
             mock_service.get_user_role_in_team = AsyncMock(return_value="member")  # Already a member
@@ -974,7 +896,7 @@ class TestTeamsRouter:
         """Test leaving a team successfully."""
         team_id = mock_team.id
 
-        with patch('mcpgateway.routers.teams.TeamManagementService') as MockService:
+        with patch("mcpgateway.routers.teams.TeamManagementService") as MockService:
             mock_service = AsyncMock(spec=TeamManagementService)
             mock_service.get_team_by_id = AsyncMock(return_value=mock_team)
             mock_service.get_user_role_in_team = AsyncMock(return_value="member")
@@ -994,7 +916,7 @@ class TestTeamsRouter:
         personal_team.id = str(uuid4())
         personal_team.is_personal = True
 
-        with patch('mcpgateway.routers.teams.TeamManagementService') as MockService:
+        with patch("mcpgateway.routers.teams.TeamManagementService") as MockService:
             mock_service = AsyncMock(spec=TeamManagementService)
             mock_service.get_team_by_id = AsyncMock(return_value=personal_team)
             MockService.return_value = mock_service
@@ -1013,7 +935,7 @@ class TestTeamsRouter:
         team_id = mock_public_team.id
         join_requests = [mock_join_request]
 
-        with patch('mcpgateway.routers.teams.TeamManagementService') as MockService:
+        with patch("mcpgateway.routers.teams.TeamManagementService") as MockService:
             mock_service = AsyncMock(spec=TeamManagementService)
             mock_service.get_team_by_id = AsyncMock(return_value=mock_public_team)
             mock_service.get_user_role_in_team = AsyncMock(return_value="owner")
@@ -1034,7 +956,7 @@ class TestTeamsRouter:
         team_id = mock_public_team.id
         request_id = str(uuid4())
 
-        with patch('mcpgateway.routers.teams.TeamManagementService') as MockService:
+        with patch("mcpgateway.routers.teams.TeamManagementService") as MockService:
             mock_service = AsyncMock(spec=TeamManagementService)
             mock_service.get_team_by_id = AsyncMock(return_value=mock_public_team)
             mock_service.get_user_role_in_team = AsyncMock(return_value="owner")
@@ -1054,7 +976,7 @@ class TestTeamsRouter:
         team_id = mock_public_team.id
         request_id = str(uuid4())
 
-        with patch('mcpgateway.routers.teams.TeamManagementService') as MockService:
+        with patch("mcpgateway.routers.teams.TeamManagementService") as MockService:
             mock_service = AsyncMock(spec=TeamManagementService)
             mock_service.get_team_by_id = AsyncMock(return_value=mock_public_team)
             mock_service.get_user_role_in_team = AsyncMock(return_value="owner")
@@ -1073,7 +995,7 @@ class TestTeamsRouter:
         team_id = mock_public_team.id
         request_id = str(uuid4())
 
-        with patch('mcpgateway.routers.teams.TeamManagementService') as MockService:
+        with patch("mcpgateway.routers.teams.TeamManagementService") as MockService:
             mock_service = AsyncMock(spec=TeamManagementService)
             mock_service.get_team_by_id = AsyncMock(return_value=mock_public_team)
             mock_service.get_user_role_in_team = AsyncMock(return_value="member")
@@ -1096,7 +1018,7 @@ class TestTeamsRouter:
         """Test handling of database errors in team operations."""
         team_id = str(uuid4())
 
-        with patch('mcpgateway.routers.teams.TeamManagementService') as MockService:
+        with patch("mcpgateway.routers.teams.TeamManagementService") as MockService:
             mock_service = AsyncMock(spec=TeamManagementService)
             mock_service.get_team_by_id = AsyncMock(side_effect=Exception("Database connection lost"))
             MockService.return_value = mock_service
@@ -1116,12 +1038,10 @@ class TestTeamsRouter:
         team_id = str(uuid4())
         request = TeamInviteRequest(
             email="valid@example.com",  # Valid email format to pass Pydantic validation
-            role="member"
+            role="member",
         )
 
-        with patch('mcpgateway.routers.teams.TeamManagementService') as MockTeamService, \
-             patch('mcpgateway.routers.teams.TeamInvitationService') as MockInviteService:
-
+        with patch("mcpgateway.routers.teams.TeamManagementService") as MockTeamService, patch("mcpgateway.routers.teams.TeamInvitationService") as MockInviteService:
             mock_team_service = AsyncMock(spec=TeamManagementService)
             mock_team_service.get_user_role_in_team = AsyncMock(return_value="owner")
             MockTeamService.return_value = mock_team_service
@@ -1146,7 +1066,7 @@ class TestTeamsRouter:
         user_email = "member@example.com"
         request = TeamMemberUpdateRequest(role="member")  # Valid role
 
-        with patch('mcpgateway.routers.teams.TeamManagementService') as MockService:
+        with patch("mcpgateway.routers.teams.TeamManagementService") as MockService:
             mock_service = AsyncMock(spec=TeamManagementService)
             mock_service.get_user_role_in_team = AsyncMock(return_value="owner")
             mock_service.update_member_role = AsyncMock(side_effect=ValueError("Invalid role"))

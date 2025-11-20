@@ -129,6 +129,7 @@ It currently supports:
 
 * Federation across multiple MCP and REST services
 * **A2A (Agent-to-Agent) integration** for external AI agents (OpenAI, Anthropic, custom)
+* **gRPC-to-MCP translation** via automatic reflection-based service discovery
 * Virtualization of legacy APIs as MCP-compliant tools and servers
 * Transport over HTTP, JSON-RPC, WebSocket, SSE (with configurable keepalive), stdio and streamable-HTTP
 * An Admin UI for real-time management, configuration, and log monitoring
@@ -169,6 +170,8 @@ For a list of upcoming features, check out the [ContextForge Roadmap](https://ib
 
 * Wraps non-MCP services as virtual MCP servers
 * Registers tools, prompts, and resources with minimal configuration
+* **gRPC-to-MCP translation** via server reflection protocol
+* Automatic service discovery and method introspection
 
 </details>
 
@@ -483,7 +486,7 @@ docker run -d --name mcpgateway \
   -e PLATFORM_ADMIN_FULL_NAME="Platform Administrator" \
   -e DATABASE_URL=sqlite:///./mcp.db \
   -e SECURE_COOKIES=false \
-  ghcr.io/ibm/mcp-context-forge:0.8.0
+  ghcr.io/ibm/mcp-context-forge:0.9.0
 
 # Note: when not running over SSL, use SECURE_COOKIES=false to prevent the browser denying access.
 
@@ -491,7 +494,7 @@ docker run -d --name mcpgateway \
 docker logs -f mcpgateway
 
 # Generating an API key
-docker run --rm -it ghcr.io/ibm/mcp-context-forge:0.8.0 \
+docker run --rm -it ghcr.io/ibm/mcp-context-forge:0.9.0 \
   python3 -m mcpgateway.utils.create_jwt_token --username admin@example.com --exp 0 --secret my-test-key
 ```
 
@@ -522,7 +525,7 @@ docker run -d --name mcpgateway \
   -e PLATFORM_ADMIN_EMAIL=admin@example.com \
   -e PLATFORM_ADMIN_PASSWORD=changeme \
   -e PLATFORM_ADMIN_FULL_NAME="Platform Administrator" \
-  ghcr.io/ibm/mcp-context-forge:0.8.0
+  ghcr.io/ibm/mcp-context-forge:0.9.0
 ```
 
 SQLite now lives on the host at `./data/mcp.db`.
@@ -549,7 +552,7 @@ docker run -d --name mcpgateway \
   -e PLATFORM_ADMIN_PASSWORD=changeme \
   -e PLATFORM_ADMIN_FULL_NAME="Platform Administrator" \
   -v $(pwd)/data:/data \
-  ghcr.io/ibm/mcp-context-forge:0.8.0
+  ghcr.io/ibm/mcp-context-forge:0.9.0
 ```
 
 Using `--network=host` allows Docker to access the local network, allowing you to add MCP servers running on your host. See [Docker Host network driver documentation](https://docs.docker.com/engine/network/drivers/host/) for more details.
@@ -565,7 +568,7 @@ podman run -d --name mcpgateway \
   -p 4444:4444 \
   -e HOST=0.0.0.0 \
   -e DATABASE_URL=sqlite:///./mcp.db \
-  ghcr.io/ibm/mcp-context-forge:0.8.0
+  ghcr.io/ibm/mcp-context-forge:0.9.0
 ```
 
 #### 2 - Persist SQLite
@@ -584,7 +587,7 @@ podman run -d --name mcpgateway \
   -p 4444:4444 \
   -v $(pwd)/data:/data \
   -e DATABASE_URL=sqlite:////data/mcp.db \
-  ghcr.io/ibm/mcp-context-forge:0.8.0
+  ghcr.io/ibm/mcp-context-forge:0.9.0
 ```
 
 #### 3 - Host networking (rootless)
@@ -602,7 +605,7 @@ podman run -d --name mcpgateway \
   --network=host \
   -v $(pwd)/data:/data \
   -e DATABASE_URL=sqlite:////data/mcp.db \
-  ghcr.io/ibm/mcp-context-forge:0.8.0
+  ghcr.io/ibm/mcp-context-forge:0.9.0
 ```
 
 ---
@@ -611,7 +614,7 @@ podman run -d --name mcpgateway \
 <summary><strong>✏️ Docker/Podman tips</strong></summary>
 
 * **.env files** - Put all the `-e FOO=` lines into a file and replace them with `--env-file .env`. See the provided [.env.example](https://github.com/IBM/mcp-context-forge/blob/main/.env.example) for reference.
-* **Pinned tags** - Use an explicit version (e.g. `v0.8.0`) instead of `latest` for reproducible builds.
+* **Pinned tags** - Use an explicit version (e.g. `v0.9.0`) instead of `latest` for reproducible builds.
 * **JWT tokens** - Generate one in the running container:
 
   ```bash
@@ -657,7 +660,7 @@ docker run --rm -i \
   -e MCP_SERVER_URL=http://host.docker.internal:4444/servers/UUID_OF_SERVER_1/mcp \
   -e MCP_TOOL_CALL_TIMEOUT=120 \
   -e MCP_WRAPPER_LOG_LEVEL=DEBUG \
-  ghcr.io/ibm/mcp-context-forge:0.8.0 \
+  ghcr.io/ibm/mcp-context-forge:0.9.0 \
   python3 -m mcpgateway.wrapper
 ```
 
@@ -705,7 +708,7 @@ python3 -m mcpgateway.wrapper
 <summary><strong>Expected responses from mcpgateway.wrapper</strong></summary>
 
 ```json
-{"jsonrpc":"2.0","id":1,"result":{"protocolVersion":"2025-03-26","capabilities":{"experimental":{},"prompts":{"listChanged":false},"resources":{"subscribe":false,"listChanged":false},"tools":{"listChanged":false}},"serverInfo":{"name":"mcpgateway-wrapper","version":"0.8.0"}}}
+{"jsonrpc":"2.0","id":1,"result":{"protocolVersion":"2025-03-26","capabilities":{"experimental":{},"prompts":{"listChanged":false},"resources":{"subscribe":false,"listChanged":false},"tools":{"listChanged":false}},"serverInfo":{"name":"mcpgateway-wrapper","version":"0.9.0"}}}
 
 # When there's no tools
 {"jsonrpc":"2.0","id":2,"result":{"tools":[]}}
@@ -739,7 +742,7 @@ docker run -i --rm \
   -e MCP_SERVER_URL=http://localhost:4444/servers/UUID_OF_SERVER_1/mcp \
   -e MCP_AUTH=${MCP_AUTH} \
   -e MCP_TOOL_CALL_TIMEOUT=120 \
-  ghcr.io/ibm/mcp-context-forge:0.8.0 \
+  ghcr.io/ibm/mcp-context-forge:0.9.0 \
   python3 -m mcpgateway.wrapper
 ```
 
@@ -1182,6 +1185,108 @@ You can get started by copying the provided [.env.example](https://github.com/IB
 - `MCPGATEWAY_A2A_ENABLED=false`: Completely disables A2A features (API endpoints return 404, admin tab hidden)
 - `MCPGATEWAY_A2A_METRICS_ENABLED=false`: Disables metrics collection while keeping functionality
 
+### LLM Chat MCP Client
+
+The LLM Chat MCP Client allows you to interact with MCP servers using conversational AI from multiple LLM providers. This feature enables natural language interaction with tools, resources, and prompts exposed by MCP servers.
+
+| Setting                        | Description                            | Default | Options |
+| ------------------------------ | -------------------------------------- | ------- | ------- |
+| `LLMCHAT_ENABLED`             | Enable LLM Chat functionality          | `false` | bool    |
+| `LLM_PROVIDER`                | LLM provider selection                 | `azure_openai` | `azure_openai`, `openai`, `anthropic`, `aws_bedrock`, `ollama` |
+
+**Azure OpenAI Configuration:**
+
+| Setting                        | Description                            | Default | Options |
+| ------------------------------ | -------------------------------------- | ------- | ------- |
+| `AZURE_OPENAI_ENDPOINT`       | Azure OpenAI endpoint URL              | (none)  | string  |
+| `AZURE_OPENAI_API_KEY`        | Azure OpenAI API key                   | (none)  | string  |
+| `AZURE_OPENAI_DEPLOYMENT`     | Azure OpenAI deployment name           | (none)  | string  |
+| `AZURE_OPENAI_API_VERSION`    | Azure OpenAI API version               | `2024-02-15-preview` | string |
+| `AZURE_OPENAI_TEMPERATURE`    | Sampling temperature                   | `0.7`   | float (0.0-2.0) |
+| `AZURE_OPENAI_MAX_TOKENS`     | Maximum tokens to generate             | (none)  | int     |
+
+**OpenAI Configuration:**
+
+| Setting                        | Description                            | Default | Options |
+| ------------------------------ | -------------------------------------- | ------- | ------- |
+| `OPENAI_API_KEY`              | OpenAI API key                         | (none)  | string  |
+| `OPENAI_MODEL`                | OpenAI model name                      | `gpt-4o-mini` | string |
+| `OPENAI_BASE_URL`             | Base URL for OpenAI-compatible endpoints | (none) | string  |
+| `OPENAI_TEMPERATURE`          | Sampling temperature                   | `0.7`   | float (0.0-2.0) |
+| `OPENAI_MAX_RETRIES`          | Maximum number of retries              | `2`     | int     |
+
+**Anthropic Claude Configuration:**
+
+| Setting                        | Description                            | Default | Options |
+| ------------------------------ | -------------------------------------- | ------- | ------- |
+| `ANTHROPIC_API_KEY`           | Anthropic API key                      | (none)  | string  |
+| `ANTHROPIC_MODEL`             | Claude model name                      | `claude-3-5-sonnet-20241022` | string |
+| `ANTHROPIC_TEMPERATURE`       | Sampling temperature                   | `0.7`   | float (0.0-1.0) |
+| `ANTHROPIC_MAX_TOKENS`        | Maximum tokens to generate             | `4096`  | int     |
+| `ANTHROPIC_MAX_RETRIES`       | Maximum number of retries              | `2`     | int     |
+
+**AWS Bedrock Configuration:**
+
+| Setting                        | Description                            | Default | Options |
+| ------------------------------ | -------------------------------------- | ------- | ------- |
+| `AWS_BEDROCK_MODEL_ID`        | Bedrock model ID                       | (none)  | string  |
+| `AWS_BEDROCK_REGION`          | AWS region name                        | `us-east-1` | string |
+| `AWS_BEDROCK_TEMPERATURE`     | Sampling temperature                   | `0.7`   | float (0.0-1.0) |
+| `AWS_BEDROCK_MAX_TOKENS`      | Maximum tokens to generate             | `4096`  | int     |
+| `AWS_ACCESS_KEY_ID`           | AWS access key ID (optional)           | (none)  | string  |
+| `AWS_SECRET_ACCESS_KEY`       | AWS secret access key (optional)       | (none)  | string  |
+| `AWS_SESSION_TOKEN`           | AWS session token (optional)           | (none)  | string  |
+
+
+**IBM WatsonX AI**
+| Setting                 | Description                     | Default                        | Options         |
+| ----------------------- | --------------------------------| ------------------------------ | ----------------|
+| `WATSONX_URL`           | watsonx url                     | (none)                         | string          |
+| `WATSONX_APIKEY`        | API key                         | (none)                         | string          |
+| `WATSONX_PROJECT_ID`    | Project Id for WatsonX          | (none)                         | string          |
+| `WATSONX_MODEL_ID`      | Watsonx model id                | `ibm/granite-13b-chat-v2`      | string          |
+| `WATSONX_TEMPERATURE`   | temperature (optional)          | `0.7`                          | float (0.0-1.0) |
+
+
+**Ollama Configuration:**
+
+| Setting                        | Description                            | Default | Options |
+| ------------------------------ | -------------------------------------- | ------- | ------- |
+| `OLLAMA_BASE_URL`             | Ollama base URL                        | `http://localhost:11434` | string |
+| `OLLAMA_MODEL`                | Ollama model name                      | `llama3.2` | string |
+| `OLLAMA_TEMPERATURE`          | Sampling temperature                   | `0.7`   | float (0.0-2.0) |
+
+> 🤖 **LLM Chat Integration**: Chat with MCP servers using natural language powered by Azure OpenAI, OpenAI, Anthropic Claude, AWS Bedrock, or Ollama
+> 🔧 **Flexible Providers**: Switch between different LLM providers without changing your MCP integration
+> 🔒 **Security**: API keys and credentials are securely stored and never exposed in responses
+> 🎛️ **Admin UI**: Dedicated LLM Chat tab in the admin interface for interactive conversations
+
+**LLM Chat Configuration Effects:**
+- `LLMCHAT_ENABLED=false` (default): Completely disables LLM Chat features (API endpoints return 404, admin tab hidden)
+- `LLMCHAT_ENABLED=true`: Enables LLM Chat functionality with the selected provider
+
+**Provider Requirements:**
+- **Azure OpenAI**: Requires `AZURE_OPENAI_ENDPOINT`, `AZURE_OPENAI_API_KEY`, and `AZURE_OPENAI_DEPLOYMENT`
+- **OpenAI**: Requires `OPENAI_API_KEY`
+- **Anthropic**: Requires `ANTHROPIC_API_KEY` and `pip install langchain-anthropic`
+- **AWS Bedrock**: Requires `AWS_BEDROCK_MODEL_ID` and `pip install langchain-aws boto3`. Uses AWS credential chain if explicit credentials not provided.
+**IBM WatsonX AI**: Requires `WATSONX_URL`, `WATSONX_APIKEY`, `WATSONX_PROJECT_ID`, `WATSONX_MODEL_ID` and `pip install langchain-ibm `.
+- **Ollama**: Requires local Ollama instance running (default: `http://localhost:11434`)
+
+**Redis Configurations:** For maintaining Chat Sessions in multi-worker environment
+
+| Setting                              | Description                                | Default | Options |
+| -------------------------------------| -------------------------------------------| ------- | ------- |
+| `LLMCHAT_SESSION_TTL`                | Seconds for active_session key TTL         | `300`   | int     |
+| `LLMCHAT_SESSION_LOCK_TTL`           | Seconds for lock expiry                    | `30`    | int     |
+| `LLMCHAT_SESSION_LOCK_RETRIES`       | How many times to poll while waiting       | `10`    | int     |
+| `LLMCHAT_SESSION_LOCK_WAIT`          | Seconds between polls                      | `0.2`   | float   |
+| `LLMCHAT_CHAT_HISTORY_TTL`           | Seconds for chat history expiry            | `3600`  | int     |
+| `LLMCHAT_CHAT_HISTORY_MAX_MESSAGES`  | Maximum message history to store per user  | `50`    | int     |
+
+**Documentation:**
+- [LLM Chat Guide](https://ibm.github.io/mcp-context-forge/using/clients/llm-chat) - Complete LLM Chat setup and provider configuration
+
 ### Email-Based Authentication & User Management
 
 | Setting                        | Description                                      | Default               | Options |
@@ -1220,6 +1325,7 @@ You can get started by copying the provided [.env.example](https://github.com/IB
 | `SSO_TRUSTED_DOMAINS`         | Trusted email domains (JSON array)               | `[]`                  | JSON array |
 | `SSO_PRESERVE_ADMIN_AUTH`     | Preserve local admin authentication when SSO enabled | `true`            | bool    |
 | `SSO_REQUIRE_ADMIN_APPROVAL`  | Require admin approval for new SSO registrations | `false`               | bool    |
+| `SSO_ISSUERS`                 | Optional JSON array of issuer URLs for SSO providers | (none)            | JSON array |
 
 **GitHub OAuth:**
 | Setting                        | Description                                      | Default               | Options |
@@ -1244,6 +1350,42 @@ You can get started by copying the provided [.env.example](https://github.com/IB
 | `SSO_IBM_VERIFY_CLIENT_ID`    | IBM Security Verify client ID                    | (none)                | string  |
 | `SSO_IBM_VERIFY_CLIENT_SECRET` | IBM Security Verify client secret               | (none)                | string  |
 | `SSO_IBM_VERIFY_ISSUER`       | IBM Security Verify OIDC issuer URL             | (none)                | string  |
+
+**Keycloak OIDC:**
+| Setting                              | Description                                      | Default                    | Options |
+| ------------------------------------ | ------------------------------------------------ | -------------------------- | ------- |
+| `SSO_KEYCLOAK_ENABLED`              | Enable Keycloak OIDC authentication              | `false`                    | bool    |
+| `SSO_KEYCLOAK_BASE_URL`             | Keycloak base URL                                | (none)                     | string  |
+| `SSO_KEYCLOAK_REALM`                | Keycloak realm name                              | `master`                   | string  |
+| `SSO_KEYCLOAK_CLIENT_ID`            | Keycloak client ID                               | (none)                     | string  |
+| `SSO_KEYCLOAK_CLIENT_SECRET`        | Keycloak client secret                           | (none)                     | string  |
+| `SSO_KEYCLOAK_MAP_REALM_ROLES`      | Map Keycloak realm roles to gateway teams        | `true`                     | bool    |
+| `SSO_KEYCLOAK_MAP_CLIENT_ROLES`     | Map Keycloak client roles to gateway RBAC        | `false`                    | bool    |
+| `SSO_KEYCLOAK_USERNAME_CLAIM`       | JWT claim for username                           | `preferred_username`       | string  |
+| `SSO_KEYCLOAK_EMAIL_CLAIM`          | JWT claim for email                              | `email`                    | string  |
+| `SSO_KEYCLOAK_GROUPS_CLAIM`         | JWT claim for groups/roles                       | `groups`                   | string  |
+
+**Microsoft Entra ID OIDC:**
+| Setting                        | Description                                      | Default               | Options |
+| ------------------------------ | ------------------------------------------------ | --------------------- | ------- |
+| `SSO_ENTRA_ENABLED`           | Enable Microsoft Entra ID OIDC authentication    | `false`               | bool    |
+| `SSO_ENTRA_CLIENT_ID`         | Microsoft Entra ID client ID                     | (none)                | string  |
+| `SSO_ENTRA_CLIENT_SECRET`     | Microsoft Entra ID client secret                 | (none)                | string  |
+| `SSO_ENTRA_TENANT_ID`         | Microsoft Entra ID tenant ID                     | (none)                | string  |
+
+**Generic OIDC Provider (Auth0, Authentik, etc.):**
+| Setting                              | Description                                      | Default                    | Options |
+| ------------------------------------ | ------------------------------------------------ | -------------------------- | ------- |
+| `SSO_GENERIC_ENABLED`               | Enable generic OIDC provider authentication      | `false`                    | bool    |
+| `SSO_GENERIC_PROVIDER_ID`           | Provider ID (e.g., keycloak, auth0, authentik)   | (none)                     | string  |
+| `SSO_GENERIC_DISPLAY_NAME`          | Display name shown on login page                 | (none)                     | string  |
+| `SSO_GENERIC_CLIENT_ID`             | Generic OIDC client ID                           | (none)                     | string  |
+| `SSO_GENERIC_CLIENT_SECRET`         | Generic OIDC client secret                       | (none)                     | string  |
+| `SSO_GENERIC_AUTHORIZATION_URL`     | Authorization endpoint URL                       | (none)                     | string  |
+| `SSO_GENERIC_TOKEN_URL`             | Token endpoint URL                               | (none)                     | string  |
+| `SSO_GENERIC_USERINFO_URL`          | Userinfo endpoint URL                            | (none)                     | string  |
+| `SSO_GENERIC_ISSUER`                | OIDC issuer URL                                  | (none)                     | string  |
+| `SSO_GENERIC_SCOPE`                 | OAuth scopes (space-separated)                   | `openid profile email`     | string  |
 
 **Okta OIDC:**
 | Setting                        | Description                                      | Default               | Options |
@@ -1270,18 +1412,18 @@ ContextForge implements **OAuth 2.0 Dynamic Client Registration (RFC 7591)** and
 - ✅ Encrypted credential storage with Fernet encryption
 - ✅ Configurable issuer allowlist for security
 
-| Setting                                                | Description                                                    | Default                        | Options       |
-|-------------------------------------------------------|----------------------------------------------------------------|--------------------------------|---------------|
-| `MCPGATEWAY_DCR_ENABLED`                              | Enable Dynamic Client Registration (RFC 7591)                  | `true`                         | bool          |
-| `MCPGATEWAY_DCR_AUTO_REGISTER_ON_MISSING_CREDENTIALS` | Auto-register when gateway has issuer but no client_id         | `true`                         | bool          |
-| `MCPGATEWAY_DCR_DEFAULT_SCOPES`                       | Default OAuth scopes to request during DCR                     | `mcp:read`                     | string        |
-| `MCPGATEWAY_DCR_ALLOWED_ISSUERS`                      | Allowlist of trusted issuer URLs (empty = allow any)           | `[]`                           | JSON array    |
-| `MCPGATEWAY_DCR_TOKEN_ENDPOINT_AUTH_METHOD`           | Token endpoint auth method                                     | `client_secret_basic`          | `client_secret_basic`, `client_secret_post`, `none` |
-| `MCPGATEWAY_DCR_METADATA_CACHE_TTL`                   | AS metadata cache TTL in seconds                               | `3600`                         | int           |
-| `MCPGATEWAY_DCR_CLIENT_NAME_TEMPLATE`                 | Template for client_name in DCR requests                       | `MCP Gateway ({gateway_name})` | string        |
-| `MCPGATEWAY_OAUTH_DISCOVERY_ENABLED`                  | Enable AS metadata discovery (RFC 8414)                        | `true`                         | bool          |
-| `MCPGATEWAY_OAUTH_PREFERRED_CODE_CHALLENGE_METHOD`    | PKCE code challenge method                                     | `S256`                         | `S256`, `plain` |
-| `JWT_AUDIENCE_VERIFICATION`                           | JWT audience verification (disable for DCR)                    | `true`                         | bool          |
+| Setting                                     | Description                                                    | Default                        | Options       |
+|--------------------------------------------|----------------------------------------------------------------|--------------------------------|---------------|
+| `DCR_ENABLED`                              | Enable Dynamic Client Registration (RFC 7591)                  | `true`                         | bool          |
+| `DCR_AUTO_REGISTER_ON_MISSING_CREDENTIALS` | Auto-register when gateway has issuer but no client_id         | `true`                         | bool          |
+| `DCR_DEFAULT_SCOPES`                       | Default OAuth scopes to request during DCR                     | `["mcp:read"]`                 | JSON array    |
+| `DCR_ALLOWED_ISSUERS`                      | Allowlist of trusted issuer URLs (empty = allow any)           | `[]`                           | JSON array    |
+| `DCR_TOKEN_ENDPOINT_AUTH_METHOD`           | Token endpoint auth method                                     | `client_secret_basic`          | `client_secret_basic`, `client_secret_post`, `none` |
+| `DCR_METADATA_CACHE_TTL`                   | AS metadata cache TTL in seconds                               | `3600`                         | int           |
+| `DCR_CLIENT_NAME_TEMPLATE`                 | Template for client_name in DCR requests                       | `MCP Gateway ({gateway_name})` | string        |
+| `OAUTH_DISCOVERY_ENABLED`                  | Enable AS metadata discovery (RFC 8414)                        | `true`                         | bool          |
+| `OAUTH_PREFERRED_CODE_CHALLENGE_METHOD`    | PKCE code challenge method                                     | `S256`                         | `S256`, `plain` |
+| `JWT_AUDIENCE_VERIFICATION`                | JWT audience verification (disable for DCR)                    | `true`                         | bool          |
 
 **Documentation:**
 - [DCR Configuration Guide](https://ibm.github.io/mcp-context-forge/manage/dcr/) - Complete DCR setup and troubleshooting
@@ -1364,6 +1506,129 @@ ContextForge implements **OAuth 2.0 Dynamic Client Registration (RFC 7591)** and
 > Documentation endpoints (`/docs`, `/redoc`, `/openapi.json`) are always protected by authentication.
 > By default, they require Bearer token authentication. Setting `DOCS_ALLOW_BASIC_AUTH=true` enables HTTP Basic Authentication as an additional method using the same credentials as `BASIC_AUTH_USER` and `BASIC_AUTH_PASSWORD`.
 
+### Ed25519 Certificate Signing
+
+MCP Gateway supports **Ed25519 digital signatures** for certificate validation and integrity verification. This cryptographic signing mechanism ensures that CA certificates used by the gateway are authentic and haven't been tampered with.
+
+| Setting                     | Description                                      | Default | Options |
+| --------------------------- | ------------------------------------------------ | ------- | ------- |
+| `ENABLE_ED25519_SIGNING`    | Enable Ed25519 signing for certificates          | `false` | bool    |
+| `ED25519_PRIVATE_KEY`       | Ed25519 private key for signing (PEM format)     | (none)  | string  |
+| `PREV_ED25519_PRIVATE_KEY`  | Previous Ed25519 private key for key rotation    | (none)  | string  |
+
+**How It Works:**
+
+1. **Certificate Signing** - When `ENABLE_ED25519_SIGNING=true`, the gateway signs the CA certificate of each MCP server/gateway using the Ed25519 private key.
+
+2. **Certificate Validation** - Before using a CA certificate for subsequent calls, the gateway validates its signature to ensure authenticity and integrity.
+
+3. **Disabled Mode** - When `ENABLE_ED25519_SIGNING=false`, certificates are neither signed nor validated (default behavior).
+
+**Key Generation:**
+
+```bash
+# Generate a new Ed25519 key pair
+python mcpgateway/utils/generate_keys.py
+
+# Output will show:
+# - Private key (set this to ED25519_PRIVATE_KEY)
+```
+
+**Key Rotation:**
+
+To rotate keys without invalidating existing signed certificates:
+
+1. Move the current `ED25519_PRIVATE_KEY` value to `PREV_ED25519_PRIVATE_KEY`
+2. Generate a new key pair using the command above
+3. Set the new private key to `ED25519_PRIVATE_KEY`
+4. The gateway will automatically re-sign valid certificates at the point of key change
+
+**Example Configuration:**
+
+```bash
+# Enable Ed25519 signing
+ENABLE_ED25519_SIGNING=true
+
+# Current signing key (PEM format)
+ED25519_PRIVATE_KEY="-----BEGIN PRIVATE KEY-----
+MC4CAQAwBQYDK2VwBCIEIJ5pW... (your key here)
+-----END PRIVATE KEY-----"
+
+# Previous key for rotation (optional)
+PREV_ED25519_PRIVATE_KEY="-----BEGIN PRIVATE KEY-----
+MC4CAQAwBQYDK2VwBCIEIOld... (old key here)
+-----END PRIVATE KEY-----"
+```
+
+> 🔐 **Security Best Practices:**
+> - Store private keys securely (use secrets management tools like Vault, AWS Secrets Manager, etc.)
+> - Rotate keys periodically (recommended: every 90-180 days)
+> - Never commit private keys to version control
+> - Use environment variables or encrypted config files
+>
+> 🔑 **Public Key Derivation:**
+> - Public keys are automatically derived from private keys
+> - No need to configure public keys separately
+> - Both `ED25519_PUBLIC_KEY` and `PREV_ED25519_PUBLIC_KEY` are computed at startup
+>
+> ⚡ **Performance:**
+> - Ed25519 signing is extremely fast (~64 microseconds per signature)
+> - Minimal impact on gateway performance
+> - Recommended for production deployments requiring certificate integrity
+
+### Response Compression
+
+MCP Gateway includes automatic response compression middleware that reduces bandwidth usage by 30-70% for text-based responses (JSON, HTML, CSS, JS). Compression is negotiated automatically based on client `Accept-Encoding` headers with algorithm priority: **Brotli** (best compression) > **Zstd** (fastest) > **GZip** (universal fallback).
+
+| Setting                       | Description                                       | Default | Options              |
+| ----------------------------- | ------------------------------------------------- | ------- | -------------------- |
+| `COMPRESSION_ENABLED`         | Enable response compression                       | `true`  | bool                 |
+| `COMPRESSION_MINIMUM_SIZE`    | Minimum response size in bytes to compress        | `500`   | int (0=compress all) |
+| `COMPRESSION_GZIP_LEVEL`      | GZip compression level (1=fast, 9=best)          | `6`     | int (1-9)            |
+| `COMPRESSION_BROTLI_QUALITY`  | Brotli quality (0-3=fast, 4-9=balanced, 10-11=max) | `4`   | int (0-11)           |
+| `COMPRESSION_ZSTD_LEVEL`      | Zstd level (1-3=fast, 4-9=balanced, 10+=slow)    | `3`     | int (1-22)           |
+
+**Compression Behavior:**
+- Automatically negotiates algorithm based on client `Accept-Encoding` header
+- Only compresses responses larger than `COMPRESSION_MINIMUM_SIZE` bytes (small responses not worth compression overhead)
+- Adds `Vary: Accept-Encoding` header for proper cache behavior
+- No client changes required (browsers/clients handle decompression automatically)
+- Typical compression ratios: JSON responses 40-60%, HTML responses 50-70%
+
+**Performance Impact:**
+- CPU overhead: <5% (balanced settings)
+- Bandwidth reduction: 30-70% for text responses
+- Latency impact: <10ms for typical responses
+
+**Testing Compression:**
+```bash
+# Start server
+make dev
+
+# Test Brotli (best compression)
+curl -H "Accept-Encoding: br" http://localhost:8000/openapi.json -v | grep -i "content-encoding"
+
+# Test GZip (universal fallback)
+curl -H "Accept-Encoding: gzip" http://localhost:8000/openapi.json -v | grep -i "content-encoding"
+
+# Test Zstd (fastest)
+curl -H "Accept-Encoding: zstd" http://localhost:8000/openapi.json -v | grep -i "content-encoding"
+```
+
+**Tuning for Production:**
+```bash
+# High-traffic (optimize for speed)
+COMPRESSION_GZIP_LEVEL=4
+COMPRESSION_BROTLI_QUALITY=3
+COMPRESSION_ZSTD_LEVEL=1
+
+# Bandwidth-constrained (optimize for size)
+COMPRESSION_GZIP_LEVEL=9
+COMPRESSION_BROTLI_QUALITY=11
+COMPRESSION_ZSTD_LEVEL=9
+```
+
+> **Note**: See [Scaling Guide](https://ibm.github.io/mcp-context-forge/manage/scale/) for compression performance optimization at scale.
 
 ### Logging
 
@@ -1424,7 +1689,7 @@ MCP Gateway includes **vendor-agnostic OpenTelemetry support** for distributed t
 | ------------------------------- | ---------------------------------------------- | --------------------- | ------------------------------------------ |
 | `OTEL_ENABLE_OBSERVABILITY`     | Master switch for observability               | `true`                | `true`, `false`                           |
 | `OTEL_SERVICE_NAME`             | Service identifier in traces                   | `mcp-gateway`         | string                                     |
-| `OTEL_SERVICE_VERSION`          | Service version in traces                      | `0.8.0`               | string                                     |
+| `OTEL_SERVICE_VERSION`          | Service version in traces                      | `0.9.0`               | string                                     |
 | `OTEL_DEPLOYMENT_ENVIRONMENT`   | Environment tag (dev/staging/prod)            | `development`         | string                                     |
 | `OTEL_TRACES_EXPORTER`          | Trace exporter backend                         | `otlp`                | `otlp`, `jaeger`, `zipkin`, `console`, `none` |
 | `OTEL_RESOURCE_ATTRIBUTES`      | Custom resource attributes                     | (empty)               | `key=value,key2=value2`                   |
@@ -1474,6 +1739,81 @@ mcpgateway
 > 🚀 **Zero Overhead**: When `OTEL_ENABLE_OBSERVABILITY=false`, all tracing is disabled with no performance impact
 >
 > 📊 **View Traces**: Phoenix UI at `http://localhost:6006`, Jaeger at `http://localhost:16686`, or your configured backend
+
+### Internal Observability & Tracing
+
+The gateway includes built-in observability features for tracking HTTP requests, spans, and traces independent of OpenTelemetry. This provides database-backed trace storage and analysis directly in the Admin UI.
+
+| Setting                              | Description                                           | Default                                              | Options          |
+| ------------------------------------ | ----------------------------------------------------- | ---------------------------------------------------- | ---------------- |
+| `OBSERVABILITY_ENABLED`              | Enable internal observability tracing and metrics     | `false`                                              | bool             |
+| `OBSERVABILITY_TRACE_HTTP_REQUESTS`  | Automatically trace HTTP requests                     | `true`                                               | bool             |
+| `OBSERVABILITY_TRACE_RETENTION_DAYS` | Number of days to retain trace data                   | `7`                                                  | int (≥ 1)        |
+| `OBSERVABILITY_MAX_TRACES`           | Maximum number of traces to retain                    | `100000`                                             | int (≥ 1000)     |
+| `OBSERVABILITY_SAMPLE_RATE`          | Trace sampling rate (0.0-1.0)                        | `1.0`                                                | float (0.0-1.0)  |
+| `OBSERVABILITY_EXCLUDE_PATHS`        | Paths to exclude from tracing (regex patterns)        | `/health,/healthz,/ready,/metrics,/static/.*`        | comma-separated  |
+| `OBSERVABILITY_METRICS_ENABLED`      | Enable metrics collection                             | `true`                                               | bool             |
+| `OBSERVABILITY_EVENTS_ENABLED`       | Enable event logging within spans                     | `true`                                               | bool             |
+
+**Key Features:**
+- 📊 **Database-backed storage**: Traces stored in SQLite/PostgreSQL for persistence
+- 🔍 **Admin UI integration**: View traces, spans, and metrics in the diagnostics tab
+- 🎯 **Sampling control**: Configure sampling rate to reduce overhead in high-traffic scenarios
+- 🕐 **Automatic cleanup**: Old traces automatically purged based on retention settings
+- 🚫 **Path filtering**: Exclude health checks and static resources from tracing
+
+**Configuration Effects:**
+- `OBSERVABILITY_ENABLED=false`: Completely disables internal observability (no database writes, zero overhead)
+- `OBSERVABILITY_SAMPLE_RATE=0.1`: Traces 10% of requests (useful for high-volume production)
+- `OBSERVABILITY_EXCLUDE_PATHS=/health,/metrics`: Prevents noisy endpoints from creating traces
+
+> 📝 **Note**: This is separate from OpenTelemetry. You can use both systems simultaneously - internal observability for Admin UI visibility and OpenTelemetry for external systems like Phoenix/Jaeger.
+>
+> 🎛️ **Admin UI Access**: When enabled, traces appear in **Admin → Diagnostics → Observability** tab with filtering, search, and export capabilities
+
+### Prometheus Metrics
+
+The gateway exposes Prometheus-compatible metrics at `/metrics/prometheus` for monitoring and alerting.
+
+| Setting                      | Description                                              | Default   | Options          |
+| ---------------------------- | -------------------------------------------------------- | --------- | ---------------- |
+| `ENABLE_METRICS`             | Enable Prometheus metrics instrumentation                | `true`    | bool             |
+| `METRICS_EXCLUDED_HANDLERS`  | Regex patterns for paths to exclude from metrics         | (empty)   | comma-separated  |
+| `METRICS_NAMESPACE`          | Prometheus metrics namespace (prefix)                    | `default` | string           |
+| `METRICS_SUBSYSTEM`          | Prometheus metrics subsystem (secondary prefix)          | (empty)   | string           |
+| `METRICS_CUSTOM_LABELS`      | Static custom labels for app_info gauge                  | (empty)   | `key=value,...`  |
+
+**Key Features:**
+- 📊 **Standard metrics**: HTTP request duration, response codes, active requests
+- 🏷️ **Custom labels**: Add static labels (environment, region, team) for filtering in Prometheus/Grafana
+- 🚫 **Path exclusions**: Prevent high-cardinality issues by excluding dynamic paths
+- 📈 **Namespace isolation**: Group metrics by application or organization
+
+**Configuration Examples:**
+
+```bash
+# Production deployment with custom labels
+ENABLE_METRICS=true
+METRICS_NAMESPACE=mycompany
+METRICS_SUBSYSTEM=gateway
+METRICS_CUSTOM_LABELS=environment=production,region=us-east-1,team=platform
+
+# Exclude high-volume endpoints from metrics
+METRICS_EXCLUDED_HANDLERS=/servers/.*/sse,/static/.*,.*health.*
+
+# Disable metrics for development
+ENABLE_METRICS=false
+```
+
+**Metric Names:**
+- With namespace + subsystem: `mycompany_gateway_http_requests_total`
+- Default (no namespace/subsystem): `default_http_requests_total`
+
+> ⚠️ **High-Cardinality Warning**: Never use high-cardinality values (user IDs, request IDs, timestamps) in `METRICS_CUSTOM_LABELS`. Only use low-cardinality static values (environment, region, cluster).
+>
+> 📊 **Prometheus Endpoint**: Access metrics at `GET /metrics/prometheus` (requires authentication if `AUTH_REQUIRED=true`)
+>
+> 🎯 **Grafana Integration**: Import metrics into Grafana dashboards using the configured namespace as a filter
 
 ### Transport
 

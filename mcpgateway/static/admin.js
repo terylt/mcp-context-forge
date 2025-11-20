@@ -1,3 +1,91 @@
+const MASKED_AUTH_VALUE = "*****";
+
+// Add three fields to passthrough section on Advanced button click
+function handleAddPassthrough() {
+    const passthroughContainer = safeGetElement("passthrough-container");
+    if (!passthroughContainer) {
+        console.error("Passthrough container not found");
+        return;
+    }
+
+    // Toggle visibility
+    if (
+        passthroughContainer.style.display === "none" ||
+        passthroughContainer.style.display === ""
+    ) {
+        passthroughContainer.style.display = "block";
+        // Add fields only if not already present
+        if (!document.getElementById("query-mapping-field")) {
+            const queryDiv = document.createElement("div");
+            queryDiv.className = "mb-4";
+            queryDiv.innerHTML = `
+                <label class="block text-sm font-medium text-gray-700 dark:text-gray-400 mb-1">Query Mapping (JSON)</label>
+                <textarea id="query-mapping-field" name="query_mapping" class="mt-1 px-1.5 block w-full h-40 rounded-md border border-gray-300 dark:border-gray-700 shadow-sm focus:border-indigo-500 focus:ring-indigo-500 bg-black text-white" placeholder="{}"></textarea>
+            `;
+            passthroughContainer.appendChild(queryDiv);
+        }
+        if (!document.getElementById("header-mapping-field")) {
+            const headerDiv = document.createElement("div");
+            headerDiv.className = "mb-4";
+            headerDiv.innerHTML = `
+                <label class="block text-sm font-medium text-gray-700 dark:text-gray-400 mb-1">Header Mapping (JSON)</label>
+                <textarea id="header-mapping-field" name="header_mapping" class="mt-1 px-1.5 block w-full h-40 rounded-md border border-gray-300 dark:border-gray-600 shadow-sm focus:border-indigo-500 focus:ring-indigo-500 bg-black text-white" placeholder="{}"></textarea>
+            `;
+            passthroughContainer.appendChild(headerDiv);
+        }
+        if (!document.getElementById("timeout-ms-field")) {
+            const timeoutDiv = document.createElement("div");
+            timeoutDiv.className = "mb-4";
+            timeoutDiv.innerHTML = `
+                <label class="block text-sm font-medium text-gray-700 dark:text-gray-400 mb-1">timeout_ms (number)</label>
+                <input type="number" id="timeout-ms-field" name="timeout_ms" class="mt-1 px-1.5 block w-full rounded-md border border-gray-300 dark:border-gray-700 shadow-sm focus:border-indigo-500 focus:ring-indigo-500 dark:bg-gray-900 dark:text-gray-300" placeholder="30000" min="0" />
+            `;
+            passthroughContainer.appendChild(timeoutDiv);
+        }
+        if (!document.getElementById("expose-passthrough-field")) {
+            const exposeDiv = document.createElement("div");
+            exposeDiv.className = "mb-4";
+            exposeDiv.innerHTML = `
+                <label class="block text-sm font-medium text-gray-700 dark:text-gray-400 mb-1">Expose Passthrough</label>
+                <select id="expose-passthrough-field" name="expose_passthrough" class="mt-1 px-1.5 block w-full rounded-md border border-gray-300 dark:border-gray-700 shadow-sm focus:border-indigo-500 focus:ring-indigo-500 dark:bg-gray-900 dark:text-gray-300">
+                    <option value="true" selected>True</option>
+                    <option value="false">False</option>
+                </select>
+            `;
+            passthroughContainer.appendChild(exposeDiv);
+        }
+        if (!document.getElementById("allowlist-field")) {
+            const allowlistDiv = document.createElement("div");
+            allowlistDiv.className = "mb-4";
+            allowlistDiv.innerHTML = `
+                <label class="block text-sm font-medium text-gray-700 dark:text-gray-400 mb-1">Allowlist (comma-separated hosts/schemes)</label>
+                <input type="text" id="allowlist-field" name="allowlist" class="mt-1 px-1.5 block w-full rounded-md border border-gray-300 dark:border-gray-700 shadow-sm focus:border-indigo-500 focus:ring-indigo-500 dark:bg-gray-900 dark:text-gray-300" placeholder="[example.com, https://api.example.com]" />
+            `;
+            passthroughContainer.appendChild(allowlistDiv);
+        }
+        if (!document.getElementById("plugin-chain-pre-field")) {
+            const pluginPreDiv = document.createElement("div");
+            pluginPreDiv.className = "mb-4";
+            pluginPreDiv.innerHTML = `
+                <label class="block text-sm font-medium text-gray-700 dark:text-gray-400 mb-1">Plugin Chain Pre</label>
+                <input type="text" id="plugin-chain-pre-field" name="plugin_chain_pre" class="mt-1 px-1.5 block w-full rounded-md border border-gray-300 dark:border-gray-700 shadow-sm focus:border-indigo-500 focus:ring-indigo-500 dark:bg-gray-900 dark:text-gray-300" placeholder="[]" />
+            `;
+            passthroughContainer.appendChild(pluginPreDiv);
+        }
+        if (!document.getElementById("plugin-chain-post-field")) {
+            const pluginPostDiv = document.createElement("div");
+            pluginPostDiv.className = "mb-4";
+            pluginPostDiv.innerHTML = `
+                <label class="block text-sm font-medium text-gray-700 dark:text-gray-400 mb-1">Plugin Chain Post (optional, override defaults)</label>
+                <input type="text" id="plugin-chain-post-field" name="plugin_chain_post" class="mt-1 px-1.5 block w-full rounded-md border border-gray-300 dark:border-gray-700 shadow-sm focus:border-indigo-500 focus:ring-indigo-500 dark:bg-gray-900 dark:text-gray-300" placeholder="[]" />
+            `;
+            passthroughContainer.appendChild(pluginPostDiv);
+        }
+    } else {
+        passthroughContainer.style.display = "none";
+    }
+}
+
 // Make URL field read-only for integration type MCP
 function updateEditToolUrl() {
     const editTypeField = document.getElementById("edit-tool-type");
@@ -18,6 +106,20 @@ document.addEventListener("DOMContentLoaded", function () {
         TypeField.addEventListener("change", updateEditToolUrl);
         // Set initial state
         updateEditToolUrl();
+    }
+
+    // Initialize CA certificate upload immediately
+    initializeCACertUpload();
+
+    // Also try to initialize after a short delay (in case the panel loads later)
+    setTimeout(initializeCACertUpload, 500);
+
+    // Re-initialize when switching to gateways tab
+    const gatewaysTab = document.querySelector('[onclick*="gateways"]');
+    if (gatewaysTab) {
+        gatewaysTab.addEventListener("click", function () {
+            setTimeout(initializeCACertUpload, 100);
+        });
     }
 });
 /**
@@ -701,6 +803,7 @@ async function loadMetricsInternal() {
             data = {}; // Use empty object as fallback
         }
 
+        console.log("Metrics data received:", data);
         displayMetrics(data);
         console.log("✓ Metrics loaded successfully");
     } catch (error) {
@@ -776,8 +879,12 @@ async function fetchWithTimeoutAndRetry(
  * Show loading state for metrics
  */
 function showMetricsLoading() {
-    const metricsPanel = safeGetElement("metrics-panel", true); // suppress warning
-    if (metricsPanel) {
+    // Only clear the aggregated metrics section, not the entire panel (to preserve System Metrics)
+    const aggregatedSection = safeGetElement(
+        "aggregated-metrics-section",
+        true,
+    );
+    if (aggregatedSection) {
         const existingLoading = safeGetElement("metrics-loading", true);
         if (existingLoading) {
             return;
@@ -789,12 +896,12 @@ function showMetricsLoading() {
         loadingDiv.innerHTML = `
             <div class="text-center">
                 <div class="animate-spin rounded-full h-12 w-12 border-b-2 border-indigo-600 mx-auto mb-4"></div>
-                <p class="text-gray-600">Loading metrics...</p>
+                <p class="text-gray-600">Loading aggregated metrics...</p>
                 <p class="text-sm text-gray-500 mt-2">This may take a moment</p>
             </div>
         `;
-        metricsPanel.innerHTML = "";
-        metricsPanel.appendChild(loadingDiv);
+        aggregatedSection.innerHTML = "";
+        aggregatedSection.appendChild(loadingDiv);
     }
 }
 
@@ -812,8 +919,9 @@ function hideMetricsLoading() {
  * Enhanced error display with retry option
  */
 function showMetricsError(error) {
-    const metricsPanel = safeGetElement("metrics-panel");
-    if (metricsPanel) {
+    // Only show error in the aggregated metrics section, not the entire panel
+    const aggregatedSection = safeGetElement("aggregated-metrics-content");
+    if (aggregatedSection) {
         const errorDiv = document.createElement("div");
         errorDiv.className = "text-center p-8";
 
@@ -835,7 +943,7 @@ function showMetricsError(error) {
                 <svg class="w-12 h-12 mx-auto mb-4" fill="none" stroke="currentColor" viewBox="0 0 24 24">
                     <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M12 8v4m0 4h.01M21 12a9 9 0 11-18 0 9 9 0 0118 0z"></path>
                 </svg>
-                <h3 class="text-lg font-medium mb-2">Failed to Load Metrics</h3>
+                <h3 class="text-lg font-medium mb-2">Failed to Load Aggregated Metrics</h3>
                 <p class="text-sm mb-2">${escapeHtml(errorMessage)}</p>
                 <p class="text-xs text-gray-500 mb-4">${helpText}</p>
                 <button
@@ -846,8 +954,8 @@ function showMetricsError(error) {
             </div>
         `;
 
-        metricsPanel.innerHTML = "";
-        metricsPanel.appendChild(errorDiv);
+        aggregatedSection.innerHTML = "";
+        aggregatedSection.appendChild(errorDiv);
     }
 }
 
@@ -866,14 +974,14 @@ function retryLoadMetrics() {
 window.retryLoadMetrics = retryLoadMetrics;
 
 function showMetricsPlaceholder() {
-    const metricsPanel = safeGetElement("metrics-panel");
-    if (metricsPanel) {
+    const aggregatedSection = safeGetElement("aggregated-metrics-section");
+    if (aggregatedSection) {
         const placeholderDiv = document.createElement("div");
         placeholderDiv.className = "text-gray-600 p-4 text-center";
         placeholderDiv.textContent =
-            "Metrics endpoint not available. This feature may not be implemented yet.";
-        metricsPanel.innerHTML = "";
-        metricsPanel.appendChild(placeholderDiv);
+            "Aggregated metrics endpoint not available. This feature may not be implemented yet.";
+        aggregatedSection.innerHTML = "";
+        aggregatedSection.appendChild(placeholderDiv);
     }
 }
 
@@ -881,16 +989,63 @@ function showMetricsPlaceholder() {
 // ENHANCED METRICS DISPLAY with Complete System Overview
 // ===================================================================
 
-function displayMetrics(data) {
-    const metricsPanel = safeGetElement("metrics-panel");
-    if (!metricsPanel) {
-        console.error("Metrics panel element not found");
+function displayMetrics(data, retryCount = 0) {
+    console.log("displayMetrics called with:", data, "retry:", retryCount);
+
+    // Ensure parent sections exist, create container if missing
+    const metricsPanel = document.getElementById("metrics-panel");
+    const aggregatedSection = document.getElementById(
+        "aggregated-metrics-section",
+    );
+    let aggregatedContent = document.getElementById(
+        "aggregated-metrics-content",
+    );
+
+    console.log("Panel check:", {
+        metricsPanel: !!metricsPanel,
+        metricsPanelHidden: metricsPanel?.classList.contains("hidden"),
+        aggregatedSection: !!aggregatedSection,
+        aggregatedContent: !!aggregatedContent,
+    });
+
+    if (!aggregatedSection) {
+        if (retryCount < 10) {
+            console.error(
+                `Aggregated metrics section missing, retrying (${retryCount + 1}/10) in 100ms`,
+            );
+            setTimeout(() => displayMetrics(data, retryCount + 1), 100);
+            return;
+        }
+        console.error(
+            "Aggregated metrics section not found after retries; cannot render metrics",
+        );
         return;
     }
+
+    if (!aggregatedContent) {
+        console.warn(
+            "Aggregated metrics content container missing; creating fallback container",
+        );
+        aggregatedContent = document.createElement("div");
+        aggregatedContent.id = "aggregated-metrics-content";
+        aggregatedContent.className =
+            "overflow-auto mb-6 bg-gray-100 dark:bg-gray-900";
+
+        // Insert before chart if present, otherwise append to section
+        const chartElement = aggregatedSection.querySelector("#metricsChart");
+        if (chartElement && chartElement.parentElement === aggregatedSection) {
+            aggregatedSection.insertBefore(aggregatedContent, chartElement);
+        } else {
+            aggregatedSection.appendChild(aggregatedContent);
+        }
+    }
+
+    console.log("aggregated-metrics-content element ready:", aggregatedContent);
 
     try {
         // FIX: Handle completely empty data
         if (!data || Object.keys(data).length === 0) {
+            console.warn("Empty or null data received");
             const emptyStateDiv = document.createElement("div");
             emptyStateDiv.className = "text-center p-8 text-gray-500";
             emptyStateDiv.innerHTML = `
@@ -903,8 +1058,8 @@ function displayMetrics(data) {
                     Refresh Metrics
                 </button>
             `;
-            metricsPanel.innerHTML = "";
-            metricsPanel.appendChild(emptyStateDiv);
+            aggregatedContent.innerHTML = "";
+            aggregatedContent.appendChild(emptyStateDiv);
             return;
         }
 
@@ -912,74 +1067,78 @@ function displayMetrics(data) {
         const mainContainer = document.createElement("div");
         mainContainer.className = "space-y-6";
 
-        // System overview section (top priority display)
-        if (data.system || data.overall) {
-            const systemData = data.system || data.overall || {};
-            const systemSummary = createSystemSummaryCard(systemData);
-            mainContainer.appendChild(systemSummary);
-        }
-
-        // Key Performance Indicators section
+        // Key Performance Indicators section - render to dedicated container above Top Performers
         const kpiData = extractKPIData(data);
         if (Object.keys(kpiData).length > 0) {
-            const kpiSection = createKPISection(kpiData);
-            mainContainer.appendChild(kpiSection);
+            const kpiContainer = document.getElementById("kpi-metrics-section");
+            if (kpiContainer) {
+                const kpiSection = createKPISection(kpiData);
+                kpiContainer.innerHTML = "";
+                kpiContainer.appendChild(kpiSection);
+            }
         }
 
-        // Top Performers section (before individual metrics)
-        if (data.topPerformers || data.top) {
-            const topData = data.topPerformers || data.top;
-            // const topSection = createTopPerformersSection(topData);
-            const topSection = createEnhancedTopPerformersSection(topData);
+        // Top Performers are now handled entirely by HTMX sections below aggregated-metrics-content
+        // (see <details> sections with top-tools-content, top-resources-content, etc. in admin.html)
+        // Legacy JavaScript widget is disabled to prevent duplicate rendering
+        console.log(
+            "✓ Top Performers handled by HTMX - skipping legacy JavaScript widget",
+        );
 
-            mainContainer.appendChild(topSection);
+        // Individual metrics grid - render inside Top Performers section
+        const individualMetricsGrid = document.getElementById(
+            "individual-metrics-grid",
+        );
+        if (individualMetricsGrid) {
+            const metricsContainer = document.createElement("div");
+            metricsContainer.className =
+                "grid grid-cols-1 md:grid-cols-2 xl:grid-cols-3 gap-6";
+
+            // Tools metrics
+            if (data.tools) {
+                const toolsCard = createMetricsCard("Tools", data.tools);
+                metricsContainer.appendChild(toolsCard);
+            }
+
+            // Resources metrics
+            if (data.resources) {
+                const resourcesCard = createMetricsCard(
+                    "Resources",
+                    data.resources,
+                );
+                metricsContainer.appendChild(resourcesCard);
+            }
+
+            // Prompts metrics
+            if (data.prompts) {
+                const promptsCard = createMetricsCard("Prompts", data.prompts);
+                metricsContainer.appendChild(promptsCard);
+            }
+
+            // Gateways metrics
+            if (data.gateways) {
+                const gatewaysCard = createMetricsCard(
+                    "Gateways",
+                    data.gateways,
+                );
+                metricsContainer.appendChild(gatewaysCard);
+            }
+
+            // Servers metrics
+            if (data.servers) {
+                const serversCard = createMetricsCard("Servers", data.servers);
+                metricsContainer.appendChild(serversCard);
+            }
+
+            // Performance metrics
+            if (data.performance) {
+                const performanceCard = createPerformanceCard(data.performance);
+                metricsContainer.appendChild(performanceCard);
+            }
+
+            individualMetricsGrid.innerHTML = "";
+            individualMetricsGrid.appendChild(metricsContainer);
         }
-
-        // Individual metrics grid for all components
-        const metricsContainer = document.createElement("div");
-        metricsContainer.className =
-            "grid grid-cols-1 md:grid-cols-2 xl:grid-cols-3 gap-6";
-
-        // Tools metrics
-        if (data.tools) {
-            const toolsCard = createMetricsCard("Tools", data.tools);
-            metricsContainer.appendChild(toolsCard);
-        }
-
-        // Resources metrics
-        if (data.resources) {
-            const resourcesCard = createMetricsCard(
-                "Resources",
-                data.resources,
-            );
-            metricsContainer.appendChild(resourcesCard);
-        }
-
-        // Prompts metrics
-        if (data.prompts) {
-            const promptsCard = createMetricsCard("Prompts", data.prompts);
-            metricsContainer.appendChild(promptsCard);
-        }
-
-        // Gateways metrics
-        if (data.gateways) {
-            const gatewaysCard = createMetricsCard("Gateways", data.gateways);
-            metricsContainer.appendChild(gatewaysCard);
-        }
-
-        // Servers metrics
-        if (data.servers) {
-            const serversCard = createMetricsCard("Servers", data.servers);
-            metricsContainer.appendChild(serversCard);
-        }
-
-        // Performance metrics
-        if (data.performance) {
-            const performanceCard = createPerformanceCard(data.performance);
-            metricsContainer.appendChild(performanceCard);
-        }
-
-        mainContainer.appendChild(metricsContainer);
 
         // Recent activity section (bottom)
         if (data.recentActivity || data.recent) {
@@ -989,8 +1148,8 @@ function displayMetrics(data) {
         }
 
         // Safe content replacement
-        metricsPanel.innerHTML = "";
-        metricsPanel.appendChild(mainContainer);
+        aggregatedContent.innerHTML = "";
+        aggregatedContent.appendChild(mainContainer);
 
         console.log("✓ Enhanced metrics display rendered successfully");
     } catch (error) {
@@ -1000,8 +1159,65 @@ function displayMetrics(data) {
 }
 
 /**
+ * Switch between Top Performers tabs
+ */
+// eslint-disable-next-line no-unused-vars
+function switchTopPerformersTab(entityType) {
+    // Hide all panels
+    const panels = document.querySelectorAll(".top-performers-panel");
+    panels.forEach((panel) => panel.classList.add("hidden"));
+
+    // Remove active state from all tabs
+    const tabs = document.querySelectorAll(".top-performers-tab");
+    tabs.forEach((tab) => {
+        tab.classList.remove(
+            "border-indigo-500",
+            "text-indigo-600",
+            "dark:text-indigo-400",
+        );
+        tab.classList.add(
+            "border-transparent",
+            "text-gray-500",
+            "hover:text-gray-700",
+            "hover:border-gray-300",
+            "dark:text-gray-400",
+            "dark:hover:text-gray-300",
+        );
+    });
+
+    // Show selected panel
+    const selectedPanel = document.getElementById(
+        `top-performers-panel-${entityType}`,
+    );
+    if (selectedPanel) {
+        selectedPanel.classList.remove("hidden");
+    }
+
+    // Activate selected tab
+    const selectedTab = document.getElementById(
+        `top-performers-tab-${entityType}`,
+    );
+    if (selectedTab) {
+        selectedTab.classList.remove(
+            "border-transparent",
+            "text-gray-500",
+            "hover:text-gray-700",
+            "hover:border-gray-300",
+            "dark:text-gray-400",
+            "dark:hover:text-gray-300",
+        );
+        selectedTab.classList.add(
+            "border-indigo-500",
+            "text-indigo-600",
+            "dark:text-indigo-400",
+        );
+    }
+}
+
+/**
  * SECURITY: Create system summary card with safe HTML generation
  */
+// eslint-disable-next-line no-unused-vars
 function createSystemSummaryCard(systemData) {
     try {
         const card = document.createElement("div");
@@ -1425,7 +1641,8 @@ function updateKPICards(kpiData) {
 //         return document.createElement("div"); // Safe fallback
 //     }
 // }
-function createEnhancedTopPerformersSection(topData) {
+// Removed unused function createEnhancedTopPerformersSection - handled by HTMX
+/* function createEnhancedTopPerformersSection(topData) {
     try {
         const section = document.createElement("div");
         section.className = "bg-white rounded-lg shadow p-6 dark:bg-gray-800";
@@ -1506,7 +1723,7 @@ function createEnhancedTopPerformersSection(topData) {
         showErrorMessage("Failed to load top performers section");
         return document.createElement("div");
     }
-}
+} */
 function calculateSuccessRate(item) {
     // API returns successRate directly as a percentage
     if (item.successRate !== undefined && item.successRate !== null) {
@@ -1561,6 +1778,7 @@ function formatLastUsed(timestamp) {
     });
 }
 
+/* Unused - part of commented createEnhancedTopPerformersSection
 function createTopPerformersTable(entityType, data, isActive) {
     const panel = document.createElement("div");
     panel.id = `top-${entityType}-panel`;
@@ -1712,17 +1930,25 @@ function createTopPerformersTable(entityType, data, isActive) {
     tableWrapper.appendChild(table);
     panel.appendChild(tableWrapper);
 
-    // Pagination controls (if needed)
+    // Pagination controls (using standard Alpine.js pattern)
     if (data.length > 5) {
-        const pagination = createPaginationControls(data.length, 5, (page) => {
-            updateTableRows(panel, entityType, data, page);
-        });
+        const pagination = createStandardPaginationControls(
+            `top-${entityType}`,
+            data.length,
+            5,
+            (page, perPage) => {
+                updateTableRows(tbody, entityType, data, page, perPage);
+            },
+            },
+        );
         panel.appendChild(pagination);
     }
 
     return panel;
 }
+*/
 
+/* Unused - part of commented createEnhancedTopPerformersSection
 function createTab(type, isActive) {
     const tab = document.createElement("a");
     tab.href = "#";
@@ -1742,7 +1968,9 @@ function createTab(type, isActive) {
     };
     return tab;
 }
+*/
 
+// eslint-disable-next-line no-unused-vars
 function showTopPerformerTab(activeType) {
     const entityTypes = [
         "tools",
@@ -1771,40 +1999,285 @@ function showTopPerformerTab(activeType) {
     });
 }
 
-function createPaginationControls(totalItems, itemsPerPage, onPageChange) {
-    const pagination = document.createElement("div");
-    pagination.className = "mt-4 flex justify-end space-x-2";
-    const totalPages = Math.ceil(totalItems / itemsPerPage);
+/**
+ * Creates standard Alpine.js-based pagination controls matching the pattern
+ * used in Tools/Resources/Prompts sections for visual consistency
+ */
+// eslint-disable-next-line no-unused-vars
+function createStandardPaginationControls(
+    idPrefix,
+    totalItems,
+    initialPerPage,
+    onPageChange,
+) {
+    const wrapper = document.createElement("div");
 
-    for (let page = 1; page <= totalPages; page++) {
-        const button = document.createElement("button");
-        button.className = `px-3 py-1 rounded ${page === 1 ? "bg-indigo-600 text-white" : "bg-gray-200 text-gray-700 dark:bg-gray-700 dark:text-gray-300"}`;
-        button.textContent = page;
-        button.onclick = () => {
-            onPageChange(page);
-            pagination.querySelectorAll("button").forEach((btn) => {
-                btn.className = `px-3 py-1 rounded ${btn === button ? "bg-indigo-600 text-white" : "bg-gray-200 text-gray-700 dark:bg-gray-700 dark:text-gray-300"}`;
-            });
-        };
-        pagination.appendChild(button);
-    }
+    // Store callback in a global namespace for Alpine.js to access
+    const callbackId = `pagination_${idPrefix}_${Date.now()}`;
+    window[callbackId] = onPageChange;
 
-    return pagination;
+    wrapper.setAttribute(
+        "x-data",
+        `{
+        currentPage: 1,
+        perPage: ${initialPerPage},
+        totalItems: ${totalItems},
+        callbackId: '${callbackId}',
+        get totalPages() { return Math.ceil(this.totalItems / this.perPage); },
+        get hasNext() { return this.currentPage < this.totalPages; },
+        get hasPrev() { return this.currentPage > 1; },
+        get startItem() { return Math.min((this.currentPage - 1) * this.perPage + 1, this.totalItems); },
+        get endItem() { return Math.min(this.currentPage * this.perPage, this.totalItems); },
+        
+        goToPage(page) {
+            if (page >= 1 && page <= this.totalPages && page !== this.currentPage) {
+                this.currentPage = page;
+                window[this.callbackId](this.currentPage, this.perPage);
+            }
+        },
+        prevPage() {
+            if (this.hasPrev) { this.goToPage(this.currentPage - 1); }
+        },
+        nextPage() {
+            if (this.hasNext) { this.goToPage(this.currentPage + 1); }
+        },
+        changePageSize(size) {
+            this.perPage = parseInt(size);
+            this.currentPage = 1;
+            window[this.callbackId](this.currentPage, this.perPage);
+        }
+    }`,
+    );
+    wrapper.className =
+        "flex flex-col sm:flex-row items-center justify-between gap-4 py-4 border-t border-gray-200 dark:border-gray-700";
+
+    wrapper.innerHTML = `
+        <!-- Page Size Selector -->
+        <div class="flex items-center gap-2 text-sm text-gray-700 dark:text-gray-300">
+            <span>Show:</span>
+            <select
+                x-model="perPage"
+                @change="changePageSize($event.target.value)"
+                class="px-2 py-1 border border-gray-300 dark:border-gray-600 rounded-md bg-white dark:bg-gray-800 text-gray-900 dark:text-gray-100 focus:ring-2 focus:ring-indigo-500 dark:focus:ring-indigo-400"
+            >
+                <option value="5">5</option>
+                <option value="10">10</option>
+                <option value="25">25</option>
+                <option value="50">50</option>
+                <option value="100">100</option>
+            </select>
+            <span>per page</span>
+        </div>
+
+        <!-- Page Info -->
+        <div class="text-sm text-gray-700 dark:text-gray-300">
+            <span x-text="\`Showing \${startItem} - \${endItem} of \${totalItems.toLocaleString()} items\`"></span>
+        </div>
+
+        <!-- Page Navigation -->
+        <div class="flex items-center gap-2">
+            <!-- First Page Button -->
+            <button
+                @click="goToPage(1)"
+                :disabled="!hasPrev"
+                :class="hasPrev ? 'text-indigo-600 dark:text-indigo-400 hover:bg-indigo-50 dark:hover:bg-indigo-900/20' : 'text-gray-400 dark:text-gray-600 cursor-not-allowed'"
+                class="px-3 py-1 rounded-md border border-gray-300 dark:border-gray-600 disabled:opacity-50 transition-colors"
+                title="First Page"
+            >
+                ⏮️
+            </button>
+
+            <!-- Previous Page Button -->
+            <button
+                @click="prevPage()"
+                :disabled="!hasPrev"
+                :class="hasPrev ? 'text-indigo-600 dark:text-indigo-400 hover:bg-indigo-50 dark:hover:bg-indigo-900/20' : 'text-gray-400 dark:text-gray-600 cursor-not-allowed'"
+                class="px-3 py-1 rounded-md border border-gray-300 dark:border-gray-600 disabled:opacity-50 transition-colors"
+                title="Previous Page"
+            >
+                ◀️ Prev
+            </button>
+
+            <!-- Page Number Display -->
+            <div class="flex items-center gap-1">
+                <!-- Show first page if not near start -->
+                <template x-if="currentPage > 3">
+                    <button
+                        @click="goToPage(1)"
+                        class="px-3 py-1 rounded-md border border-gray-300 dark:border-gray-600 hover:bg-indigo-50 dark:hover:bg-indigo-900/20 text-gray-700 dark:text-gray-300"
+                    >
+                        1
+                    </button>
+                </template>
+
+                <!-- Ellipsis if needed -->
+                <template x-if="currentPage > 4">
+                    <span class="px-2 text-gray-500 dark:text-gray-500">...</span>
+                </template>
+
+                <!-- Show 2 pages before current -->
+                <template x-for="i in [currentPage - 2, currentPage - 1]" :key="i">
+                    <button
+                        x-show="i >= 1"
+                        @click="goToPage(i)"
+                        class="px-3 py-1 rounded-md border border-gray-300 dark:border-gray-600 hover:bg-indigo-50 dark:hover:bg-indigo-900/20 text-gray-700 dark:text-gray-300"
+                        x-text="i"
+                    ></button>
+                </template>
+
+                <!-- Current Page (highlighted) -->
+                <button
+                    class="px-3 py-1 rounded-md border-2 border-indigo-600 dark:border-indigo-400 bg-indigo-50 dark:bg-indigo-900/20 font-semibold text-indigo-700 dark:text-indigo-300"
+                    disabled
+                    x-text="currentPage"
+                ></button>
+
+                <!-- Show 2 pages after current -->
+                <template x-for="i in [currentPage + 1, currentPage + 2]" :key="i">
+                    <button
+                        x-show="i <= totalPages"
+                        @click="goToPage(i)"
+                        class="px-3 py-1 rounded-md border border-gray-300 dark:border-gray-600 hover:bg-indigo-50 dark:hover:bg-indigo-900/20 text-gray-700 dark:text-gray-300"
+                        x-text="i"
+                    ></button>
+                </template>
+
+                <!-- Ellipsis if needed -->
+                <template x-if="currentPage < totalPages - 3">
+                    <span class="px-2 text-gray-500 dark:text-gray-500">...</span>
+                </template>
+
+                <!-- Show last page if not near end -->
+                <template x-if="currentPage < totalPages - 2">
+                    <button
+                        @click="goToPage(totalPages)"
+                        class="px-3 py-1 rounded-md border border-gray-300 dark:border-gray-600 hover:bg-indigo-50 dark:hover:bg-indigo-900/20 text-gray-700 dark:text-gray-300"
+                        x-text="totalPages"
+                    ></button>
+                </template>
+            </div>
+
+            <!-- Next Page Button -->
+            <button
+                @click="nextPage()"
+                :disabled="!hasNext"
+                :class="hasNext ? 'text-indigo-600 dark:text-indigo-400 hover:bg-indigo-50 dark:hover:bg-indigo-900/20' : 'text-gray-400 dark:text-gray-600 cursor-not-allowed'"
+                class="px-3 py-1 rounded-md border border-gray-300 dark:border-gray-600 disabled:opacity-50 transition-colors"
+                title="Next Page"
+            >
+                Next ▶️
+            </button>
+
+            <!-- Last Page Button -->
+            <button
+                @click="goToPage(totalPages)"
+                :disabled="!hasNext"
+                :class="hasNext ? 'text-indigo-600 dark:text-indigo-400 hover:bg-indigo-50 dark:hover:bg-indigo-900/20' : 'text-gray-400 dark:text-gray-600 cursor-not-allowed'"
+                class="px-3 py-1 rounded-md border border-gray-300 dark:border-gray-600 disabled:opacity-50 transition-colors"
+                title="Last Page"
+            >
+                ⏭️
+            </button>
+        </div>
+    `;
+    return wrapper;
 }
 
-function updateTableRows(panel, entityType, data, page) {
-    const tbody = panel.querySelector("tbody");
+// eslint-disable-next-line no-unused-vars
+function updateTableRows(tbody, entityType, data, page, perPage) {
     tbody.innerHTML = "";
-    const start = (page - 1) * 5;
-    const paginatedData = data.slice(start, start + 5);
+    const start = (page - 1) * perPage;
+    const paginatedData = data.slice(start, start + perPage);
 
-    paginatedData.forEach((item, index) => {
+    paginatedData.forEach((item, localIndex) => {
+        const globalIndex = start + localIndex; // Calculate global rank
         const row = document.createElement("tr");
-        // ... (same row creation logic as in createTopPerformersTable)
+        row.className =
+            "hover:bg-gray-50 dark:hover:bg-gray-700 transition-colors duration-200";
+
+        // Rank
+        const rankCell = document.createElement("td");
+        rankCell.className =
+            "px-6 py-4 whitespace-nowrap text-sm font-medium text-gray-900 dark:text-gray-100 sm:px-6 sm:py-4";
+        const rankBadge = document.createElement("span");
+        rankBadge.className = `inline-flex items-center justify-center w-6 h-6 rounded-full ${
+            globalIndex === 0
+                ? "bg-yellow-400 text-yellow-900"
+                : globalIndex === 1
+                  ? "bg-gray-300 text-gray-900"
+                  : globalIndex === 2
+                    ? "bg-orange-400 text-orange-900"
+                    : "bg-gray-100 text-gray-600"
+        }`;
+        rankBadge.textContent = globalIndex + 1;
+        rankBadge.setAttribute("aria-label", `Rank ${globalIndex + 1}`);
+        rankCell.appendChild(rankBadge);
+        row.appendChild(rankCell);
+
+        // Name (clickable for drill-down)
+        const nameCell = document.createElement("td");
+        nameCell.className =
+            "px-6 py-4 whitespace-nowrap text-sm text-indigo-600 dark:text-indigo-400 cursor-pointer";
+        nameCell.textContent = escapeHtml(item.name || "Unknown");
+        nameCell.setAttribute("role", "button");
+        nameCell.setAttribute(
+            "aria-label",
+            `View details for ${item.name || "Unknown"}`,
+        );
+        row.appendChild(nameCell);
+
+        // Executions
+        const execCell = document.createElement("td");
+        execCell.className =
+            "px-6 py-4 whitespace-nowrap text-sm text-gray-500 dark:text-gray-300 sm:px-6 sm:py-4";
+        execCell.textContent = formatNumber(
+            item.executionCount || item.execution_count || item.executions || 0,
+        );
+        row.appendChild(execCell);
+
+        // Avg Response Time
+        const avgTimeCell = document.createElement("td");
+        avgTimeCell.className =
+            "px-6 py-4 whitespace-nowrap text-sm text-gray-500 dark:text-gray-300 sm:px-6 sm:py-4";
+        const avgTime = item.avg_response_time || item.avgResponseTime;
+        avgTimeCell.textContent = avgTime ? `${Math.round(avgTime)}ms` : "N/A";
+        row.appendChild(avgTimeCell);
+
+        // Success Rate
+        const successCell = document.createElement("td");
+        successCell.className =
+            "px-6 py-4 whitespace-nowrap text-sm sm:px-6 sm:py-4";
+        const successRate = calculateSuccessRate(item);
+        const successBadge = document.createElement("span");
+        successBadge.className = `inline-flex items-center px-2.5 py-0.5 rounded-full text-xs font-medium ${
+            successRate >= 95
+                ? "bg-green-100 text-green-800 dark:bg-green-800 dark:text-green-100"
+                : successRate >= 80
+                  ? "bg-yellow-100 text-yellow-800 dark:bg-yellow-800 dark:text-yellow-100"
+                  : "bg-red-100 text-red-800 dark:bg-red-800 dark:text-red-100"
+        }`;
+        successBadge.textContent = `${successRate}%`;
+        successBadge.setAttribute(
+            "aria-label",
+            `Success rate: ${successRate}%`,
+        );
+        successCell.appendChild(successBadge);
+        row.appendChild(successCell);
+
+        // Last Used
+        const lastUsedCell = document.createElement("td");
+        lastUsedCell.className =
+            "px-6 py-4 whitespace-nowrap text-sm text-gray-500 dark:text-gray-300 sm:px-6 sm:py-4";
+        lastUsedCell.textContent = formatLastUsed(
+            item.last_execution || item.lastExecution,
+        );
+        row.appendChild(lastUsedCell);
+
         tbody.appendChild(row);
     });
 }
 
+/* Unused - part of commented createEnhancedTopPerformersSection
 function exportMetricsToCSV(topData) {
     const headers = [
         "Entity Type",
@@ -1851,6 +2324,7 @@ function exportMetricsToCSV(topData) {
     a.click();
     URL.revokeObjectURL(url);
 }
+*/
 
 /**
  * SECURITY: Create top item card with safe content handling
@@ -2178,6 +2652,10 @@ async function editTool(toolId) {
             JSON.stringify(tool.inputSchema || {}),
             "Schema",
         );
+        const outputSchemaValidation = validateJson(
+            tool.outputSchema ? JSON.stringify(tool.outputSchema) : "",
+            "Output Schema",
+        );
         const annotationsValidation = validateJson(
             JSON.stringify(tool.annotations || {}),
             "Annotations",
@@ -2185,6 +2663,7 @@ async function editTool(toolId) {
 
         const headersField = safeGetElement("edit-tool-headers");
         const schemaField = safeGetElement("edit-tool-schema");
+        const outputSchemaField = safeGetElement("edit-tool-output-schema");
         const annotationsField = safeGetElement("edit-tool-annotations");
 
         if (headersField && headersValidation.valid) {
@@ -2196,6 +2675,15 @@ async function editTool(toolId) {
         }
         if (schemaField && schemaValidation.valid) {
             schemaField.value = JSON.stringify(schemaValidation.value, null, 2);
+        }
+        if (outputSchemaField) {
+            if (tool.outputSchema) {
+                outputSchemaField.value = outputSchemaValidation.valid
+                    ? JSON.stringify(outputSchemaValidation.value, null, 2)
+                    : "";
+            } else {
+                outputSchemaField.value = "";
+            }
         }
         if (annotationsField && annotationsValidation.valid) {
             annotationsField.value = JSON.stringify(
@@ -2217,6 +2705,16 @@ async function editTool(toolId) {
                 JSON.stringify(schemaValidation.value, null, 2),
             );
             window.editToolSchemaEditor.refresh();
+        }
+        if (window.editToolOutputSchemaEditor) {
+            if (tool.outputSchema && outputSchemaValidation.valid) {
+                window.editToolOutputSchemaEditor.setValue(
+                    JSON.stringify(outputSchemaValidation.value, null, 2),
+                );
+            } else {
+                window.editToolOutputSchemaEditor.setValue("");
+            }
+            window.editToolOutputSchemaEditor.refresh();
         }
 
         // Prefill integration type from DB and set request types accordingly
@@ -2299,6 +2797,12 @@ async function editTool(toolId) {
                 if (window.editToolSchemaEditor) {
                     window.editToolSchemaEditor.setOption("readOnly", true);
                 }
+                if (window.editToolOutputSchemaEditor) {
+                    window.editToolOutputSchemaEditor.setOption(
+                        "readOnly",
+                        true,
+                    );
+                }
             } else {
                 typeField.disabled = false;
                 if (authTypeField) {
@@ -2321,6 +2825,12 @@ async function editTool(toolId) {
                 }
                 if (window.editToolSchemaEditor) {
                     window.editToolSchemaEditor.setOption("readOnly", false);
+                }
+                if (window.editToolOutputSchemaEditor) {
+                    window.editToolOutputSchemaEditor.setOption(
+                        "readOnly",
+                        false,
+                    );
                 }
             }
             // Update request types and URL field
@@ -2351,6 +2861,18 @@ async function editTool(toolId) {
         const authHeaderValueField = authHeadersSection?.querySelector(
             "input[name='auth_header_value']",
         );
+        const authHeadersContainer = document.getElementById(
+            "auth-headers-container-gw-edit",
+        );
+        const authHeadersJsonInput = document.getElementById(
+            "auth-headers-json-gw-edit",
+        );
+        if (authHeadersContainer) {
+            authHeadersContainer.innerHTML = "";
+        }
+        if (authHeadersJsonInput) {
+            authHeadersJsonInput.value = "";
+        }
 
         // Hide all auth sections first
         if (authBasicSection) {
@@ -2432,6 +2954,9 @@ async function editTool(toolId) {
             if (window.editToolSchemaEditor) {
                 window.editToolSchemaEditor.refresh();
             }
+            if (window.editToolOutputSchemaEditor) {
+                window.editToolOutputSchemaEditor.refresh();
+            }
         }, 100);
 
         console.log("✓ Tool edit modal loaded successfully");
@@ -2445,6 +2970,7 @@ async function editTool(toolId) {
 /**
  * SECURE: View A2A Agents function with safe display
  */
+
 async function viewAgent(agentId) {
     try {
         console.log(`Viewing agent ID: ${agentId}`);
@@ -2468,9 +2994,9 @@ async function viewAgent(agentId) {
             const fields = [
                 { label: "Name", value: agent.name },
                 { label: "Slug", value: agent.slug },
-                { label: "Endpoint URL", value: agent.endpoint_url },
-                { label: "Agent Type", value: agent.agent_type },
-                { label: "Protocol Version", value: agent.protocol_version },
+                { label: "Endpoint URL", value: agent.endpointUrl },
+                { label: "Agent Type", value: agent.agentType },
+                { label: "Protocol Version", value: agent.protocolVersion },
                 { label: "Description", value: agent.description || "N/A" },
                 { label: "Visibility", value: agent.visibility || "private" },
             ];
@@ -2651,11 +3177,347 @@ async function viewAgent(agentId) {
         }
 
         openModal("agent-modal");
+        const modal = document.getElementById("agent-modal");
+        if (modal && modal.classList.contains("hidden")) {
+            console.warn("Modal was still hidden — forcing visible.");
+            modal.classList.remove("hidden");
+        }
+
         console.log("✓ Agent details loaded successfully");
     } catch (error) {
         console.error("Error fetching agent details:", error);
         const errorMessage = handleFetchError(error, "load agent details");
         showErrorMessage(errorMessage);
+    }
+}
+
+/**
+ * SECURE: Edit A2A Agent function
+ */
+
+async function editA2AAgent(agentId) {
+    try {
+        console.log(`Editing A2A Agent ID: ${agentId}`);
+
+        const response = await fetchWithTimeout(
+            `${window.ROOT_PATH}/admin/a2a/${agentId}`,
+        );
+
+        if (!response.ok) {
+            throw new Error(`HTTP ${response.status}: ${response.statusText}`);
+        }
+
+        const agent = await response.json();
+
+        console.log("Agent Details: " + JSON.stringify(agent, null, 2));
+
+        // for (const [key, value] of Object.entries(agent)) {
+        //       console.log(`${key}:`, value);
+        //     }
+
+        const isInactiveCheckedBool = isInactiveChecked("a2a-agents");
+        const editForm = safeGetElement("edit-a2a-agent-form");
+        let hiddenField = safeGetElement("edit-a2a-agents-show-inactive");
+        if (!hiddenField) {
+            hiddenField = document.createElement("input");
+            hiddenField.type = "hidden";
+            hiddenField.name = "is_inactivate_checked";
+            hiddenField.id = "edit-a2a-agents-show-inactive";
+
+            if (editForm) {
+                editForm.appendChild(hiddenField);
+            }
+        }
+        hiddenField.value = isInactiveCheckedBool;
+
+        // Set form action and populate fields with validation
+
+        if (editForm) {
+            editForm.action = `${window.ROOT_PATH}/admin/a2a/${agentId}/edit`;
+            editForm.method = "POST"; // ensure method is POST
+        }
+
+        const nameValidation = validateInputName(agent.name, "a2a_agent");
+        const urlValidation = validateUrl(agent.endpointUrl);
+
+        const nameField = safeGetElement("a2a-agent-name-edit");
+        const urlField = safeGetElement("a2a-agent-endpoint-url-edit");
+        const descField = safeGetElement("a2a-agent-description-edit");
+        const agentType = safeGetElement("a2a-agent-type-edit");
+
+        agentType.value = agent.agentType;
+
+        console.log("Agent Type: ", agent.agentType);
+
+        if (nameField && nameValidation.valid) {
+            nameField.value = nameValidation.value;
+        }
+        if (urlField && urlValidation.valid) {
+            urlField.value = urlValidation.value;
+        }
+        if (descField) {
+            descField.value = agent.description || "";
+        }
+
+        // Set tags field
+        const tagsField = safeGetElement("a2a-agent-tags-edit");
+        if (tagsField) {
+            tagsField.value = agent.tags ? agent.tags.join(", ") : "";
+        }
+
+        const teamId = new URL(window.location.href).searchParams.get(
+            "team_id",
+        );
+
+        if (teamId) {
+            const hiddenInput = document.createElement("input");
+            hiddenInput.type = "hidden";
+            hiddenInput.name = "team_id";
+            hiddenInput.value = teamId;
+            editForm.appendChild(hiddenInput);
+        }
+
+        // ✅ Prefill visibility radios (consistent with server)
+        const visibility = agent.visibility
+            ? agent.visibility.toLowerCase()
+            : null;
+
+        const publicRadio = safeGetElement("a2a-visibility-public-edit");
+        const teamRadio = safeGetElement("a2a-visibility-team-edit");
+        const privateRadio = safeGetElement("a2a-visibility-private-edit");
+
+        // Clear all first
+        if (publicRadio) {
+            publicRadio.checked = false;
+        }
+        if (teamRadio) {
+            teamRadio.checked = false;
+        }
+        if (privateRadio) {
+            privateRadio.checked = false;
+        }
+
+        if (visibility) {
+            // Check visibility and set the corresponding radio button
+            if (visibility === "public" && publicRadio) {
+                publicRadio.checked = true;
+            } else if (visibility === "team" && teamRadio) {
+                teamRadio.checked = true;
+            } else if (visibility === "private" && privateRadio) {
+                privateRadio.checked = true;
+            }
+        }
+
+        const authTypeField = safeGetElement("auth-type-a2a-edit");
+
+        if (authTypeField) {
+            authTypeField.value = agent.authType || "";
+        }
+
+        toggleA2AAuthFields(agent.authType || "");
+
+        // Auth containers
+        const authBasicSection = safeGetElement("auth-basic-fields-a2a-edit");
+        const authBearerSection = safeGetElement("auth-bearer-fields-a2a-edit");
+        const authHeadersSection = safeGetElement(
+            "auth-headers-fields-a2a-edit",
+        );
+        const authOAuthSection = safeGetElement("auth-oauth-fields-a2a-edit");
+
+        // Individual fields
+        const authUsernameField = safeGetElement(
+            "auth-basic-fields-a2a-edit",
+        )?.querySelector("input[name='auth_username']");
+        const authPasswordField = safeGetElement(
+            "auth-basic-fields-a2a-edit",
+        )?.querySelector("input[name='auth_password']");
+
+        const authTokenField = safeGetElement(
+            "auth-bearer-fields-a2a-edit",
+        )?.querySelector("input[name='auth_token']");
+
+        const authHeaderKeyField = safeGetElement(
+            "auth-headers-fields-a2a-edit",
+        )?.querySelector("input[name='auth_header_key']");
+        const authHeaderValueField = safeGetElement(
+            "auth-headers-fields-a2a-edit",
+        )?.querySelector("input[name='auth_header_value']");
+
+        // OAuth fields
+        const oauthGrantTypeField = safeGetElement("oauth-grant-type-a2a-edit");
+        const oauthClientIdField = safeGetElement("oauth-client-id-a2a-edit");
+        const oauthClientSecretField = safeGetElement(
+            "oauth-client-secret-a2a-edit",
+        );
+        const oauthTokenUrlField = safeGetElement("oauth-token-url-a2a-edit");
+        const oauthAuthUrlField = safeGetElement(
+            "oauth-authorization-url-a2a-edit",
+        );
+        const oauthRedirectUriField = safeGetElement(
+            "oauth-redirect-uri-a2a-edit",
+        );
+        const oauthScopesField = safeGetElement("oauth-scopes-a2a-edit");
+        const oauthAuthCodeFields = safeGetElement(
+            "oauth-auth-code-fields-a2a-edit",
+        );
+
+        // Hide all auth sections first
+        if (authBasicSection) {
+            authBasicSection.style.display = "none";
+        }
+        if (authBearerSection) {
+            authBearerSection.style.display = "none";
+        }
+        if (authHeadersSection) {
+            authHeadersSection.style.display = "none";
+        }
+        if (authOAuthSection) {
+            authOAuthSection.style.display = "none";
+        }
+
+        switch (agent.authType) {
+            case "basic":
+                if (authBasicSection) {
+                    authBasicSection.style.display = "block";
+                    if (authUsernameField) {
+                        authUsernameField.value = agent.authUsername || "";
+                    }
+                    if (authPasswordField) {
+                        authPasswordField.value = "*****"; // mask password
+                    }
+                }
+                break;
+            case "bearer":
+                if (authBearerSection) {
+                    authBearerSection.style.display = "block";
+                    if (authTokenField) {
+                        authTokenField.value = agent.authValue || ""; // show full token
+                    }
+                }
+                break;
+            case "authheaders":
+                if (authHeadersSection) {
+                    authHeadersSection.style.display = "block";
+                    if (authHeaderKeyField) {
+                        authHeaderKeyField.value = agent.authHeaderKey || "";
+                    }
+                    if (authHeaderValueField) {
+                        authHeaderValueField.value = "*****"; // mask header value
+                    }
+                }
+                break;
+            case "oauth":
+                if (authOAuthSection) {
+                    authOAuthSection.style.display = "block";
+                }
+                // Populate OAuth fields if available
+                if (agent.oauthConfig) {
+                    const config = agent.oauthConfig;
+                    if (oauthGrantTypeField && config.grant_type) {
+                        oauthGrantTypeField.value = config.grant_type;
+                        // Show/hide authorization code fields based on grant type
+                        if (oauthAuthCodeFields) {
+                            oauthAuthCodeFields.style.display =
+                                config.grant_type === "authorization_code"
+                                    ? "block"
+                                    : "none";
+                        }
+                    }
+                    if (oauthClientIdField && config.client_id) {
+                        oauthClientIdField.value = config.client_id;
+                    }
+                    if (oauthClientSecretField) {
+                        oauthClientSecretField.value = ""; // Don't populate secret for security
+                    }
+                    if (oauthTokenUrlField && config.token_url) {
+                        oauthTokenUrlField.value = config.token_url;
+                    }
+                    if (oauthAuthUrlField && config.authorization_url) {
+                        oauthAuthUrlField.value = config.authorization_url;
+                    }
+                    if (oauthRedirectUriField && config.redirect_uri) {
+                        oauthRedirectUriField.value = config.redirect_uri;
+                    }
+                    if (
+                        oauthScopesField &&
+                        config.scopes &&
+                        Array.isArray(config.scopes)
+                    ) {
+                        oauthScopesField.value = config.scopes.join(" ");
+                    }
+                }
+                break;
+            case "":
+            default:
+                // No auth – keep everything hidden
+                break;
+        }
+
+        // **Capabilities & Config (ensure valid dicts)**
+        safeSetValue(
+            "a2a-agent-capabilities-edit",
+            JSON.stringify(agent.capabilities || {}),
+        );
+        safeSetValue(
+            "a2a-agent-config-edit",
+            JSON.stringify(agent.config || {}),
+        );
+
+        // Set form action to the new POST endpoint
+
+        // Handle passthrough headers
+        const passthroughHeadersField = safeGetElement(
+            "edit-a2a-agent-passthrough-headers",
+        );
+        if (passthroughHeadersField) {
+            if (
+                agent.passthroughHeaders &&
+                Array.isArray(agent.passthroughHeaders)
+            ) {
+                passthroughHeadersField.value =
+                    agent.passthroughHeaders.join(", ");
+            } else {
+                passthroughHeadersField.value = "";
+            }
+        }
+
+        openModal("a2a-edit-modal");
+        console.log("✓ A2A Agent edit modal loaded successfully");
+    } catch (err) {
+        console.error("Error loading A2A agent:", err);
+        const errorMessage = handleFetchError(
+            err,
+            "load A2A Agent for editing",
+        );
+        showErrorMessage(errorMessage);
+    }
+}
+
+function safeSetValue(id, val) {
+    const el = document.getElementById(id);
+    if (el) {
+        el.value = val;
+    }
+}
+
+function toggleA2AAuthFields(authType) {
+    const sections = [
+        "auth-basic-fields-a2a-edit",
+        "auth-bearer-fields-a2a-edit",
+        "auth-headers-fields-a2a-edit",
+        "auth-oauth-fields-a2a-edit",
+    ];
+    sections.forEach((id) => {
+        const el = document.getElementById(id);
+        if (el) {
+            el.style.display = "none";
+        }
+    });
+    if (authType) {
+        const el = document.getElementById(`auth-${authType}-fields-a2a-edit`);
+        if (el) {
+            el.style.display = "block";
+        }
     }
 }
 
@@ -3343,12 +4205,12 @@ async function viewPrompt(promptName) {
 /**
  * SECURE: Edit Prompt function with validation
  */
-async function editPrompt(promptName) {
+async function editPrompt(promptId) {
     try {
-        console.log(`Editing prompt: ${promptName}`);
+        console.log(`Editing prompt: ${promptId}`);
 
         const response = await fetchWithTimeout(
-            `${window.ROOT_PATH}/admin/prompts/${encodeURIComponent(promptName)}`,
+            `${window.ROOT_PATH}/admin/prompts/${encodeURIComponent(promptId)}`,
         );
 
         if (!response.ok) {
@@ -3404,7 +4266,22 @@ async function editPrompt(promptName) {
         // Set form action and populate fields with validation
         const editForm = safeGetElement("edit-prompt-form");
         if (editForm) {
-            editForm.action = `${window.ROOT_PATH}/admin/prompts/${encodeURIComponent(promptName)}/edit`;
+            editForm.action = `${window.ROOT_PATH}/admin/prompts/${encodeURIComponent(promptId)}/edit`;
+            // Add or update hidden team_id input if present in URL
+            const teamId = new URL(window.location.href).searchParams.get(
+                "team_id",
+            );
+            if (teamId) {
+                let teamInput = safeGetElement("edit-prompt-team-id");
+                if (!teamInput) {
+                    teamInput = document.createElement("input");
+                    teamInput.type = "hidden";
+                    teamInput.name = "team_id";
+                    teamInput.id = "edit-prompt-team-id";
+                    editForm.appendChild(teamInput);
+                }
+                teamInput.value = teamId;
+            }
         }
 
         // Validate prompt name
@@ -3690,6 +4567,8 @@ async function editGateway(gatewayId) {
 
         const gateway = await response.json();
 
+        console.log("Gateway Details: " + JSON.stringify(gateway, null, 2));
+
         const isInactiveCheckedBool = isInactiveChecked("gateways");
         let hiddenField = safeGetElement("edit-gateway-show-inactive");
         if (!hiddenField) {
@@ -3840,7 +4719,15 @@ async function editGateway(gatewayId) {
                         authUsernameField.value = gateway.authUsername || "";
                     }
                     if (authPasswordField) {
-                        authPasswordField.value = "*****"; // mask password
+                        if (gateway.authPasswordUnmasked) {
+                            authPasswordField.dataset.isMasked = "true";
+                            authPasswordField.dataset.realValue =
+                                gateway.authPasswordUnmasked;
+                        } else {
+                            delete authPasswordField.dataset.isMasked;
+                            delete authPasswordField.dataset.realValue;
+                        }
+                        authPasswordField.value = MASKED_AUTH_VALUE;
                     }
                 }
                 break;
@@ -3848,18 +4735,52 @@ async function editGateway(gatewayId) {
                 if (authBearerSection) {
                     authBearerSection.style.display = "block";
                     if (authTokenField) {
-                        authTokenField.value = gateway.authValue || ""; // show full token
+                        if (gateway.authTokenUnmasked) {
+                            authTokenField.dataset.isMasked = "true";
+                            authTokenField.dataset.realValue =
+                                gateway.authTokenUnmasked;
+                            authTokenField.value = MASKED_AUTH_VALUE;
+                        } else {
+                            delete authTokenField.dataset.isMasked;
+                            delete authTokenField.dataset.realValue;
+                            authTokenField.value = gateway.authToken || "";
+                        }
                     }
                 }
                 break;
             case "authheaders":
                 if (authHeadersSection) {
                     authHeadersSection.style.display = "block";
+                    const unmaskedHeaders =
+                        Array.isArray(gateway.authHeadersUnmasked) &&
+                        gateway.authHeadersUnmasked.length > 0
+                            ? gateway.authHeadersUnmasked
+                            : gateway.authHeaders;
+                    if (
+                        Array.isArray(unmaskedHeaders) &&
+                        unmaskedHeaders.length > 0
+                    ) {
+                        loadAuthHeaders(
+                            "auth-headers-container-gw-edit",
+                            unmaskedHeaders,
+                            { maskValues: true },
+                        );
+                    } else {
+                        updateAuthHeadersJSON("auth-headers-container-gw-edit");
+                    }
                     if (authHeaderKeyField) {
                         authHeaderKeyField.value = gateway.authHeaderKey || "";
                     }
                     if (authHeaderValueField) {
-                        authHeaderValueField.value = "*****"; // mask header value
+                        if (
+                            Array.isArray(unmaskedHeaders) &&
+                            unmaskedHeaders.length === 1
+                        ) {
+                            authHeaderValueField.dataset.isMasked = "true";
+                            authHeaderValueField.dataset.realValue =
+                                unmaskedHeaders[0].value ?? "";
+                        }
+                        authHeaderValueField.value = MASKED_AUTH_VALUE;
                     }
                 }
                 break;
@@ -4101,7 +5022,10 @@ async function viewServer(serverId) {
                 const toolsList = document.createElement("div");
                 toolsList.className = "mt-1 space-y-1";
 
-                server.associatedTools.forEach((toolId) => {
+                const maxToShow = 3;
+                const toolsToShow = server.associatedTools.slice(0, maxToShow);
+
+                toolsToShow.forEach((toolId) => {
                     const toolItem = document.createElement("div");
                     toolItem.className = "flex items-center space-x-2";
 
@@ -4122,6 +5046,22 @@ async function viewServer(serverId) {
                     toolItem.appendChild(toolIdSpan);
                     toolsList.appendChild(toolItem);
                 });
+
+                // If more than maxToShow, add a summary badge
+                if (server.associatedTools.length > maxToShow) {
+                    const moreItem = document.createElement("div");
+                    moreItem.className = "flex items-center space-x-2";
+
+                    const moreBadge = document.createElement("span");
+                    moreBadge.className =
+                        "inline-block bg-green-100 text-green-800 text-xs px-2 py-1 rounded-full cursor-pointer dark:bg-green-900 dark:text-green-200";
+                    moreBadge.title = "Total tools associated";
+                    const remaining = server.associatedTools.length - maxToShow;
+                    moreBadge.textContent = `+${remaining} more`;
+
+                    moreItem.appendChild(moreBadge);
+                    toolsList.appendChild(moreItem);
+                }
 
                 toolsLabel.appendChild(toolsList);
                 toolsSection.appendChild(toolsLabel);
@@ -4144,7 +5084,13 @@ async function viewServer(serverId) {
                 const resourcesList = document.createElement("div");
                 resourcesList.className = "mt-1 space-y-1";
 
-                server.associatedResources.forEach((resourceId) => {
+                const maxToShow = 3;
+                const resourcesToShow = server.associatedResources.slice(
+                    0,
+                    maxToShow,
+                );
+
+                resourcesToShow.forEach((resourceId) => {
                     const resourceItem = document.createElement("div");
                     resourceItem.className = "flex items-center space-x-2";
 
@@ -4167,6 +5113,23 @@ async function viewServer(serverId) {
                     resourcesList.appendChild(resourceItem);
                 });
 
+                // If more than maxToShow, add a summary badge
+                if (server.associatedResources.length > maxToShow) {
+                    const moreItem = document.createElement("div");
+                    moreItem.className = "flex items-center space-x-2";
+
+                    const moreBadge = document.createElement("span");
+                    moreBadge.className =
+                        "inline-block bg-blue-100 text-blue-800 text-xs px-2 py-1 rounded-full cursor-pointer dark:bg-blue-900 dark:text-blue-200";
+                    moreBadge.title = "Total resources associated";
+                    const remaining =
+                        server.associatedResources.length - maxToShow;
+                    moreBadge.textContent = `+${remaining} more`;
+
+                    moreItem.appendChild(moreBadge);
+                    resourcesList.appendChild(moreItem);
+                }
+
                 resourcesLabel.appendChild(resourcesList);
                 resourcesSection.appendChild(resourcesLabel);
                 associatedDiv.appendChild(resourcesSection);
@@ -4188,7 +5151,13 @@ async function viewServer(serverId) {
                 const promptsList = document.createElement("div");
                 promptsList.className = "mt-1 space-y-1";
 
-                server.associatedPrompts.forEach((promptId) => {
+                const maxToShow = 3;
+                const promptsToShow = server.associatedPrompts.slice(
+                    0,
+                    maxToShow,
+                );
+
+                promptsToShow.forEach((promptId) => {
                     const promptItem = document.createElement("div");
                     promptItem.className = "flex items-center space-x-2";
 
@@ -4209,6 +5178,23 @@ async function viewServer(serverId) {
                     promptItem.appendChild(promptIdSpan);
                     promptsList.appendChild(promptItem);
                 });
+
+                // If more than maxToShow, add a summary badge
+                if (server.associatedPrompts.length > maxToShow) {
+                    const moreItem = document.createElement("div");
+                    moreItem.className = "flex items-center space-x-2";
+
+                    const moreBadge = document.createElement("span");
+                    moreBadge.className =
+                        "inline-block bg-purple-100 text-purple-800 text-xs px-2 py-1 rounded-full cursor-pointer dark:bg-purple-900 dark:text-purple-200";
+                    moreBadge.title = "Total prompts associated";
+                    const remaining =
+                        server.associatedPrompts.length - maxToShow;
+                    moreBadge.textContent = `+${remaining} more`;
+
+                    moreItem.appendChild(moreBadge);
+                    promptsList.appendChild(moreItem);
+                }
 
                 promptsLabel.appendChild(promptsList);
                 promptsSection.appendChild(promptsLabel);
@@ -4475,7 +5461,57 @@ async function editServer(serverId) {
         // Store server data for modal population
         window.currentEditingServer = server;
 
+        // Set associated tools data attribute on the container for reference by initToolSelect
+        const editToolsContainer = document.getElementById("edit-server-tools");
+        if (editToolsContainer && server.associatedTools) {
+            editToolsContainer.setAttribute(
+                "data-server-tools",
+                JSON.stringify(server.associatedTools),
+            );
+        }
+
+        // Set associated resources data attribute on the container
+        const editResourcesContainer = document.getElementById(
+            "edit-server-resources",
+        );
+        if (editResourcesContainer && server.associatedResources) {
+            editResourcesContainer.setAttribute(
+                "data-server-resources",
+                JSON.stringify(server.associatedResources),
+            );
+        }
+
+        // Set associated prompts data attribute on the container
+        const editPromptsContainer = document.getElementById(
+            "edit-server-prompts",
+        );
+        if (editPromptsContainer && server.associatedPrompts) {
+            editPromptsContainer.setAttribute(
+                "data-server-prompts",
+                JSON.stringify(server.associatedPrompts),
+            );
+        }
+
         openModal("server-edit-modal");
+
+        // Initialize the select handlers for resources and prompts in the edit modal
+        initResourceSelect(
+            "edit-server-resources",
+            "selectedEditResourcesPills",
+            "selectedEditResourcesWarning",
+            6,
+            "selectAllEditResourcesBtn",
+            "clearAllEditResourcesBtn",
+        );
+
+        initPromptSelect(
+            "edit-server-prompts",
+            "selectedEditPromptsPills",
+            "selectedEditPromptsWarning",
+            6,
+            "selectAllEditPromptsBtn",
+            "clearAllEditPromptsBtn",
+        );
 
         // Use multiple approaches to ensure checkboxes get set
         setEditServerAssociations(server);
@@ -4484,24 +5520,22 @@ async function editServer(serverId) {
 
         // Set associated items after modal is opened
         setTimeout(() => {
-            console.log("Setting associated items for server:", server.id);
-            console.log("Associated tools:", server.associatedTools);
-            console.log("Associated resources:", server.associatedResources);
-            console.log("Associated prompts:", server.associatedPrompts);
-
             // Set associated tools checkboxes
             const toolCheckboxes = document.querySelectorAll(
                 'input[name="associatedTools"]',
             );
-            console.log("Found", toolCheckboxes.length, "tool checkboxes");
 
             toolCheckboxes.forEach((checkbox) => {
-                const isChecked =
-                    server.associatedTools &&
-                    server.associatedTools.includes(checkbox.value);
-                console.log(
-                    `Tool ${checkbox.value}: ${isChecked ? "CHECKED" : "unchecked"}`,
-                );
+                let isChecked = false;
+                if (server.associatedTools && window.toolMapping) {
+                    // Get the tool name for this checkbox UUID
+                    const toolName = window.toolMapping[checkbox.value];
+
+                    // Check if this tool name is in the associated tools array
+                    isChecked =
+                        toolName && server.associatedTools.includes(toolName);
+                }
+
                 checkbox.checked = isChecked;
             });
 
@@ -4509,20 +5543,12 @@ async function editServer(serverId) {
             const resourceCheckboxes = document.querySelectorAll(
                 'input[name="associatedResources"]',
             );
-            console.log(
-                "Found",
-                resourceCheckboxes.length,
-                "resource checkboxes",
-            );
 
             resourceCheckboxes.forEach((checkbox) => {
                 const checkboxValue = parseInt(checkbox.value);
                 const isChecked =
                     server.associatedResources &&
                     server.associatedResources.includes(checkboxValue);
-                console.log(
-                    `Resource ${checkboxValue}: ${isChecked ? "CHECKED" : "unchecked"}`,
-                );
                 checkbox.checked = isChecked;
             });
 
@@ -4530,16 +5556,12 @@ async function editServer(serverId) {
             const promptCheckboxes = document.querySelectorAll(
                 'input[name="associatedPrompts"]',
             );
-            console.log("Found", promptCheckboxes.length, "prompt checkboxes");
 
             promptCheckboxes.forEach((checkbox) => {
                 const checkboxValue = parseInt(checkbox.value);
                 const isChecked =
                     server.associatedPrompts &&
                     server.associatedPrompts.includes(checkboxValue);
-                console.log(
-                    `Prompt ${checkboxValue}: ${isChecked ? "CHECKED" : "unchecked"}`,
-                );
                 checkbox.checked = isChecked;
             });
 
@@ -4676,6 +5698,376 @@ function setEditServerAssociations(server) {
 }
 
 // ===================================================================
+// HTMX HANDLERS for dynamic content loading
+// ===================================================================
+
+// Set up HTMX handler for auto-checking newly loaded tools when Select All is active or Edit Server mode
+if (window.htmx && !window._toolsHtmxHandlerAttached) {
+    window._toolsHtmxHandlerAttached = true;
+
+    window.htmx.on("htmx:afterSettle", function (evt) {
+        // Only handle tool pagination requests
+        if (
+            evt.detail.pathInfo &&
+            evt.detail.pathInfo.requestPath &&
+            evt.detail.pathInfo.requestPath.includes("/admin/tools/partial")
+        ) {
+            // Use a slight delay to ensure DOM is fully updated
+            setTimeout(() => {
+                // Find which container actually triggered the request by checking the target
+                let container = null;
+                const target = evt.detail.target;
+
+                // Check if the target itself is the edit server tools container (most common case for infinite scroll)
+                if (target && target.id === "edit-server-tools") {
+                    container = target;
+                }
+                // Or if target is the associated tools container (for add server)
+                else if (target && target.id === "associatedTools") {
+                    container = target;
+                }
+                // Otherwise try to find the container using closest
+                else if (target) {
+                    container =
+                        target.closest("#associatedTools") ||
+                        target.closest("#edit-server-tools");
+                }
+
+                // Fallback logic if container still not found
+                if (!container) {
+                    // Check which modal/dialog is currently open to determine the correct container
+                    const editModal =
+                        document.getElementById("server-edit-modal");
+                    const isEditModalOpen =
+                        editModal && !editModal.classList.contains("hidden");
+
+                    if (isEditModalOpen) {
+                        container =
+                            document.getElementById("edit-server-tools");
+                    } else {
+                        container = document.getElementById("associatedTools");
+                    }
+                }
+
+                // Final safety check - use direct lookup if still not found
+                if (!container) {
+                    const addServerContainer =
+                        document.getElementById("associatedTools");
+                    const editServerContainer =
+                        document.getElementById("edit-server-tools");
+
+                    // Check if edit server container has the server tools data attribute set
+                    if (
+                        editServerContainer &&
+                        editServerContainer.getAttribute("data-server-tools")
+                    ) {
+                        container = editServerContainer;
+                    } else if (
+                        addServerContainer &&
+                        addServerContainer.offsetParent !== null
+                    ) {
+                        container = addServerContainer;
+                    } else if (
+                        editServerContainer &&
+                        editServerContainer.offsetParent !== null
+                    ) {
+                        container = editServerContainer;
+                    } else {
+                        // Last resort: just pick one that exists
+                        container = addServerContainer || editServerContainer;
+                    }
+                }
+
+                if (container) {
+                    // Update tool mapping for newly loaded tools
+                    const newCheckboxes = container.querySelectorAll(
+                        "input[data-auto-check=true]",
+                    );
+
+                    if (!window.toolMapping) {
+                        window.toolMapping = {};
+                    }
+
+                    newCheckboxes.forEach((cb) => {
+                        const toolId = cb.value;
+                        const toolName = cb.getAttribute("data-tool-name");
+                        if (toolId && toolName) {
+                            window.toolMapping[toolId] = toolName;
+                        }
+                    });
+
+                    const selectAllInput = container.querySelector(
+                        'input[name="selectAllTools"]',
+                    );
+
+                    // Check if Select All is active
+                    if (selectAllInput && selectAllInput.value === "true") {
+                        newCheckboxes.forEach((cb) => {
+                            cb.checked = true;
+                            cb.removeAttribute("data-auto-check");
+                        });
+
+                        if (newCheckboxes.length > 0) {
+                            const event = new Event("change", {
+                                bubbles: true,
+                            });
+                            container.dispatchEvent(event);
+                        }
+                    }
+                    // Check if we're in Edit Server mode and need to pre-select tools
+                    else if (container.id === "edit-server-tools") {
+                        // Try to get server tools from data attribute (primary source)
+                        let serverTools = null;
+                        const dataAttr =
+                            container.getAttribute("data-server-tools");
+
+                        if (dataAttr) {
+                            try {
+                                serverTools = JSON.parse(dataAttr);
+                            } catch (e) {
+                                console.error(
+                                    "Failed to parse data-server-tools:",
+                                    e,
+                                );
+                            }
+                        }
+
+                        if (serverTools && serverTools.length > 0) {
+                            newCheckboxes.forEach((cb) => {
+                                const toolId = cb.value;
+                                const toolName =
+                                    cb.getAttribute("data-tool-name"); // Use the data attribute directly
+                                if (toolId && toolName) {
+                                    // Check if this tool name exists in server associated tools
+                                    if (serverTools.includes(toolName)) {
+                                        cb.checked = true;
+                                    }
+                                }
+                                cb.removeAttribute("data-auto-check");
+                            });
+
+                            // Trigger an update to display the correct count based on server.associatedTools
+                            // This will make sure the pill counters reflect the total associated tools count
+                            const event = new Event("change", {
+                                bubbles: true,
+                            });
+                            container.dispatchEvent(event);
+                        }
+                    }
+                }
+            }, 10); // Small delay to ensure DOM is updated
+        }
+    });
+}
+
+// Set up HTMX handler for auto-checking newly loaded resources when Select All is active
+if (window.htmx && !window._resourcesHtmxHandlerAttached) {
+    window._resourcesHtmxHandlerAttached = true;
+
+    window.htmx.on("htmx:afterSettle", function (evt) {
+        // Only handle resource pagination requests
+        if (
+            evt.detail.pathInfo &&
+            evt.detail.pathInfo.requestPath &&
+            evt.detail.pathInfo.requestPath.includes("/admin/resources/partial")
+        ) {
+            setTimeout(() => {
+                // Find the container
+                let container = null;
+                const target = evt.detail.target;
+
+                if (target && target.id === "edit-server-resources") {
+                    container = target;
+                } else if (target && target.id === "associatedResources") {
+                    container = target;
+                } else if (target) {
+                    container =
+                        target.closest("#associatedResources") ||
+                        target.closest("#edit-server-resources");
+                }
+
+                if (!container) {
+                    const editModal =
+                        document.getElementById("server-edit-modal");
+                    const isEditModalOpen =
+                        editModal && !editModal.classList.contains("hidden");
+
+                    if (isEditModalOpen) {
+                        container = document.getElementById(
+                            "edit-server-resources",
+                        );
+                    } else {
+                        container = document.getElementById(
+                            "associatedResources",
+                        );
+                    }
+                }
+
+                if (container) {
+                    const newCheckboxes = container.querySelectorAll(
+                        "input[data-auto-check=true]",
+                    );
+
+                    const selectAllInput = container.querySelector(
+                        'input[name="selectAllResources"]',
+                    );
+
+                    // Check if Select All is active
+                    if (selectAllInput && selectAllInput.value === "true") {
+                        newCheckboxes.forEach((cb) => {
+                            cb.checked = true;
+                            cb.removeAttribute("data-auto-check");
+                        });
+
+                        if (newCheckboxes.length > 0) {
+                            const event = new Event("change", {
+                                bubbles: true,
+                            });
+                            container.dispatchEvent(event);
+                        }
+                    }
+
+                    // Also check for edit mode: pre-select items based on server's associated resources
+                    const dataAttr = container.getAttribute(
+                        "data-server-resources",
+                    );
+                    if (dataAttr) {
+                        try {
+                            const associatedResourceIds = JSON.parse(dataAttr);
+                            newCheckboxes.forEach((cb) => {
+                                const checkboxValue = parseInt(cb.value);
+                                if (
+                                    associatedResourceIds.includes(
+                                        checkboxValue,
+                                    )
+                                ) {
+                                    cb.checked = true;
+                                }
+                                cb.removeAttribute("data-auto-check");
+                            });
+
+                            if (newCheckboxes.length > 0) {
+                                const event = new Event("change", {
+                                    bubbles: true,
+                                });
+                                container.dispatchEvent(event);
+                            }
+                        } catch (e) {
+                            console.error(
+                                "Error parsing data-server-resources:",
+                                e,
+                            );
+                        }
+                    }
+                }
+            }, 10);
+        }
+    });
+}
+
+// Set up HTMX handler for auto-checking newly loaded prompts when Select All is active
+if (window.htmx && !window._promptsHtmxHandlerAttached) {
+    window._promptsHtmxHandlerAttached = true;
+
+    window.htmx.on("htmx:afterSettle", function (evt) {
+        // Only handle prompt pagination requests
+        if (
+            evt.detail.pathInfo &&
+            evt.detail.pathInfo.requestPath &&
+            evt.detail.pathInfo.requestPath.includes("/admin/prompts/partial")
+        ) {
+            setTimeout(() => {
+                // Find the container
+                let container = null;
+                const target = evt.detail.target;
+
+                if (target && target.id === "edit-server-prompts") {
+                    container = target;
+                } else if (target && target.id === "associatedPrompts") {
+                    container = target;
+                } else if (target) {
+                    container =
+                        target.closest("#associatedPrompts") ||
+                        target.closest("#edit-server-prompts");
+                }
+
+                if (!container) {
+                    const editModal =
+                        document.getElementById("server-edit-modal");
+                    const isEditModalOpen =
+                        editModal && !editModal.classList.contains("hidden");
+
+                    if (isEditModalOpen) {
+                        container = document.getElementById(
+                            "edit-server-prompts",
+                        );
+                    } else {
+                        container =
+                            document.getElementById("associatedPrompts");
+                    }
+                }
+
+                if (container) {
+                    const newCheckboxes = container.querySelectorAll(
+                        "input[data-auto-check=true]",
+                    );
+
+                    const selectAllInput = container.querySelector(
+                        'input[name="selectAllPrompts"]',
+                    );
+
+                    // Check if Select All is active
+                    if (selectAllInput && selectAllInput.value === "true") {
+                        newCheckboxes.forEach((cb) => {
+                            cb.checked = true;
+                            cb.removeAttribute("data-auto-check");
+                        });
+
+                        if (newCheckboxes.length > 0) {
+                            const event = new Event("change", {
+                                bubbles: true,
+                            });
+                            container.dispatchEvent(event);
+                        }
+                    }
+
+                    // Also check for edit mode: pre-select items based on server's associated prompts
+                    const dataAttr = container.getAttribute(
+                        "data-server-prompts",
+                    );
+                    if (dataAttr) {
+                        try {
+                            const associatedPromptIds = JSON.parse(dataAttr);
+                            newCheckboxes.forEach((cb) => {
+                                const checkboxValue = parseInt(cb.value);
+                                if (
+                                    associatedPromptIds.includes(checkboxValue)
+                                ) {
+                                    cb.checked = true;
+                                }
+                                cb.removeAttribute("data-auto-check");
+                            });
+
+                            if (newCheckboxes.length > 0) {
+                                const event = new Event("change", {
+                                    bubbles: true,
+                                });
+                                container.dispatchEvent(event);
+                            }
+                        } catch (e) {
+                            console.error(
+                                "Error parsing data-server-prompts:",
+                                e,
+                            );
+                        }
+                    }
+                }
+            }, 10);
+        }
+    });
+}
+
+// ===================================================================
 // ENHANCED TAB HANDLING with Better Error Management
 // ===================================================================
 
@@ -4745,6 +6137,9 @@ function showTab(tabName) {
                     if (!panel.classList.contains("hidden")) {
                         loadAggregatedMetrics();
                     }
+                }
+                if (tabName === "llm-chat") {
+                    initializeLLMChat();
                 }
 
                 if (tabName === "teams") {
@@ -5292,7 +6687,7 @@ function createParameterForm(parameterCount) {
     nameInput.name = `param_name_${parameterCount}`;
     nameInput.required = true;
     nameInput.className =
-        "mt-1 block w-full rounded-md border border-gray-300 shadow-sm focus:border-indigo-500 focus:ring focus:ring-indigo-200";
+        "mt-1 px-1.5 block w-full rounded-md border border-gray-300 shadow-sm focus:border-indigo-500 focus:ring focus:ring-indigo-200";
 
     // Add validation to name input
     nameInput.addEventListener("blur", function () {
@@ -5319,7 +6714,7 @@ function createParameterForm(parameterCount) {
     const typeSelect = document.createElement("select");
     typeSelect.name = `param_type_${parameterCount}`;
     typeSelect.className =
-        "mt-1 block w-full rounded-md border border-gray-300 shadow-sm focus:border-indigo-500 focus:ring focus:ring-indigo-200";
+        "mt-1 px-1.5 block w-full rounded-md border border-gray-300 shadow-sm focus:border-indigo-500 focus:ring focus:ring-indigo-200";
 
     const typeOptions = [
         { value: "string", text: "String" },
@@ -5355,7 +6750,7 @@ function createParameterForm(parameterCount) {
     const descTextarea = document.createElement("textarea");
     descTextarea.name = `param_description_${parameterCount}`;
     descTextarea.className =
-        "mt-1 block w-full rounded-md border border-gray-300 shadow-sm focus:border-indigo-500 focus:ring focus:ring-indigo-200";
+        "mt-1 px-1.5 block w-full rounded-md border border-gray-300 shadow-sm focus:border-indigo-500 focus:ring focus:ring-indigo-200";
     descTextarea.rows = 2;
 
     descGroup.appendChild(descLabel);
@@ -5507,24 +6902,100 @@ function initToolSelect(
         return;
     }
 
-    const checkboxes = container.querySelectorAll('input[type="checkbox"]');
     const pillClasses =
-        "inline-block px-3 py-1 text-xs font-semibold text-indigo-700 bg-indigo-100 rounded-full shadow";
+        "inline-block bg-green-100 text-green-800 text-xs px-2 py-1 rounded-full dark:bg-green-900 dark:text-green-200";
 
     function update() {
         try {
+            const checkboxes = container.querySelectorAll(
+                'input[type="checkbox"]',
+            );
             const checked = Array.from(checkboxes).filter((cb) => cb.checked);
-            const count = checked.length;
 
-            // Rebuild pills safely
+            // Check if "Select All" mode is active
+            const selectAllInput = container.querySelector(
+                'input[name="selectAllTools"]',
+            );
+            const allIdsInput = container.querySelector(
+                'input[name="allToolIds"]',
+            );
+
+            // Check if this is the edit server tools container
+            const isEditServerMode = selectId === "edit-server-tools";
+            let serverTools = null;
+
+            if (isEditServerMode) {
+                const dataAttr = container.getAttribute("data-server-tools");
+                if (dataAttr) {
+                    try {
+                        serverTools = JSON.parse(dataAttr);
+                    } catch (e) {
+                        console.error("Error parsing data-server-tools:", e);
+                    }
+                }
+            }
+
+            let count = checked.length;
+
+            // If Select All mode is active, use the count from allToolIds
+            if (
+                selectAllInput &&
+                selectAllInput.value === "true" &&
+                allIdsInput
+            ) {
+                try {
+                    const allIds = JSON.parse(allIdsInput.value);
+                    count = allIds.length;
+                } catch (e) {
+                    console.error("Error parsing allToolIds:", e);
+                }
+            }
+            // If in edit server mode and we have server tools data, use that count
+            else if (
+                isEditServerMode &&
+                serverTools &&
+                Array.isArray(serverTools)
+            ) {
+                count = serverTools.length;
+            }
+
+            // Rebuild pills safely - show first 3, then summarize the rest
             pillsBox.innerHTML = "";
-            checked.forEach((cb) => {
+            const maxPillsToShow = 3;
+
+            // In edit server mode, we want to show the server tools rather than just currently checked ones
+            let pillsToDisplay = checked;
+            if (
+                isEditServerMode &&
+                serverTools &&
+                Array.isArray(serverTools) &&
+                window.toolMapping
+            ) {
+                // Create a list of tools that exist both in serverTools and currently loaded tools
+                const allLoadedTools = Array.from(checkboxes);
+                pillsToDisplay = allLoadedTools.filter((checkbox) => {
+                    const toolName = window.toolMapping[checkbox.value];
+                    return toolName && serverTools.includes(toolName);
+                });
+            }
+
+            pillsToDisplay.slice(0, maxPillsToShow).forEach((cb) => {
                 const span = document.createElement("span");
                 span.className = pillClasses;
                 span.textContent =
                     cb.nextElementSibling?.textContent?.trim() || "Unnamed";
                 pillsBox.appendChild(span);
             });
+
+            // If more than maxPillsToShow, show a summary pill
+            if (count > maxPillsToShow) {
+                const span = document.createElement("span");
+                span.className = pillClasses + " cursor-pointer";
+                span.title = "Click to see all selected tools";
+                const remaining = count - maxPillsToShow;
+                span.textContent = `+${remaining} more`;
+                pillsBox.appendChild(span);
+            }
 
             // Warning when > max
             if (count > max) {
@@ -5537,22 +7008,225 @@ function initToolSelect(
         }
     }
 
-    if (clearBtn) {
-        clearBtn.addEventListener("click", () => {
+    // Remove old event listeners by cloning and replacing (preserving ID)
+    if (clearBtn && !clearBtn.dataset.listenerAttached) {
+        clearBtn.dataset.listenerAttached = "true";
+        const newClearBtn = clearBtn.cloneNode(true);
+        newClearBtn.dataset.listenerAttached = "true";
+        clearBtn.parentNode.replaceChild(newClearBtn, clearBtn);
+
+        newClearBtn.addEventListener("click", () => {
+            const checkboxes = container.querySelectorAll(
+                'input[type="checkbox"]',
+            );
             checkboxes.forEach((cb) => (cb.checked = false));
+
+            // Clear the "select all" flag
+            const selectAllInput = container.querySelector(
+                'input[name="selectAllTools"]',
+            );
+            if (selectAllInput) {
+                selectAllInput.remove();
+            }
+            const allIdsInput = container.querySelector(
+                'input[name="allToolIds"]',
+            );
+            if (allIdsInput) {
+                allIdsInput.remove();
+            }
+
             update();
         });
     }
 
-    if (selectBtn) {
-        selectBtn.addEventListener("click", () => {
-            checkboxes.forEach((cb) => (cb.checked = true));
-            update();
+    if (selectBtn && !selectBtn.dataset.listenerAttached) {
+        selectBtn.dataset.listenerAttached = "true";
+        const newSelectBtn = selectBtn.cloneNode(true);
+        newSelectBtn.dataset.listenerAttached = "true";
+        selectBtn.parentNode.replaceChild(newSelectBtn, selectBtn);
+
+        newSelectBtn.addEventListener("click", async () => {
+            // Disable button and show loading state
+            const originalText = newSelectBtn.textContent;
+            newSelectBtn.disabled = true;
+            newSelectBtn.textContent = "Selecting all tools...";
+
+            try {
+                // Prefer full-set selection when pagination/infinite-scroll is present
+                const loadedCheckboxes = container.querySelectorAll(
+                    'input[type="checkbox"]',
+                );
+                const visibleCheckboxes = Array.from(loadedCheckboxes).filter(
+                    (cb) => cb.offsetParent !== null,
+                );
+
+                // Detect pagination/infinite-scroll controls for tools
+                const hasPaginationControls = !!document.getElementById(
+                    "tools-pagination-controls",
+                );
+                const hasScrollTrigger = !!document.querySelector(
+                    "[id^='tools-scroll-trigger']",
+                );
+                const isPaginated = hasPaginationControls || hasScrollTrigger;
+
+                let allToolIds = [];
+
+                if (!isPaginated && visibleCheckboxes.length > 0) {
+                    // No pagination and some visible items => select visible set
+                    allToolIds = visibleCheckboxes.map((cb) => cb.value);
+                    visibleCheckboxes.forEach((cb) => (cb.checked = true));
+                } else {
+                    // Paginated (or no visible items) => fetch full set from server
+                    const selectedGatewayIds = getSelectedGatewayIds
+                        ? getSelectedGatewayIds()
+                        : [];
+                    const gatewayParam =
+                        selectedGatewayIds && selectedGatewayIds.length
+                            ? `?gateway_id=${encodeURIComponent(selectedGatewayIds.join(","))}`
+                            : "";
+                    const response = await fetch(
+                        `${window.ROOT_PATH}/admin/tools/ids${gatewayParam}`,
+                    );
+                    if (!response.ok) {
+                        throw new Error("Failed to fetch tool IDs");
+                    }
+                    const data = await response.json();
+                    allToolIds = data.tool_ids || [];
+                    // Check loaded checkboxes so UI shows selection where possible
+                    loadedCheckboxes.forEach((cb) => (cb.checked = true));
+                }
+
+                // Add a hidden input to indicate "select all" mode
+                let selectAllInput = container.querySelector(
+                    'input[name="selectAllTools"]',
+                );
+                if (!selectAllInput) {
+                    selectAllInput = document.createElement("input");
+                    selectAllInput.type = "hidden";
+                    selectAllInput.name = "selectAllTools";
+                    container.appendChild(selectAllInput);
+                }
+                selectAllInput.value = "true";
+
+                // Also store the IDs as a JSON array for the backend
+                let allIdsInput = container.querySelector(
+                    'input[name="allToolIds"]',
+                );
+                if (!allIdsInput) {
+                    allIdsInput = document.createElement("input");
+                    allIdsInput.type = "hidden";
+                    allIdsInput.name = "allToolIds";
+                    container.appendChild(allIdsInput);
+                }
+                allIdsInput.value = JSON.stringify(allToolIds);
+
+                update();
+
+                newSelectBtn.textContent = `✓ All ${allToolIds.length} tools selected`;
+                setTimeout(() => {
+                    newSelectBtn.textContent = originalText;
+                }, 2000);
+            } catch (error) {
+                console.error("Error in Select All:", error);
+                alert("Failed to select all tools. Please try again.");
+                newSelectBtn.disabled = false;
+                newSelectBtn.textContent = originalText;
+            } finally {
+                newSelectBtn.disabled = false;
+            }
         });
     }
 
     update(); // Initial render
-    checkboxes.forEach((cb) => cb.addEventListener("change", update));
+
+    // Attach change listeners to checkboxes (using delegation for dynamic content)
+    if (!container.dataset.changeListenerAttached) {
+        container.dataset.changeListenerAttached = "true";
+        container.addEventListener("change", (e) => {
+            if (e.target.type === "checkbox") {
+                // Check if we're in "Select All" mode
+                const selectAllInput = container.querySelector(
+                    'input[name="selectAllTools"]',
+                );
+                const allIdsInput = container.querySelector(
+                    'input[name="allToolIds"]',
+                );
+
+                if (
+                    selectAllInput &&
+                    selectAllInput.value === "true" &&
+                    allIdsInput
+                ) {
+                    // User is manually checking/unchecking after Select All
+                    // Update the allToolIds array to reflect the change
+                    try {
+                        let allIds = JSON.parse(allIdsInput.value);
+                        const toolId = e.target.value;
+
+                        if (e.target.checked) {
+                            // Add the ID if it's not already there
+                            if (!allIds.includes(toolId)) {
+                                allIds.push(toolId);
+                            }
+                        } else {
+                            // Remove the ID from the array
+                            allIds = allIds.filter((id) => id !== toolId);
+                        }
+
+                        // Update the hidden field
+                        allIdsInput.value = JSON.stringify(allIds);
+                    } catch (error) {
+                        console.error("Error updating allToolIds:", error);
+                    }
+                }
+                // Check if we're in edit server mode
+                else if (selectId === "edit-server-tools") {
+                    // In edit server mode, update the server tools data based on checkbox state
+                    const dataAttr =
+                        container.getAttribute("data-server-tools");
+                    let serverTools = [];
+
+                    if (dataAttr) {
+                        try {
+                            serverTools = JSON.parse(dataAttr);
+                        } catch (e) {
+                            console.error(
+                                "Error parsing data-server-tools:",
+                                e,
+                            );
+                        }
+                    }
+
+                    // Get the tool name from toolMapping to update serverTools array
+                    const toolId = e.target.value;
+                    const toolName =
+                        window.toolMapping && window.toolMapping[toolId];
+
+                    if (toolName) {
+                        if (e.target.checked) {
+                            // Add tool name to server tools if not already there
+                            if (!serverTools.includes(toolName)) {
+                                serverTools.push(toolName);
+                            }
+                        } else {
+                            // Remove tool name from server tools
+                            serverTools = serverTools.filter(
+                                (name) => name !== toolName,
+                            );
+                        }
+
+                        // Update the data attribute
+                        container.setAttribute(
+                            "data-server-tools",
+                            JSON.stringify(serverTools),
+                        );
+                    }
+                }
+
+                update();
+            }
+        });
+    }
 }
 
 function initResourceSelect(
@@ -5576,24 +7250,60 @@ function initResourceSelect(
         return;
     }
 
-    const checkboxes = container.querySelectorAll('input[type="checkbox"]');
     const pillClasses =
         "inline-block px-3 py-1 text-xs font-semibold text-blue-700 bg-blue-100 rounded-full shadow dark:text-blue-300 dark:bg-blue-900";
 
     function update() {
         try {
+            const checkboxes = container.querySelectorAll(
+                'input[type="checkbox"]',
+            );
             const checked = Array.from(checkboxes).filter((cb) => cb.checked);
-            const count = checked.length;
+            // const count = checked.length;
 
-            // Rebuild pills safely
+            // Select All handling
+            const selectAllInput = container.querySelector(
+                'input[name="selectAllResources"]',
+            );
+            const allIdsInput = container.querySelector(
+                'input[name="allResourceIds"]',
+            );
+
+            let count = checked.length;
+            if (
+                selectAllInput &&
+                selectAllInput.value === "true" &&
+                allIdsInput
+            ) {
+                try {
+                    const allIds = JSON.parse(allIdsInput.value);
+                    count = allIds.length;
+                } catch (e) {
+                    console.error("Error parsing allResourceIds:", e);
+                }
+            }
+
+            // Rebuild pills safely - show first 3, then summarize the rest
             pillsBox.innerHTML = "";
-            checked.forEach((cb) => {
+            const maxPillsToShow = 3;
+
+            checked.slice(0, maxPillsToShow).forEach((cb) => {
                 const span = document.createElement("span");
                 span.className = pillClasses;
                 span.textContent =
                     cb.nextElementSibling?.textContent?.trim() || "Unnamed";
                 pillsBox.appendChild(span);
             });
+
+            // If more than maxPillsToShow, show a summary pill
+            if (count > maxPillsToShow) {
+                const span = document.createElement("span");
+                span.className = pillClasses + " cursor-pointer";
+                span.title = "Click to see all selected resources";
+                const remaining = count - maxPillsToShow;
+                span.textContent = `+${remaining} more`;
+                pillsBox.appendChild(span);
+            }
 
             // Warning when > max
             if (count > max) {
@@ -5606,22 +7316,172 @@ function initResourceSelect(
         }
     }
 
-    if (clearBtn) {
-        clearBtn.addEventListener("click", () => {
+    // Remove old event listeners by cloning and replacing (preserving ID)
+    if (clearBtn && !clearBtn.dataset.listenerAttached) {
+        clearBtn.dataset.listenerAttached = "true";
+        const newClearBtn = clearBtn.cloneNode(true);
+        newClearBtn.dataset.listenerAttached = "true";
+        clearBtn.parentNode.replaceChild(newClearBtn, clearBtn);
+
+        newClearBtn.addEventListener("click", () => {
+            const checkboxes = container.querySelectorAll(
+                'input[type="checkbox"]',
+            );
             checkboxes.forEach((cb) => (cb.checked = false));
+
+            // Remove any select-all hidden inputs
+            const selectAllInput = container.querySelector(
+                'input[name="selectAllResources"]',
+            );
+            if (selectAllInput) {
+                selectAllInput.remove();
+            }
+            const allIdsInput = container.querySelector(
+                'input[name="allResourceIds"]',
+            );
+            if (allIdsInput) {
+                allIdsInput.remove();
+            }
+
             update();
         });
     }
 
-    if (selectBtn) {
-        selectBtn.addEventListener("click", () => {
-            checkboxes.forEach((cb) => (cb.checked = true));
-            update();
+    if (selectBtn && !selectBtn.dataset.listenerAttached) {
+        selectBtn.dataset.listenerAttached = "true";
+        const newSelectBtn = selectBtn.cloneNode(true);
+        newSelectBtn.dataset.listenerAttached = "true";
+        selectBtn.parentNode.replaceChild(newSelectBtn, selectBtn);
+
+        newSelectBtn.addEventListener("click", async () => {
+            const originalText = newSelectBtn.textContent;
+            newSelectBtn.disabled = true;
+            newSelectBtn.textContent = "Selecting all resources...";
+
+            try {
+                // Prefer full-set selection when pagination/infinite-scroll is present
+                const loadedCheckboxes = container.querySelectorAll(
+                    'input[type="checkbox"]',
+                );
+                const visibleCheckboxes = Array.from(loadedCheckboxes).filter(
+                    (cb) => cb.offsetParent !== null,
+                );
+
+                // Detect pagination/infinite-scroll controls for resources
+                const hasPaginationControls = !!document.getElementById(
+                    "resources-pagination-controls",
+                );
+                const hasScrollTrigger = !!document.querySelector(
+                    "[id^='resources-scroll-trigger']",
+                );
+                const isPaginated = hasPaginationControls || hasScrollTrigger;
+
+                let allIds = [];
+
+                if (!isPaginated && visibleCheckboxes.length > 0) {
+                    // No pagination and some visible items => select visible set
+                    allIds = visibleCheckboxes.map((cb) => cb.value);
+                    visibleCheckboxes.forEach((cb) => (cb.checked = true));
+                } else {
+                    // Paginated (or no visible items) => fetch full set from server
+                    const selectedGatewayIds = getSelectedGatewayIds
+                        ? getSelectedGatewayIds()
+                        : [];
+                    const gatewayParam =
+                        selectedGatewayIds && selectedGatewayIds.length
+                            ? `?gateway_id=${encodeURIComponent(selectedGatewayIds.join(","))}`
+                            : "";
+                    const resp = await fetch(
+                        `${window.ROOT_PATH}/admin/resources/ids${gatewayParam}`,
+                    );
+                    if (!resp.ok) {
+                        throw new Error("Failed to fetch resource IDs");
+                    }
+                    const data = await resp.json();
+                    allIds = data.resource_ids || [];
+                    // If nothing visible (paginated), check loaded checkboxes
+                    loadedCheckboxes.forEach((cb) => (cb.checked = true));
+                }
+
+                // Add hidden select-all flag
+                let selectAllInput = container.querySelector(
+                    'input[name="selectAllResources"]',
+                );
+                if (!selectAllInput) {
+                    selectAllInput = document.createElement("input");
+                    selectAllInput.type = "hidden";
+                    selectAllInput.name = "selectAllResources";
+                    container.appendChild(selectAllInput);
+                }
+                selectAllInput.value = "true";
+
+                // Store IDs as JSON for backend handling
+                let allIdsInput = container.querySelector(
+                    'input[name="allResourceIds"]',
+                );
+                if (!allIdsInput) {
+                    allIdsInput = document.createElement("input");
+                    allIdsInput.type = "hidden";
+                    allIdsInput.name = "allResourceIds";
+                    container.appendChild(allIdsInput);
+                }
+                allIdsInput.value = JSON.stringify(allIds);
+
+                update();
+
+                newSelectBtn.textContent = `✓ All ${allIds.length} resources selected`;
+                setTimeout(() => {
+                    newSelectBtn.textContent = originalText;
+                }, 2000);
+            } catch (error) {
+                console.error("Error selecting all resources:", error);
+                alert("Failed to select all resources. Please try again.");
+            } finally {
+                newSelectBtn.disabled = false;
+            }
         });
     }
 
     update(); // Initial render
-    checkboxes.forEach((cb) => cb.addEventListener("change", update));
+
+    // Attach change listeners using delegation for dynamic content
+    if (!container.dataset.changeListenerAttached) {
+        container.dataset.changeListenerAttached = "true";
+        container.addEventListener("change", (e) => {
+            if (e.target.type === "checkbox") {
+                // If Select All mode is active, update the stored IDs array
+                const selectAllInput = container.querySelector(
+                    'input[name="selectAllResources"]',
+                );
+                const allIdsInput = container.querySelector(
+                    'input[name="allResourceIds"]',
+                );
+
+                if (
+                    selectAllInput &&
+                    selectAllInput.value === "true" &&
+                    allIdsInput
+                ) {
+                    try {
+                        let allIds = JSON.parse(allIdsInput.value);
+                        const id = e.target.value;
+                        if (e.target.checked) {
+                            if (!allIds.includes(id)) {
+                                allIds.push(id);
+                            }
+                        } else {
+                            allIds = allIds.filter((x) => x !== id);
+                        }
+                        allIdsInput.value = JSON.stringify(allIds);
+                    } catch (err) {
+                        console.error("Error updating allResourceIds:", err);
+                    }
+                }
+
+                update();
+            }
+        });
+    }
 }
 
 function initPromptSelect(
@@ -5645,24 +7505,59 @@ function initPromptSelect(
         return;
     }
 
-    const checkboxes = container.querySelectorAll('input[type="checkbox"]');
     const pillClasses =
         "inline-block px-3 py-1 text-xs font-semibold text-purple-700 bg-purple-100 rounded-full shadow dark:text-purple-300 dark:bg-purple-900";
 
     function update() {
         try {
+            const checkboxes = container.querySelectorAll(
+                'input[type="checkbox"]',
+            );
             const checked = Array.from(checkboxes).filter((cb) => cb.checked);
-            const count = checked.length;
 
-            // Rebuild pills safely
+            // Determine count: if Select All mode is active, use the stored allPromptIds
+            const selectAllInput = container.querySelector(
+                'input[name="selectAllPrompts"]',
+            );
+            const allIdsInput = container.querySelector(
+                'input[name="allPromptIds"]',
+            );
+
+            let count = checked.length;
+            if (
+                selectAllInput &&
+                selectAllInput.value === "true" &&
+                allIdsInput
+            ) {
+                try {
+                    const allIds = JSON.parse(allIdsInput.value);
+                    count = allIds.length;
+                } catch (e) {
+                    console.error("Error parsing allPromptIds:", e);
+                }
+            }
+
+            // Rebuild pills safely - show first 3, then summarize the rest
             pillsBox.innerHTML = "";
-            checked.forEach((cb) => {
+            const maxPillsToShow = 3;
+
+            checked.slice(0, maxPillsToShow).forEach((cb) => {
                 const span = document.createElement("span");
                 span.className = pillClasses;
                 span.textContent =
                     cb.nextElementSibling?.textContent?.trim() || "Unnamed";
                 pillsBox.appendChild(span);
             });
+
+            // If more than maxPillsToShow, show a summary pill
+            if (count > maxPillsToShow) {
+                const span = document.createElement("span");
+                span.className = pillClasses + " cursor-pointer";
+                span.title = "Click to see all selected prompts";
+                const remaining = count - maxPillsToShow;
+                span.textContent = `+${remaining} more`;
+                pillsBox.appendChild(span);
+            }
 
             // Warning when > max
             if (count > max) {
@@ -5675,23 +7570,802 @@ function initPromptSelect(
         }
     }
 
-    if (clearBtn) {
-        clearBtn.addEventListener("click", () => {
+    // Remove old event listeners by cloning and replacing (preserving ID)
+    if (clearBtn && !clearBtn.dataset.listenerAttached) {
+        clearBtn.dataset.listenerAttached = "true";
+        const newClearBtn = clearBtn.cloneNode(true);
+        newClearBtn.dataset.listenerAttached = "true";
+        clearBtn.parentNode.replaceChild(newClearBtn, clearBtn);
+
+        newClearBtn.addEventListener("click", () => {
+            const checkboxes = container.querySelectorAll(
+                'input[type="checkbox"]',
+            );
             checkboxes.forEach((cb) => (cb.checked = false));
+
+            // Remove any select-all hidden inputs
+            const selectAllInput = container.querySelector(
+                'input[name="selectAllPrompts"]',
+            );
+            if (selectAllInput) {
+                selectAllInput.remove();
+            }
+            const allIdsInput = container.querySelector(
+                'input[name="allPromptIds"]',
+            );
+            if (allIdsInput) {
+                allIdsInput.remove();
+            }
+
             update();
         });
     }
 
-    if (selectBtn) {
-        selectBtn.addEventListener("click", () => {
-            checkboxes.forEach((cb) => (cb.checked = true));
-            update();
+    if (selectBtn && !selectBtn.dataset.listenerAttached) {
+        selectBtn.dataset.listenerAttached = "true";
+        const newSelectBtn = selectBtn.cloneNode(true);
+        newSelectBtn.dataset.listenerAttached = "true";
+        selectBtn.parentNode.replaceChild(newSelectBtn, selectBtn);
+        newSelectBtn.addEventListener("click", async () => {
+            const originalText = newSelectBtn.textContent;
+            newSelectBtn.disabled = true;
+            newSelectBtn.textContent = "Selecting all prompts...";
+
+            try {
+                // Prefer full-set selection when pagination/infinite-scroll is present
+                const loadedCheckboxes = container.querySelectorAll(
+                    'input[type="checkbox"]',
+                );
+                const visibleCheckboxes = Array.from(loadedCheckboxes).filter(
+                    (cb) => cb.offsetParent !== null,
+                );
+
+                // Detect pagination/infinite-scroll controls for prompts
+                const hasPaginationControls = !!document.getElementById(
+                    "prompts-pagination-controls",
+                );
+                const hasScrollTrigger = !!document.querySelector(
+                    "[id^='prompts-scroll-trigger']",
+                );
+                const isPaginated = hasPaginationControls || hasScrollTrigger;
+
+                let allIds = [];
+
+                if (!isPaginated && visibleCheckboxes.length > 0) {
+                    // No pagination and some visible items => select visible set
+                    allIds = visibleCheckboxes.map((cb) => cb.value);
+                    visibleCheckboxes.forEach((cb) => (cb.checked = true));
+                } else {
+                    // Paginated (or no visible items) => fetch full set from server
+                    const selectedGatewayIds = getSelectedGatewayIds
+                        ? getSelectedGatewayIds()
+                        : [];
+                    const gatewayParam =
+                        selectedGatewayIds && selectedGatewayIds.length
+                            ? `?gateway_id=${encodeURIComponent(selectedGatewayIds.join(","))}`
+                            : "";
+                    const resp = await fetch(
+                        `${window.ROOT_PATH}/admin/prompts/ids${gatewayParam}`,
+                    );
+                    if (!resp.ok) {
+                        throw new Error("Failed to fetch prompt IDs");
+                    }
+                    const data = await resp.json();
+                    allIds = data.prompt_ids || [];
+                    // If nothing visible (paginated), check loaded checkboxes
+                    loadedCheckboxes.forEach((cb) => (cb.checked = true));
+                }
+
+                // Add hidden select-all flag
+                let selectAllInput = container.querySelector(
+                    'input[name="selectAllPrompts"]',
+                );
+                if (!selectAllInput) {
+                    selectAllInput = document.createElement("input");
+                    selectAllInput.type = "hidden";
+                    selectAllInput.name = "selectAllPrompts";
+                    container.appendChild(selectAllInput);
+                }
+                selectAllInput.value = "true";
+
+                // Store IDs as JSON for backend handling
+                let allIdsInput = container.querySelector(
+                    'input[name="allPromptIds"]',
+                );
+                if (!allIdsInput) {
+                    allIdsInput = document.createElement("input");
+                    allIdsInput.type = "hidden";
+                    allIdsInput.name = "allPromptIds";
+                    container.appendChild(allIdsInput);
+                }
+                allIdsInput.value = JSON.stringify(allIds);
+
+                update();
+
+                newSelectBtn.textContent = `✓ All ${allIds.length} prompts selected`;
+                setTimeout(() => {
+                    newSelectBtn.textContent = originalText;
+                }, 2000);
+            } catch (error) {
+                console.error("Error selecting all prompts:", error);
+                alert("Failed to select all prompts. Please try again.");
+            } finally {
+                newSelectBtn.disabled = false;
+            }
         });
     }
 
     update(); // Initial render
-    checkboxes.forEach((cb) => cb.addEventListener("change", update));
+
+    // Attach change listeners using delegation for dynamic content
+    if (!container.dataset.changeListenerAttached) {
+        container.dataset.changeListenerAttached = "true";
+        container.addEventListener("change", (e) => {
+            if (e.target.type === "checkbox") {
+                // If Select All mode is active, update the stored IDs array
+                const selectAllInput = container.querySelector(
+                    'input[name="selectAllPrompts"]',
+                );
+                const allIdsInput = container.querySelector(
+                    'input[name="allPromptIds"]',
+                );
+
+                if (
+                    selectAllInput &&
+                    selectAllInput.value === "true" &&
+                    allIdsInput
+                ) {
+                    try {
+                        let allIds = JSON.parse(allIdsInput.value);
+                        const id = e.target.value;
+                        if (e.target.checked) {
+                            if (!allIds.includes(id)) {
+                                allIds.push(id);
+                            }
+                        } else {
+                            allIds = allIds.filter((x) => x !== id);
+                        }
+                        allIdsInput.value = JSON.stringify(allIds);
+                    } catch (err) {
+                        console.error("Error updating allPromptIds:", err);
+                    }
+                }
+
+                update();
+            }
+        });
+    }
 }
+
+// ===================================================================
+// GATEWAY SELECT (Associated MCP Servers) - search/select/clear
+// ===================================================================
+function initGatewaySelect(
+    selectId = "associatedGateways",
+    pillsId = "selectedGatewayPills",
+    warnId = "selectedGatewayWarning",
+    max = 12,
+    selectBtnId = "selectAllGatewayBtn",
+    clearBtnId = "clearAllGatewayBtn",
+    searchInputId = "searchGateways",
+) {
+    const container = document.getElementById(selectId);
+    const pillsBox = document.getElementById(pillsId);
+    const warnBox = document.getElementById(warnId);
+    const clearBtn = clearBtnId ? document.getElementById(clearBtnId) : null;
+    const selectBtn = selectBtnId ? document.getElementById(selectBtnId) : null;
+    const searchInput = searchInputId
+        ? document.getElementById(searchInputId)
+        : null;
+
+    if (!container || !pillsBox || !warnBox) {
+        console.warn(
+            `Gateway select elements not found: ${selectId}, ${pillsId}, ${warnId}`,
+        );
+        return;
+    }
+
+    const pillClasses =
+        "inline-block bg-indigo-100 text-indigo-800 text-xs px-2 py-1 rounded-full dark:bg-indigo-900 dark:text-indigo-200";
+
+    // Search functionality
+    function applySearch() {
+        if (!searchInput) {
+            return;
+        }
+
+        try {
+            const query = searchInput.value.toLowerCase().trim();
+            const items = container.querySelectorAll(".tool-item");
+            let visibleCount = 0;
+
+            items.forEach((item) => {
+                const text = item.textContent.toLowerCase();
+                if (!query || text.includes(query)) {
+                    item.style.display = "";
+                    visibleCount++;
+                } else {
+                    item.style.display = "none";
+                }
+            });
+
+            // Update "no results" message if it exists
+            const noMsg = document.getElementById("noGatewayMessage");
+            const searchQuerySpan =
+                document.getElementById("searchQueryServers");
+
+            if (noMsg) {
+                if (query && visibleCount === 0) {
+                    noMsg.style.display = "block";
+                    if (searchQuerySpan) {
+                        searchQuerySpan.textContent = query;
+                    }
+                } else {
+                    noMsg.style.display = "none";
+                }
+            }
+        } catch (error) {
+            console.error("Error applying gateway search:", error);
+        }
+    }
+
+    // Bind search input
+    if (searchInput && !searchInput.dataset.searchBound) {
+        searchInput.addEventListener("input", applySearch);
+        searchInput.dataset.searchBound = "true";
+    }
+
+    function update() {
+        try {
+            const checkboxes = container.querySelectorAll(
+                'input[type="checkbox"]',
+            );
+            const checked = Array.from(checkboxes).filter((cb) => cb.checked);
+
+            // Check if "Select All" mode is active
+            const selectAllInput = container.querySelector(
+                'input[name="selectAllGateways"]',
+            );
+            const allIdsInput = container.querySelector(
+                'input[name="allGatewayIds"]',
+            );
+
+            let count = checked.length;
+
+            // If Select All mode is active, use the count from allGatewayIds
+            if (
+                selectAllInput &&
+                selectAllInput.value === "true" &&
+                allIdsInput
+            ) {
+                try {
+                    const allIds = JSON.parse(allIdsInput.value);
+                    count = allIds.length;
+                } catch (e) {
+                    console.error("Error parsing allGatewayIds:", e);
+                }
+            }
+
+            // Rebuild pills safely - show first 3, then summarize the rest
+            pillsBox.innerHTML = "";
+            const maxPillsToShow = 3;
+
+            checked.slice(0, maxPillsToShow).forEach((cb) => {
+                const span = document.createElement("span");
+                span.className = pillClasses;
+                span.textContent =
+                    cb.nextElementSibling?.textContent?.trim() || "Unnamed";
+                pillsBox.appendChild(span);
+            });
+
+            // If more than maxPillsToShow, show a summary pill
+            if (count > maxPillsToShow) {
+                const span = document.createElement("span");
+                span.className = pillClasses + " cursor-pointer";
+                span.title = "Click to see all selected gateways";
+                const remaining = count - maxPillsToShow;
+                span.textContent = `+${remaining} more`;
+                pillsBox.appendChild(span);
+            }
+
+            // Warning when > max
+            if (count > max) {
+                warnBox.textContent = `Selected ${count} MCP servers. Selecting more than ${max} servers may impact performance.`;
+            } else {
+                warnBox.textContent = "";
+            }
+        } catch (error) {
+            console.error("Error updating gateway select:", error);
+        }
+    }
+
+    // Remove old event listeners by cloning and replacing (preserving ID)
+    if (clearBtn && !clearBtn.dataset.listenerAttached) {
+        clearBtn.dataset.listenerAttached = "true";
+        const newClearBtn = clearBtn.cloneNode(true);
+        newClearBtn.dataset.listenerAttached = "true";
+        clearBtn.parentNode.replaceChild(newClearBtn, clearBtn);
+
+        newClearBtn.addEventListener("click", () => {
+            const checkboxes = container.querySelectorAll(
+                'input[type="checkbox"]',
+            );
+            checkboxes.forEach((cb) => (cb.checked = false));
+
+            // Clear the "select all" flag
+            const selectAllInput = container.querySelector(
+                'input[name="selectAllGateways"]',
+            );
+            if (selectAllInput) {
+                selectAllInput.remove();
+            }
+            const allIdsInput = container.querySelector(
+                'input[name="allGatewayIds"]',
+            );
+            if (allIdsInput) {
+                allIdsInput.remove();
+            }
+
+            update();
+
+            // Reload associated items after clearing selection
+            reloadAssociatedItems();
+        });
+    }
+
+    if (selectBtn && !selectBtn.dataset.listenerAttached) {
+        selectBtn.dataset.listenerAttached = "true";
+        const newSelectBtn = selectBtn.cloneNode(true);
+        newSelectBtn.dataset.listenerAttached = "true";
+        selectBtn.parentNode.replaceChild(newSelectBtn, selectBtn);
+
+        newSelectBtn.addEventListener("click", async () => {
+            // Disable button and show loading state
+            const originalText = newSelectBtn.textContent;
+            newSelectBtn.disabled = true;
+            newSelectBtn.textContent = "Selecting all gateways...";
+
+            try {
+                // Fetch all gateway IDs from the server
+                const response = await fetch(
+                    `${window.ROOT_PATH}/admin/gateways/ids`,
+                );
+                if (!response.ok) {
+                    throw new Error("Failed to fetch gateway IDs");
+                }
+
+                const data = await response.json();
+                const allGatewayIds = data.gateway_ids || [];
+
+                // Apply search filter first to determine which items are visible
+                applySearch();
+
+                // Check only currently visible checkboxes
+                const loadedCheckboxes = container.querySelectorAll(
+                    'input[type="checkbox"]',
+                );
+                loadedCheckboxes.forEach((cb) => {
+                    const parent = cb.closest(".tool-item") || cb.parentElement;
+                    const isVisible =
+                        parent && getComputedStyle(parent).display !== "none";
+                    if (isVisible) {
+                        cb.checked = true;
+                    }
+                });
+
+                // Add a hidden input to indicate "select all" mode
+                // Remove any existing one first
+                let selectAllInput = container.querySelector(
+                    'input[name="selectAllGateways"]',
+                );
+                if (!selectAllInput) {
+                    selectAllInput = document.createElement("input");
+                    selectAllInput.type = "hidden";
+                    selectAllInput.name = "selectAllGateways";
+                    container.appendChild(selectAllInput);
+                }
+                selectAllInput.value = "true";
+
+                // Also store the IDs as a JSON array for the backend
+                // Ensure the special 'null' sentinel is included when selecting all
+                try {
+                    const nullCheckbox = container.querySelector(
+                        'input[data-gateway-null="true"]',
+                    );
+                    if (nullCheckbox) {
+                        // Include the literal string "null" so server-side
+                        // `any(gid.lower() == 'null' ...)` evaluates to true.
+                        if (!allGatewayIds.includes("null")) {
+                            allGatewayIds.push("null");
+                        }
+                    }
+                } catch (err) {
+                    console.error(
+                        "Error ensuring null sentinel in gateway IDs:",
+                        err,
+                    );
+                }
+
+                let allIdsInput = container.querySelector(
+                    'input[name="allGatewayIds"]',
+                );
+                if (!allIdsInput) {
+                    allIdsInput = document.createElement("input");
+                    allIdsInput.type = "hidden";
+                    allIdsInput.name = "allGatewayIds";
+                    container.appendChild(allIdsInput);
+                }
+                allIdsInput.value = JSON.stringify(allGatewayIds);
+
+                update();
+
+                newSelectBtn.textContent = `✓ All ${allGatewayIds.length} gateways selected`;
+                setTimeout(() => {
+                    newSelectBtn.textContent = originalText;
+                }, 2000);
+
+                // Reload associated items after selecting all
+                reloadAssociatedItems();
+            } catch (error) {
+                console.error("Error in Select All:", error);
+                alert("Failed to select all gateways. Please try again.");
+                newSelectBtn.disabled = false;
+                newSelectBtn.textContent = originalText;
+            } finally {
+                newSelectBtn.disabled = false;
+            }
+        });
+    }
+
+    update(); // Initial render
+
+    // Attach change listeners to checkboxes (using delegation for dynamic content)
+    if (!container.dataset.changeListenerAttached) {
+        container.dataset.changeListenerAttached = "true";
+        container.addEventListener("change", (e) => {
+            if (e.target.type === "checkbox") {
+                // Log gateway_id when checkbox is clicked
+                const gatewayId = e.target.value;
+                const gatewayName =
+                    e.target.nextElementSibling?.textContent?.trim() ||
+                    "Unknown";
+                const isChecked = e.target.checked;
+
+                console.log(
+                    `[MCP Server Selection] Gateway ID: ${gatewayId}, Name: ${gatewayName}, Checked: ${isChecked}`,
+                );
+
+                // Check if we're in "Select All" mode
+                const selectAllInput = container.querySelector(
+                    'input[name="selectAllGateways"]',
+                );
+                const allIdsInput = container.querySelector(
+                    'input[name="allGatewayIds"]',
+                );
+
+                if (
+                    selectAllInput &&
+                    selectAllInput.value === "true" &&
+                    allIdsInput
+                ) {
+                    // User is manually checking/unchecking after Select All
+                    // Update the allGatewayIds array to reflect the change
+                    try {
+                        let allIds = JSON.parse(allIdsInput.value);
+
+                        if (e.target.checked) {
+                            // Add the ID if it's not already there
+                            if (!allIds.includes(gatewayId)) {
+                                allIds.push(gatewayId);
+                            }
+                        } else {
+                            // Remove the ID from the array
+                            allIds = allIds.filter((id) => id !== gatewayId);
+                        }
+
+                        // Update the hidden field
+                        allIdsInput.value = JSON.stringify(allIds);
+                    } catch (error) {
+                        console.error("Error updating allGatewayIds:", error);
+                    }
+                }
+
+                // No exclusivity: allow the special 'null' gateway (RestTool/Prompts/Resources) to be
+                // selected together with real gateways. Server-side filtering already
+                // supports mixed lists like `gateway_id=abc,null`.
+
+                update();
+
+                // Trigger reload of associated tools, resources, and prompts with selected gateway filter
+                reloadAssociatedItems();
+            }
+        });
+    }
+
+    // Initial render
+    applySearch();
+    update();
+}
+
+/**
+ * Get all selected gateway IDs from the gateway selection container
+ * @returns {string[]} Array of selected gateway IDs
+ */
+function getSelectedGatewayIds() {
+    const container = document.getElementById("associatedGateways");
+    console.log("[Gateway Selection DEBUG] Container found:", !!container);
+
+    if (!container) {
+        console.warn(
+            "[Gateway Selection DEBUG] associatedGateways container not found",
+        );
+        return [];
+    }
+
+    // Check if "Select All" mode is active
+    const selectAllInput = container.querySelector(
+        "input[name='selectAllGateways']",
+    );
+    const allIdsInput = container.querySelector("input[name='allGatewayIds']");
+
+    console.log(
+        "[Gateway Selection DEBUG] Select All mode:",
+        selectAllInput?.value === "true",
+    );
+    if (selectAllInput && selectAllInput.value === "true" && allIdsInput) {
+        try {
+            const allIds = JSON.parse(allIdsInput.value);
+            console.log(
+                `[Gateway Selection DEBUG] Returning all gateway IDs (${allIds.length} total)`,
+            );
+            return allIds;
+        } catch (error) {
+            console.error(
+                "[Gateway Selection DEBUG] Error parsing allGatewayIds:",
+                error,
+            );
+        }
+    }
+
+    // Otherwise, get all checked checkboxes. If the special 'null' gateway
+    // checkbox is selected, include the sentinel 'null' alongside any real
+    // gateway ids. This allows requests like `gateway_id=abc,null` which the
+    // server interprets as (gateway_id = abc) OR (gateway_id IS NULL).
+    const checkboxes = container.querySelectorAll(
+        "input[type='checkbox']:checked",
+    );
+
+    const selectedIds = Array.from(checkboxes)
+        .map((cb) => {
+            // Convert the special null-gateway checkbox to the literal 'null'
+            if (cb.dataset?.gatewayNull === "true") {
+                return "null";
+            }
+            return cb.value;
+        })
+        // Filter out any empty values to avoid sending empty CSV entries
+        .filter((id) => id !== "" && id !== null && id !== undefined);
+
+    console.log(
+        `[Gateway Selection DEBUG] Found ${selectedIds.length} checked gateway checkboxes`,
+    );
+    console.log("[Gateway Selection DEBUG] Selected gateway IDs:", selectedIds);
+
+    return selectedIds;
+}
+
+/**
+ * Reload associated tools, resources, and prompts filtered by selected gateway IDs
+ */
+function reloadAssociatedItems() {
+    const selectedGatewayIds = getSelectedGatewayIds();
+    // Join all selected IDs (including the special 'null' sentinel if present)
+    // so the server receives a combined filter like `gateway_id=abc,null`.
+    let gatewayIdParam = "";
+    if (selectedGatewayIds.length > 0) {
+        gatewayIdParam = selectedGatewayIds.join(",");
+    }
+
+    console.log(
+        `[Filter Update] Reloading associated items for gateway IDs: ${gatewayIdParam || "none (showing all)"}`,
+    );
+    console.log(
+        "[Filter Update DEBUG] Selected gateway IDs array:",
+        selectedGatewayIds,
+    );
+
+    // Reload tools
+    const toolsContainer = document.getElementById("associatedTools");
+    if (toolsContainer) {
+        const toolsUrl = gatewayIdParam
+            ? `${window.ROOT_PATH}/admin/tools/partial?page=1&per_page=50&render=selector&gateway_id=${encodeURIComponent(gatewayIdParam)}`
+            : `${window.ROOT_PATH}/admin/tools/partial?page=1&per_page=50&render=selector`;
+
+        console.log("[Filter Update DEBUG] Tools URL:", toolsUrl);
+
+        // Use HTMX to reload the content
+        if (window.htmx) {
+            htmx.ajax("GET", toolsUrl, {
+                target: "#associatedTools",
+                swap: "innerHTML",
+            })
+                .then(() => {
+                    console.log(
+                        "[Filter Update DEBUG] Tools reloaded successfully",
+                    );
+                    // Re-initialize the tool select after content is loaded
+                    initToolSelect(
+                        "associatedTools",
+                        "selectedToolsPills",
+                        "selectedToolsWarning",
+                        6,
+                        "selectAllToolsBtn",
+                        "clearAllToolsBtn",
+                    );
+                })
+                .catch((err) => {
+                    console.error(
+                        "[Filter Update DEBUG] Tools reload failed:",
+                        err,
+                    );
+                });
+        } else {
+            console.error(
+                "[Filter Update DEBUG] HTMX not available for tools reload",
+            );
+        }
+    } else {
+        console.warn("[Filter Update DEBUG] Tools container not found");
+    }
+
+    // Reload resources - use fetch directly to avoid HTMX race conditions
+    const resourcesContainer = document.getElementById("associatedResources");
+    if (resourcesContainer) {
+        const resourcesUrl = gatewayIdParam
+            ? `${window.ROOT_PATH}/admin/resources/partial?page=1&per_page=50&render=selector&gateway_id=${encodeURIComponent(gatewayIdParam)}`
+            : `${window.ROOT_PATH}/admin/resources/partial?page=1&per_page=50&render=selector`;
+
+        console.log("[Filter Update DEBUG] Resources URL:", resourcesUrl);
+
+        // Use fetch() directly instead of htmx.ajax() to avoid race conditions
+        fetch(resourcesUrl, {
+            method: "GET",
+            headers: {
+                "HX-Request": "true",
+                "HX-Current-URL": window.location.href,
+            },
+        })
+            .then((response) => {
+                if (!response.ok) {
+                    throw new Error(
+                        `HTTP ${response.status}: ${response.statusText}`,
+                    );
+                }
+                return response.text();
+            })
+            .then((html) => {
+                console.log(
+                    "[Filter Update DEBUG] Resources fetch successful, HTML length:",
+                    html.length,
+                );
+                resourcesContainer.innerHTML = html;
+                // If HTMX is available, process the newly-inserted HTML so hx-*
+                // triggers (like the infinite-scroll 'intersect' trigger) are
+                // initialized. To avoid HTMX re-triggering the container's
+                // own `hx-get`/`hx-trigger="load"` (which would issue a second
+                // request without the gateway filter), temporarily remove those
+                // attributes from the container while we call `htmx.process`.
+                if (window.htmx && typeof window.htmx.process === "function") {
+                    try {
+                        // Backup and remove attributes that could auto-fire
+                        const hadHxGet =
+                            resourcesContainer.hasAttribute("hx-get");
+                        const hadHxTrigger =
+                            resourcesContainer.hasAttribute("hx-trigger");
+                        const oldHxGet =
+                            resourcesContainer.getAttribute("hx-get");
+                        const oldHxTrigger =
+                            resourcesContainer.getAttribute("hx-trigger");
+
+                        if (hadHxGet) {
+                            resourcesContainer.removeAttribute("hx-get");
+                        }
+                        if (hadHxTrigger) {
+                            resourcesContainer.removeAttribute("hx-trigger");
+                        }
+
+                        // Process only the newly-inserted inner nodes to initialize
+                        // any hx-* behavior (infinite scroll, after-swap hooks, etc.)
+                        window.htmx.process(resourcesContainer);
+
+                        // Restore original attributes so the container retains its
+                        // declarative behavior for future operations, but don't
+                        // re-process (we already processed child nodes).
+                        if (hadHxGet && oldHxGet !== null) {
+                            resourcesContainer.setAttribute("hx-get", oldHxGet);
+                        }
+                        if (hadHxTrigger && oldHxTrigger !== null) {
+                            resourcesContainer.setAttribute(
+                                "hx-trigger",
+                                oldHxTrigger,
+                            );
+                        }
+
+                        console.log(
+                            "[Filter Update DEBUG] htmx.process called on resources container (attributes temporarily removed)",
+                        );
+                    } catch (e) {
+                        console.warn(
+                            "[Filter Update DEBUG] htmx.process failed:",
+                            e,
+                        );
+                    }
+                }
+
+                // Re-initialize the resource select after content is loaded
+                initResourceSelect(
+                    "associatedResources",
+                    "selectedResourcesPills",
+                    "selectedResourcesWarning",
+                    6,
+                    "selectAllResourcesBtn",
+                    "clearAllResourcesBtn",
+                );
+                console.log(
+                    "[Filter Update DEBUG] Resources reloaded successfully via fetch",
+                );
+            })
+            .catch((err) => {
+                console.error(
+                    "[Filter Update DEBUG] Resources reload failed:",
+                    err,
+                );
+            });
+    } else {
+        console.warn("[Filter Update DEBUG] Resources container not found");
+    }
+
+    // Reload prompts
+    const promptsContainer = document.getElementById("associatedPrompts");
+    if (promptsContainer) {
+        const promptsUrl = gatewayIdParam
+            ? `${window.ROOT_PATH}/admin/prompts/partial?page=1&per_page=50&render=selector&gateway_id=${encodeURIComponent(gatewayIdParam)}`
+            : `${window.ROOT_PATH}/admin/prompts/partial?page=1&per_page=50&render=selector`;
+
+        if (window.htmx) {
+            htmx.ajax("GET", promptsUrl, {
+                target: "#associatedPrompts",
+                swap: "innerHTML",
+            }).then(() => {
+                // Re-initialize the prompt select after content is loaded
+                initPromptSelect(
+                    "associatedPrompts",
+                    "selectedPromptsPills",
+                    "selectedPromptsWarning",
+                    6,
+                    "selectAllPromptsBtn",
+                    "clearAllPromptsBtn",
+                );
+            });
+        }
+    }
+}
+
+// Initialize gateway select on page load
+document.addEventListener("DOMContentLoaded", function () {
+    // Initialize for the create server form
+    if (document.getElementById("associatedGateways")) {
+        initGatewaySelect(
+            "associatedGateways",
+            "selectedGatewayPills",
+            "selectedGatewayWarning",
+            12,
+            "selectAllGatewayBtn",
+            "clearAllGatewayBtn",
+            "searchGateways",
+        );
+    }
+});
 
 // ===================================================================
 // INACTIVE ITEMS HANDLING
@@ -5703,13 +8377,110 @@ function toggleInactiveItems(type) {
         return;
     }
 
-    const url = new URL(window.location);
-    if (checkbox.checked) {
-        url.searchParams.set("include_inactive", "true");
-    } else {
-        url.searchParams.delete("include_inactive");
+    // Update URL in address bar (no navigation) so state is reflected
+    try {
+        const urlObj = new URL(window.location);
+        if (checkbox.checked) {
+            urlObj.searchParams.set("include_inactive", "true");
+        } else {
+            urlObj.searchParams.delete("include_inactive");
+        }
+        // Use replaceState to avoid adding history entries for every toggle
+        window.history.replaceState({}, document.title, urlObj.toString());
+    } catch (e) {
+        // ignore (shouldn't happen)
     }
-    window.location = url;
+
+    // Try to find the HTMX container that loads this entity's partial
+    // Prefer an element with hx-get containing the admin partial endpoint
+    const selector = `[hx-get*="/admin/${type}/partial"]`;
+    let container = document.querySelector(selector);
+
+    // Fallback to conventional id naming used in templates
+    if (!container) {
+        const fallbackId =
+            type === "tools" ? "tools-table" : `${type}-list-container`;
+        container = document.getElementById(fallbackId);
+    }
+
+    if (!container) {
+        // If we couldn't find a container, fallback to full-page reload
+        const fallbackUrl = new URL(window.location);
+        if (checkbox.checked) {
+            fallbackUrl.searchParams.set("include_inactive", "true");
+        } else {
+            fallbackUrl.searchParams.delete("include_inactive");
+        }
+        window.location = fallbackUrl;
+        return;
+    }
+
+    // Build request URL based on the hx-get attribute or container id
+    const base =
+        container.getAttribute("hx-get") ||
+        container.getAttribute("data-hx-get") ||
+        "";
+    let reqUrl;
+    try {
+        if (base) {
+            // base may already include query params; construct URL and set include_inactive/page
+            reqUrl = new URL(base, window.location.origin);
+            // reset to page 1 when toggling
+            reqUrl.searchParams.set("page", "1");
+            if (checkbox.checked) {
+                reqUrl.searchParams.set("include_inactive", "true");
+            } else {
+                reqUrl.searchParams.delete("include_inactive");
+            }
+        } else {
+            // construct from known pattern
+            const root = window.ROOT_PATH || "";
+            reqUrl = new URL(
+                `${root}/admin/${type}/partial?page=1&per_page=50`,
+                window.location.origin,
+            );
+            if (checkbox.checked) {
+                reqUrl.searchParams.set("include_inactive", "true");
+            }
+        }
+    } catch (e) {
+        // fallback to full reload
+        const fallbackUrl2 = new URL(window.location);
+        if (checkbox.checked) {
+            fallbackUrl2.searchParams.set("include_inactive", "true");
+        } else {
+            fallbackUrl2.searchParams.delete("include_inactive");
+        }
+        window.location = fallbackUrl2;
+        return;
+    }
+
+    // Determine indicator selector
+    const indicator =
+        container.getAttribute("hx-indicator") || `#${type}-loading`;
+
+    // Use HTMX to reload only the container (outerHTML swap)
+    if (window.htmx && typeof window.htmx.ajax === "function") {
+        try {
+            window.htmx.ajax("GET", reqUrl.toString(), {
+                target: container,
+                swap: "outerHTML",
+                indicator,
+            });
+            return;
+        } catch (e) {
+            // fall through to full reload
+        }
+    }
+
+    // Last resort: reload page with param
+    const finalUrl = new URL(window.location);
+    if (checkbox.checked) {
+        finalUrl.searchParams.set("include_inactive", "true");
+    } else {
+        finalUrl.searchParams.delete("include_inactive");
+    }
+    window.location = finalUrl;
 }
 
 function handleToggleSubmit(event, type) {
@@ -5950,7 +8721,7 @@ async function testTool(toolId) {
                         input.required =
                             schema.required && schema.required.includes(key);
                         input.className =
-                            "mt-1 block w-full rounded-md border border-gray-300 shadow-sm focus:border-indigo-500 focus:ring-indigo-500 dark:bg-gray-900 text-gray-700 dark:text-gray-300 dark:border-gray-700 dark:focus:border-indigo-400 dark:focus:ring-indigo-400";
+                            "mt-1 px-1.5 block w-full rounded-md border border-gray-300 shadow-sm focus:border-indigo-500 focus:ring-indigo-500 dark:bg-gray-900 text-gray-700 dark:text-gray-300 dark:border-gray-700 dark:focus:border-indigo-400 dark:focus:ring-indigo-400";
 
                         const itemTypes = Array.isArray(prop.items?.anyOf)
                             ? prop.items.anyOf.map((t) => t.type)
@@ -6055,7 +8826,7 @@ async function testTool(toolId) {
                     fieldInput.className =
                         prop.type === "boolean"
                             ? "mt-1 h-4 w-4 text-indigo-600 dark:text-indigo-200 border border-gray-300 rounded"
-                            : "mt-1 block w-full rounded-md border border-gray-300 shadow-sm focus:border-indigo-500 focus:ring-indigo-500 dark:bg-gray-900 text-gray-700 dark:text-gray-300 dark:border-gray-700 dark:focus:border-indigo-400 dark:focus:ring-indigo-400";
+                            : "mt-1 px-1.5 block w-full rounded-md border border-gray-300 shadow-sm focus:border-indigo-500 focus:ring-indigo-500 dark:bg-gray-900 text-gray-700 dark:text-gray-300 dark:border-gray-700 dark:focus:border-indigo-400 dark:focus:ring-indigo-400";
 
                     // Set default values here
                     if (prop.default !== undefined) {
@@ -6479,19 +9250,18 @@ const promptTestState = {
 /**
  * Test a prompt by opening the prompt test modal
  */
-async function testPrompt(promptName) {
+async function testPrompt(promptId) {
     try {
-        console.log(`Testing prompt: ${promptName}`);
+        console.log(`Testing prompt ID: ${promptId}`);
 
         // Debouncing to prevent rapid clicking
         const now = Date.now();
-        const lastRequest =
-            promptTestState.lastRequestTime.get(promptName) || 0;
+        const lastRequest = promptTestState.lastRequestTime.get(promptId) || 0;
         const timeSinceLastRequest = now - lastRequest;
         const debounceDelay = 1000;
 
         if (timeSinceLastRequest < debounceDelay) {
-            console.log(`Prompt ${promptName} test request debounced`);
+            console.log(`Prompt ${promptId} test request debounced`);
             return;
         }
 
@@ -6503,7 +9273,7 @@ async function testPrompt(promptName) {
 
         // Update button state
         const testButton = document.querySelector(
-            `[onclick*="testPrompt('${promptName}')"]`,
+            `[onclick*="testPrompt('${promptId}')"]`,
         );
         if (testButton) {
             if (testButton.disabled) {
@@ -6518,8 +9288,8 @@ async function testPrompt(promptName) {
         }
 
         // Record request time and mark as active
-        promptTestState.lastRequestTime.set(promptName, now);
-        promptTestState.activeRequests.add(promptName);
+        promptTestState.lastRequestTime.set(promptId, now);
+        promptTestState.activeRequests.add(promptId);
 
         // Fetch prompt details
         const controller = new AbortController();
@@ -6528,7 +9298,7 @@ async function testPrompt(promptName) {
         try {
             // Fetch prompt details from the prompts endpoint (view mode)
             const response = await fetch(
-                `${window.ROOT_PATH}/admin/prompts/${encodeURIComponent(promptName)}`,
+                `${window.ROOT_PATH}/admin/prompts/${encodeURIComponent(promptId)}`,
                 {
                     method: "GET",
                     headers: {
@@ -6555,7 +9325,7 @@ async function testPrompt(promptName) {
             const descElement = safeGetElement("prompt-test-modal-description");
 
             if (titleElement) {
-                titleElement.textContent = `Test Prompt: ${prompt.name || promptName}`;
+                titleElement.textContent = `Test Prompt: ${prompt.name || promptId}`;
             }
             if (descElement) {
                 if (prompt.description) {
@@ -6592,7 +9362,7 @@ async function testPrompt(promptName) {
     } finally {
         // Always restore button state
         const testButton = document.querySelector(
-            `[onclick*="testPrompt('${promptName}')"]`,
+            `[onclick*="testPrompt('${promptId}')"]`,
         );
         if (testButton) {
             testButton.disabled = false;
@@ -6601,7 +9371,7 @@ async function testPrompt(promptName) {
         }
 
         // Clean up state
-        promptTestState.activeRequests.delete(promptName);
+        promptTestState.activeRequests.delete(promptId);
     }
 }
 
@@ -6642,7 +9412,7 @@ function buildPromptTestForm(prompt) {
         input.id = `prompt-arg-${index}`;
         input.name = `arg-${arg.name}`;
         input.className =
-            "mt-1 block w-full rounded-md border-gray-300 shadow-sm focus:border-indigo-500 focus:ring-indigo-500 dark:bg-gray-700 dark:border-gray-600 dark:text-gray-300";
+            "mt-1 px-1.5 block w-full rounded-md border-gray-300 shadow-sm focus:border-indigo-500 focus:ring-indigo-500 dark:bg-gray-700 dark:border-gray-600 dark:text-gray-300";
 
         if (arg.description) {
             input.placeholder = arg.description;
@@ -6962,6 +9732,7 @@ async function handleGatewayTestSubmit(e) {
         const baseUrl = formData.get("url");
         const method = formData.get("method");
         const path = formData.get("path");
+        const contentType = formData.get("content_type") || "application/json";
 
         // Validate URL
         const urlValidation = validateUrl(baseUrl);
@@ -7001,12 +9772,28 @@ async function handleGatewayTestSubmit(e) {
             throw new Error(bodyValidation.error);
         }
 
+        // Process body based on content type
+        let processedBody = bodyValidation.value;
+        if (
+            contentType === "application/x-www-form-urlencoded" &&
+            bodyValidation.value &&
+            typeof bodyValidation.value === "object"
+        ) {
+            // Convert JSON object to URL-encoded string
+            const params = new URLSearchParams();
+            Object.entries(bodyValidation.value).forEach(([key, value]) => {
+                params.append(key, String(value));
+            });
+            processedBody = params.toString();
+        }
+
         const payload = {
             base_url: urlValidation.value,
             method,
             path,
             headers: headersValidation.value,
-            body: bodyValidation.value,
+            body: processedBody,
+            content_type: contentType,
         };
 
         // Make the request with timeout
@@ -7320,6 +10107,10 @@ async function viewTool(toolId) {
               <strong class="text-gray-700 dark:text-gray-300">Input Schema:</strong>
               <pre class="mt-1 bg-gray-100 p-3 rounded text-xs dark:bg-gray-800 dark:text-gray-200 tool-schema overflow-x-auto"></pre>
             </div>
+            <div>
+              <strong class="text-gray-700 dark:text-gray-300">Output Schema:</strong>
+              <pre class="mt-1 bg-gray-100 p-3 rounded text-xs dark:bg-gray-800 dark:text-gray-200 tool-output-schema overflow-x-auto"></pre>
+            </div>
           </div>
 
           <!-- Metrics Section -->
@@ -7457,6 +10248,10 @@ async function viewTool(toolId) {
             setTextSafely(
                 ".tool-schema",
                 JSON.stringify(tool.inputSchema || {}, null, 2),
+            );
+            setTextSafely(
+                ".tool-output-schema",
+                JSON.stringify(tool.outputSchema || {}, null, 2),
             );
 
             // Set auth fields safely
@@ -7729,7 +10524,6 @@ async function handleGatewayFormSubmit(e) {
 
             const queryString = searchParams.toString();
             const redirectUrl = `${window.ROOT_PATH}/admin${queryString ? `?${queryString}` : ""}#gateways`;
-
             window.location.href = redirectUrl;
         }
     } catch (error) {
@@ -7889,7 +10683,13 @@ async function handlePromptFormSubmit(e) {
 async function handleEditPromptFormSubmit(e) {
     e.preventDefault();
     const form = e.target;
+
     const formData = new FormData(form);
+    // Add team_id from URL if present (like handleEditToolFormSubmit)
+    const teamId = new URL(window.location.href).searchParams.get("team_id");
+    if (teamId) {
+        formData.set("team_id", teamId);
+    }
 
     try {
         // Validate inputs
@@ -8019,6 +10819,7 @@ async function handleServerFormSubmit(e) {
 // Handle Add A2A Form Submit
 async function handleA2AFormSubmit(e) {
     e.preventDefault();
+
     const form = e.target;
     const formData = new FormData(form);
     const status = safeGetElement("a2aFormError");
@@ -8027,7 +10828,6 @@ async function handleA2AFormSubmit(e) {
     try {
         // Basic validation
         const name = formData.get("name");
-
         const nameValidation = validateInputName(name, "A2A Agent");
         if (!nameValidation.valid) {
             throw new Error(nameValidation.error);
@@ -8041,30 +10841,85 @@ async function handleA2AFormSubmit(e) {
             status.classList.remove("error-status");
         }
 
-        // Append visibility (radio buttons)
+        const isInactiveCheckedBool = isInactiveChecked("a2a-agents");
+        formData.append("is_inactive_checked", isInactiveCheckedBool);
+        // Process passthrough headers - convert comma-separated string to array
+        const passthroughHeadersString = formData.get("passthrough_headers");
+        if (passthroughHeadersString && passthroughHeadersString.trim()) {
+            // Split by comma and clean up each header name
+            const passthroughHeaders = passthroughHeadersString
+                .split(",")
+                .map((header) => header.trim())
+                .filter((header) => header.length > 0);
+
+            // Validate each header name
+            for (const headerName of passthroughHeaders) {
+                if (!HEADER_NAME_REGEX.test(headerName)) {
+                    showErrorMessage(
+                        `Invalid passthrough header name: "${headerName}". Only letters, numbers, and hyphens are allowed.`,
+                    );
+                    return;
+                }
+            }
+
+            // Remove the original string and add as JSON array
+            formData.delete("passthrough_headers");
+            formData.append(
+                "passthrough_headers",
+                JSON.stringify(passthroughHeaders),
+            );
+        }
+
+        // Handle auth_headers JSON field
+        const authHeadersJson = formData.get("auth_headers");
+        if (authHeadersJson) {
+            try {
+                const authHeaders = JSON.parse(authHeadersJson);
+                if (Array.isArray(authHeaders) && authHeaders.length > 0) {
+                    // Remove the JSON string and add as parsed data for backend processing
+                    formData.delete("auth_headers");
+                    formData.append(
+                        "auth_headers",
+                        JSON.stringify(authHeaders),
+                    );
+                }
+            } catch (e) {
+                console.error("Invalid auth_headers JSON:", e);
+            }
+        }
+
+        const authType = formData.get("auth_type");
+        if (authType !== "oauth") {
+            formData.set("oauth_grant_type", "");
+        }
 
         // ✅ Ensure visibility is captured from checked radio button
-
         // formData.set("visibility", visibility);
         formData.append("visibility", formData.get("visibility"));
-
         const teamId = new URL(window.location.href).searchParams.get(
             "team_id",
         );
         teamId && formData.append("team_id", teamId);
 
         // Submit to backend
+        // specifically log agentType only
+        console.log("agentType:", formData.get("agentType"));
+
         const response = await fetch(`${window.ROOT_PATH}/admin/a2a`, {
             method: "POST",
             body: formData,
         });
 
         const result = await response.json();
+
         if (!result || !result.success) {
             throw new Error(result?.message || "Failed to add A2A Agent.");
         } else {
             // Success redirect
             const searchParams = new URLSearchParams();
+            if (isInactiveCheckedBool) {
+                searchParams.set("include_inactive", "true");
+            }
             if (teamId) {
                 searchParams.set("team_id", teamId);
             }
@@ -8134,6 +10989,9 @@ async function handleToolFormSubmit(event) {
         if (window.schemaEditor) {
             window.schemaEditor.save();
         }
+        if (window.outputSchemaEditor) {
+            window.outputSchemaEditor.save();
+        }
 
         const isInactiveCheckedBool = isInactiveChecked("tools");
         formData.append("is_inactive_checked", isInactiveCheckedBool);
@@ -8201,6 +11059,9 @@ async function handleEditToolFormSubmit(event) {
         if (window.editToolSchemaEditor) {
             window.editToolSchemaEditor.save();
         }
+        if (window.editToolOutputSchemaEditor) {
+            window.editToolOutputSchemaEditor.save();
+        }
 
         const isInactiveCheckedBool = isInactiveChecked("tools");
         formData.append("is_inactive_checked", isInactiveCheckedBool);
@@ -8236,6 +11097,8 @@ async function handleEditToolFormSubmit(event) {
         showErrorMessage(error.message);
     }
 }
+
+// Handle Gateway Edit Form
 async function handleEditGatewayFormSubmit(e) {
     e.preventDefault();
     const form = e.target;
@@ -8319,6 +11182,104 @@ async function handleEditGatewayFormSubmit(e) {
         }
         const queryString = searchParams.toString();
         const redirectUrl = `${window.ROOT_PATH}/admin${queryString ? `?${queryString}` : ""}#gateways`;
+        window.location.href = redirectUrl;
+    } catch (error) {
+        console.error("Error:", error);
+        showErrorMessage(error.message);
+    }
+}
+
+// Handle A2A Agent Edit Form
+async function handleEditA2AAgentFormSubmit(e) {
+    e.preventDefault();
+    const form = e.target;
+    const formData = new FormData(form);
+
+    console.log("Edit A2A Agent Form Details: ");
+    console.log(
+        JSON.stringify(Object.fromEntries(formData.entries()), null, 2),
+    );
+
+    try {
+        // Validate form inputs
+        const name = formData.get("name");
+        const url = formData.get("endpoint_url");
+        console.log("Original A2A URL: ", url);
+        const nameValidation = validateInputName(name, "a2a_agent");
+        const urlValidation = validateUrl(url);
+
+        if (!nameValidation.valid) {
+            throw new Error(nameValidation.error);
+        }
+
+        if (!urlValidation.valid) {
+            throw new Error(urlValidation.error);
+        }
+
+        // Handle passthrough headers
+        const passthroughHeadersString =
+            formData.get("passthrough_headers") || "";
+        const passthroughHeaders = passthroughHeadersString
+            .split(",")
+            .map((header) => header.trim())
+            .filter((header) => header.length > 0);
+
+        // Validate each header name
+        for (const headerName of passthroughHeaders) {
+            if (headerName && !HEADER_NAME_REGEX.test(headerName)) {
+                showErrorMessage(
+                    `Invalid passthrough header name: "${headerName}". Only letters, numbers, and hyphens are allowed.`,
+                );
+                return;
+            }
+        }
+
+        formData.append(
+            "passthrough_headers",
+            JSON.stringify(passthroughHeaders),
+        );
+
+        // Handle OAuth configuration
+        // NOTE: OAuth config assembly is now handled by the backend (mcpgateway/admin.py)
+        // The backend assembles individual form fields into oauth_config with proper field names
+        // and supports DCR (Dynamic Client Registration) when client_id/client_secret are empty
+        //
+        // Leaving this commented for reference:
+        // const authType = formData.get("auth_type");
+        // if (authType === "oauth") {
+        //     ... backend handles this now ...
+        // }
+
+        const authType = formData.get("auth_type");
+        if (authType !== "oauth") {
+            formData.set("oauth_grant_type", "");
+        }
+
+        const isInactiveCheckedBool = isInactiveChecked("a2a-agents");
+        formData.append("is_inactive_checked", isInactiveCheckedBool);
+        // Submit via fetch
+        const response = await fetch(form.action, {
+            method: "POST",
+            body: formData,
+        });
+        const result = await response.json();
+        if (!result || !result.success) {
+            throw new Error(result?.message || "Failed to edit a2a agent");
+        }
+        // Only redirect on success
+        const teamId = new URL(window.location.href).searchParams.get(
+            "team_id",
+        );
+
+        const searchParams = new URLSearchParams();
+        if (isInactiveCheckedBool) {
+            searchParams.set("include_inactive", "true");
+        }
+        if (teamId) {
+            searchParams.set("team_id", teamId);
+        }
+        const queryString = searchParams.toString();
+        const redirectUrl = `${window.ROOT_PATH}/admin${queryString ? `?${queryString}` : ""}#a2a-agents`;
         window.location.href = redirectUrl;
     } catch (error) {
         console.error("Error:", error);
@@ -8581,7 +11542,7 @@ if (window.performance && window.performance.mark) {
 // Tool Tips for components with Alpine.js
 // ===================================================================
 
-/* global Alpine */
+/* global Alpine, htmx */
 function setupTooltipsWithAlpine() {
     document.addEventListener("alpine:init", () => {
         console.log("Initializing Alpine tooltip directive...");
@@ -8809,6 +11770,16 @@ function initializeCodeMirrorEditors() {
             varName: "editToolSchemaEditor",
         },
         {
+            id: "output-schema-editor",
+            mode: "application/json",
+            varName: "outputSchemaEditor",
+        },
+        {
+            id: "edit-tool-output-schema",
+            mode: "application/json",
+            varName: "editToolOutputSchemaEditor",
+        },
+        {
             id: "edit-resource-content",
             mode: "text/plain",
             varName: "editResourceContentEditor",
@@ -8856,6 +11827,7 @@ function initializeCodeMirrorEditors() {
 function initializeToolSelects() {
     console.log("Initializing tool selects...");
 
+    // Add Server form
     initToolSelect(
         "associatedTools",
         "selectedToolsPills",
@@ -8864,6 +11836,26 @@ function initializeToolSelects() {
         "selectAllToolsBtn",
         "clearAllToolsBtn",
     );
+
+    initResourceSelect(
+        "associatedResources",
+        "selectedResourcesPills",
+        "selectedResourcesWarning",
+        10,
+        "selectAllResourcesBtn",
+        "clearAllResourcesBtn",
+    );
+
+    initPromptSelect(
+        "associatedPrompts",
+        "selectedPromptsPills",
+        "selectedPromptsWarning",
+        8,
+        "selectAllPromptsBtn",
+        "clearAllPromptsBtn",
+    );
+
+    // Edit Server form
     initToolSelect(
         "edit-server-tools",
         "selectedEditToolsPills",
@@ -8895,14 +11887,16 @@ function initializeToolSelects() {
 }
 
 function initializeEventListeners() {
-    console.log("Setting up event listeners...");
+    console.log("🎯 Setting up event listeners...");
 
     setupTabNavigation();
     setupHTMXHooks();
+    console.log("✅ HTMX hooks registered");
     setupAuthenticationToggles();
     setupFormHandlers();
     setupSchemaModeHandlers();
     setupIntegrationTypeHandlers();
+    console.log("✅ All event listeners initialized");
 }
 
 function setupTabNavigation() {
@@ -8961,12 +11955,27 @@ function setupAuthenticationToggles() {
             bearerId: "auth-bearer-fields",
             headersId: "auth-headers-fields",
         },
+
+        // Gateway Add Form auth fields
+
         {
             id: "auth-type-gw",
             basicId: "auth-basic-fields-gw",
             bearerId: "auth-bearer-fields-gw",
             headersId: "auth-headers-fields-gw",
         },
+
+        // A2A Add Form auth fields
+
+        {
+            id: "auth-type-a2a",
+            basicId: "auth-basic-fields-a2a",
+            bearerId: "auth-bearer-fields-a2a",
+            headersId: "auth-headers-fields-a2a",
+        },
+
+        // Gateway Edit Form auth fields
+
         {
             id: "auth-type-gw-edit",
             basicId: "auth-basic-fields-gw-edit",
@@ -8974,6 +11983,17 @@ function setupAuthenticationToggles() {
             headersId: "auth-headers-fields-gw-edit",
             oauthId: "auth-oauth-fields-gw-edit",
         },
+
+        // A2A Edit Form auth fields
+
+        {
+            id: "auth-type-a2a-edit",
+            basicId: "auth-basic-fields-a2a-edit",
+            bearerId: "auth-bearer-fields-a2a-edit",
+            headersId: "auth-headers-fields-a2a-edit",
+            oauthId: "auth-oauth-fields-a2a-edit",
+        },
+
         {
             id: "edit-auth-type",
             basicId: "edit-auth-basic-fields",
@@ -9011,8 +12031,29 @@ function setupFormHandlers() {
             authTypeField.addEventListener("change", handleAuthTypeChange);
         }
 
-        // Add OAuth grant type change handler
+        // Add OAuth grant type change handler for Gateway
         const oauthGrantTypeField = safeGetElement("oauth-grant-type-gw");
+        if (oauthGrantTypeField) {
+            oauthGrantTypeField.addEventListener(
+                "change",
+                handleOAuthGrantTypeChange,
+            );
+        }
+    }
+
+    // Add A2A Form
+    const a2aForm = safeGetElement("add-a2a-form");
+
+    if (a2aForm) {
+        a2aForm.addEventListener("submit", handleA2AFormSubmit);
+
+        // Add OAuth authentication type change handler
+        const authTypeField = safeGetElement("auth-type-a2a");
+        if (authTypeField) {
+            authTypeField.addEventListener("change", handleAuthTypeChange);
+        }
+
+        const oauthGrantTypeField = safeGetElement("oauth-grant-type-a2a");
         if (oauthGrantTypeField) {
             oauthGrantTypeField.addEventListener(
                 "change",
@@ -9042,6 +12083,8 @@ function setupFormHandlers() {
     }
 
     // Add OAuth grant type change handler for Edit Gateway modal
+    // Checkpoint commented
+    /*
     const editOAuthGrantTypeField = safeGetElement("oauth-grant-type-gw-edit");
     if (editOAuthGrantTypeField) {
         editOAuthGrantTypeField.addEventListener(
@@ -9049,6 +12092,17 @@ function setupFormHandlers() {
             handleEditOAuthGrantTypeChange,
         );
     }
+
+    */
+
+    // Checkpoint Started
+    ["oauth-grant-type-gw-edit", "oauth-grant-type-a2a-edit"].forEach((id) => {
+        const field = safeGetElement(id);
+        if (field) {
+            field.addEventListener("change", handleEditOAuthGrantTypeChange);
+        }
+    });
+    // Checkpoint Ended
 
     const toolForm = safeGetElement("add-tool-form");
     if (toolForm) {
@@ -9065,15 +12119,14 @@ function setupFormHandlers() {
         paramButton.addEventListener("click", handleAddParameter);
     }
 
+    const passthroughButton = safeGetElement("add-passthrough-btn");
+    if (passthroughButton) {
+        passthroughButton.addEventListener("click", handleAddPassthrough);
+    }
+
     const serverForm = safeGetElement("add-server-form");
     if (serverForm) {
         serverForm.addEventListener("submit", handleServerFormSubmit);
-    }
-
-    // Add A2A Form
-    const a2aForm = safeGetElement("add-a2a-form");
-    if (a2aForm) {
-        a2aForm.addEventListener("submit", handleA2AFormSubmit);
     }
 
     const editServerForm = safeGetElement("edit-server-form");
@@ -9116,6 +12169,19 @@ function setupFormHandlers() {
         });
     }
 
+    const editA2AAgentForm = safeGetElement("edit-a2a-agent-form");
+    if (editA2AAgentForm) {
+        editA2AAgentForm.addEventListener(
+            "submit",
+            handleEditA2AAgentFormSubmit,
+        );
+        editA2AAgentForm.addEventListener("click", () => {
+            if (getComputedStyle(editA2AAgentForm).display !== "none") {
+                refreshEditors();
+            }
+        });
+    }
+
     // Setup search functionality for selectors
     setupSelectorSearch();
 }
@@ -9124,17 +12190,22 @@ function setupFormHandlers() {
  * Setup search functionality for multi-select dropdowns
  */
 function setupSelectorSearch() {
-    // Tools search
+    // Tools search - server-side search
     const searchTools = safeGetElement("searchTools", true);
     if (searchTools) {
+        let searchTimeout;
         searchTools.addEventListener("input", function () {
-            filterSelectorItems(
-                this.value,
-                "#associatedTools",
-                ".tool-item",
-                "noToolsMessage",
-                "searchQuery",
-            );
+            const searchTerm = this.value;
+
+            // Clear previous timeout
+            if (searchTimeout) {
+                clearTimeout(searchTimeout);
+            }
+
+            // Debounce search to avoid too many API calls
+            searchTimeout = setTimeout(() => {
+                serverSideToolSearch(searchTerm);
+            }, 300);
         });
     }
 
@@ -9152,17 +12223,18 @@ function setupSelectorSearch() {
         });
     }
 
-    // Prompts search
+    // Prompts search (server-side)
     const searchPrompts = safeGetElement("searchPrompts", true);
     if (searchPrompts) {
+        let promptSearchTimeout;
         searchPrompts.addEventListener("input", function () {
-            filterSelectorItems(
-                this.value,
-                "#associatedPrompts",
-                ".prompt-item",
-                "noPromptsMessage",
-                "searchPromptsQuery",
-            );
+            const searchTerm = this.value;
+            if (promptSearchTimeout) {
+                clearTimeout(promptSearchTimeout);
+            }
+            promptSearchTimeout = setTimeout(() => {
+                serverSidePromptSearch(searchTerm);
+            }, 300);
         });
     }
 }
@@ -9267,24 +12339,26 @@ window.filterServerTable = filterServerTable;
 
 function handleAuthTypeChange() {
     const authType = this.value;
-    const basicFields = safeGetElement("auth-basic-fields-gw");
-    const bearerFields = safeGetElement("auth-bearer-fields-gw");
-    const headersFields = safeGetElement("auth-headers-fields-gw");
-    const oauthFields = safeGetElement("auth-oauth-fields-gw");
+
+    // Detect form type based on the element ID
+    // e.g., "auth-type-a2a" or "auth-type-gw"
+    const isA2A = this.id.includes("a2a");
+    const prefix = isA2A ? "a2a" : "gw";
+
+    // Select the correct field groups dynamically
+    const basicFields = safeGetElement(`auth-basic-fields-${prefix}`);
+    const bearerFields = safeGetElement(`auth-bearer-fields-${prefix}`);
+    const headersFields = safeGetElement(`auth-headers-fields-${prefix}`);
+    const oauthFields = safeGetElement(`auth-oauth-fields-${prefix}`);
 
     // Hide all auth sections first
-    if (basicFields) {
-        basicFields.style.display = "none";
-    }
-    if (bearerFields) {
-        bearerFields.style.display = "none";
-    }
-    if (headersFields) {
-        headersFields.style.display = "none";
-    }
-    if (oauthFields) {
-        oauthFields.style.display = "none";
-    }
+    [basicFields, bearerFields, headersFields, oauthFields].forEach(
+        (section) => {
+            if (section) {
+                section.style.display = "none";
+            }
+        },
+    );
 
     // Show the appropriate section
     switch (authType) {
@@ -9309,53 +12383,55 @@ function handleAuthTypeChange() {
             }
             break;
         default:
-            // No auth - keep everything hidden
+            // "none" or unknown type — keep everything hidden
             break;
     }
 }
 
 function handleOAuthGrantTypeChange() {
     const grantType = this.value;
-    const authCodeFields = safeGetElement("oauth-auth-code-fields-gw");
-    const usernameField = safeGetElement("oauth-username-field-gw");
-    const passwordField = safeGetElement("oauth-password-field-gw");
 
+    // Detect form type (a2a or gw) from the triggering element ID
+    const isA2A = this.id.includes("a2a");
+    const prefix = isA2A ? "a2a" : "gw";
+
+    // Select the correct fields dynamically based on prefix
+    const authCodeFields = safeGetElement(`oauth-auth-code-fields-${prefix}`);
+    const usernameField = safeGetElement(`oauth-username-field-${prefix}`);
+    const passwordField = safeGetElement(`oauth-password-field-${prefix}`);
+
+    // Handle Authorization Code flow
     if (authCodeFields) {
         if (grantType === "authorization_code") {
             authCodeFields.style.display = "block";
 
-            // Make authorization code specific fields required
+            // Make URL fields required
             const requiredFields =
                 authCodeFields.querySelectorAll('input[type="url"]');
-            requiredFields.forEach((field) => {
-                field.required = true;
-            });
+            requiredFields.forEach((field) => (field.required = true));
 
-            // Show additional validation for required fields
             console.log(
-                "Authorization Code flow selected - additional fields are now required",
+                `(${prefix.toUpperCase()}) Authorization Code flow selected - fields are now required`,
             );
         } else {
             authCodeFields.style.display = "none";
 
-            // Remove required validation for hidden fields
+            // Remove required validation
             const requiredFields =
                 authCodeFields.querySelectorAll('input[type="url"]');
-            requiredFields.forEach((field) => {
-                field.required = false;
-            });
+            requiredFields.forEach((field) => (field.required = false));
         }
     }
 
-    // Handle password grant type fields
+    // Handle Password Grant flow
     if (usernameField && passwordField) {
+        const usernameInput = safeGetElement(`oauth-username-${prefix}`);
+        const passwordInput = safeGetElement(`oauth-password-${prefix}`);
+
         if (grantType === "password") {
             usernameField.style.display = "block";
             passwordField.style.display = "block";
 
-            // Make username and password required for password grant
-            const usernameInput = safeGetElement("oauth-username-gw");
-            const passwordInput = safeGetElement("oauth-password-gw");
             if (usernameInput) {
                 usernameInput.required = true;
             }
@@ -9364,15 +12440,12 @@ function handleOAuthGrantTypeChange() {
             }
 
             console.log(
-                "Password grant flow selected - username and password are now required",
+                `(${prefix.toUpperCase()}) Password grant flow selected - username and password are now required`,
             );
         } else {
             usernameField.style.display = "none";
             passwordField.style.display = "none";
 
-            // Remove required validation for hidden fields
-            const usernameInput = safeGetElement("oauth-username-gw");
-            const passwordInput = safeGetElement("oauth-password-gw");
             if (usernameInput) {
                 usernameInput.required = false;
             }
@@ -9385,46 +12458,39 @@ function handleOAuthGrantTypeChange() {
 
 function handleEditOAuthGrantTypeChange() {
     const grantType = this.value;
-    const authCodeFields = safeGetElement("oauth-auth-code-fields-gw-edit");
-    const usernameField = safeGetElement("oauth-username-field-edit");
-    const passwordField = safeGetElement("oauth-password-field-edit");
 
+    // Detect prefix dynamically (supports both gw-edit and a2a-edit)
+    const id = this.id || "";
+    const prefix = id.includes("a2a") ? "a2a-edit" : "gw-edit";
+
+    const authCodeFields = safeGetElement(`oauth-auth-code-fields-${prefix}`);
+    const usernameField = safeGetElement(`oauth-username-field-${prefix}`);
+    const passwordField = safeGetElement(`oauth-password-field-${prefix}`);
+
+    // === Handle Authorization Code grant ===
     if (authCodeFields) {
+        const urlInputs = authCodeFields.querySelectorAll('input[type="url"]');
         if (grantType === "authorization_code") {
             authCodeFields.style.display = "block";
-
-            // Make authorization code specific fields required
-            const requiredFields =
-                authCodeFields.querySelectorAll('input[type="url"]');
-            requiredFields.forEach((field) => {
-                field.required = true;
-            });
-
-            // Show additional validation for required fields
+            urlInputs.forEach((field) => (field.required = true));
             console.log(
-                "Authorization Code flow selected - additional fields are now required",
+                `Authorization Code flow selected (${prefix}) - additional fields are now required`,
             );
         } else {
             authCodeFields.style.display = "none";
-
-            // Remove required validation for hidden fields
-            const requiredFields =
-                authCodeFields.querySelectorAll('input[type="url"]');
-            requiredFields.forEach((field) => {
-                field.required = false;
-            });
+            urlInputs.forEach((field) => (field.required = false));
         }
     }
 
-    // Handle password grant type fields
+    // === Handle Password grant ===
     if (usernameField && passwordField) {
+        const usernameInput = safeGetElement(`oauth-username-${prefix}`);
+        const passwordInput = safeGetElement(`oauth-password-${prefix}`);
+
         if (grantType === "password") {
             usernameField.style.display = "block";
             passwordField.style.display = "block";
 
-            // Make username and password required for password grant
-            const usernameInput = safeGetElement("oauth-username-gw-edit");
-            const passwordInput = safeGetElement("oauth-password-gw-edit");
             if (usernameInput) {
                 usernameInput.required = true;
             }
@@ -9433,15 +12499,12 @@ function handleEditOAuthGrantTypeChange() {
             }
 
             console.log(
-                "Password grant flow selected - username and password are now required",
+                `Password grant flow selected (${prefix}) - username and password are now required`,
             );
         } else {
             usernameField.style.display = "none";
             passwordField.style.display = "none";
 
-            // Remove required validation for hidden fields
-            const usernameInput = safeGetElement("oauth-username-gw-edit");
-            const passwordInput = safeGetElement("oauth-password-gw-edit");
             if (usernameInput) {
                 usernameInput.required = false;
             }
@@ -9588,6 +12651,7 @@ window.editGateway = editGateway;
 window.viewServer = viewServer;
 window.editServer = editServer;
 window.viewAgent = viewAgent;
+window.editA2AAgent = editA2AAgent;
 window.runToolTest = runToolTest;
 window.testPrompt = testPrompt;
 window.runPromptTest = runPromptTest;
@@ -10059,6 +13123,7 @@ function filterEntitiesByTags(entityType, tagsInput) {
         .split(",")
         .map((tag) => tag.trim().toLowerCase())
         .filter((tag) => tag);
+
     const tableSelector = `#${entityType}-panel tbody tr`;
     const rows = document.querySelectorAll(tableSelector);
 
@@ -10074,10 +13139,18 @@ function filterEntitiesByTags(entityType, tagsInput) {
 
         // Extract tags from this row using specific tag selectors (not status badges)
         const rowTags = new Set();
+
         const tagElements = row.querySelectorAll(`
+            /* Gateways */
+            span.inline-block.bg-blue-100.text-blue-800.text-xs.px-2.py-1.rounded-full,
+            /* A2A Agents */
+            span.inline-flex.items-center.px-2.py-1.rounded.text-xs.bg-gray-100.text-gray-700,
+            /* Prompts & Resources */
             span.inline-flex.items-center.px-2.py-0\\.5.rounded.text-xs.font-medium.bg-blue-100.text-blue-800,
-            span.inline-block.bg-blue-100.text-blue-800.text-xs.px-2.py-1.rounded-full
+            /* Gray tags for A2A agent metadata */
+            span.inline-flex.items-center.px-2\\.5.py-0\\.5.rounded-full.text-xs.font-medium.bg-gray-100.text-gray-700
         `);
+
         tagElements.forEach((tagEl) => {
             const tagText = tagEl.textContent.trim().toLowerCase();
             // Filter out any remaining non-tag content
@@ -10177,6 +13250,7 @@ function initializeTagFiltering() {
         "prompts",
         "servers",
         "gateways",
+        "a2a-agents",
     ];
 
     entityTypes.forEach((entityType) => {
@@ -10213,6 +13287,50 @@ window.updateAvailableTags = updateAvailableTags;
 // ===================================================================
 
 /**
+ * Toggle masking for sensitive text inputs (passwords, tokens, headers)
+ * @param {HTMLElement|string} inputOrId - Target input element or its ID
+ * @param {HTMLElement} button - Button triggering the toggle
+ */
+function toggleInputMask(inputOrId, button) {
+    const input =
+        typeof inputOrId === "string"
+            ? document.getElementById(inputOrId)
+            : inputOrId;
+
+    if (!input || !button) {
+        return;
+    }
+
+    const revealing = input.type === "password";
+    if (revealing) {
+        input.type = "text";
+        if (input.dataset.isMasked === "true") {
+            input.value = input.dataset.realValue ?? "";
+        }
+    } else {
+        input.type = "password";
+        if (input.dataset.isMasked === "true") {
+            input.value = MASKED_AUTH_VALUE;
+        }
+    }
+
+    const label = input.getAttribute("data-sensitive-label") || "value";
+    button.textContent = revealing ? "Hide" : "Show";
+    button.setAttribute("aria-pressed", revealing ? "true" : "false");
+    button.setAttribute(
+        "aria-label",
+        `${revealing ? "Hide" : "Show"} ${label}`.trim(),
+    );
+
+    const container = input.closest('[id^="auth-headers-container"]');
+    if (container) {
+        updateAuthHeadersJSON(container.id);
+    }
+}
+
+window.toggleInputMask = toggleInputMask;
+
+/**
  * Global counter for unique header IDs
  */
 let headerCounter = 0;
@@ -10221,7 +13339,7 @@ let headerCounter = 0;
  * Add a new authentication header row to the specified container
  * @param {string} containerId - ID of the container to add the header row to
  */
-function addAuthHeader(containerId) {
+function addAuthHeader(containerId, options = {}) {
     const container = document.getElementById(containerId);
     if (!container) {
         console.error(`Container with ID ${containerId} not found`);
@@ -10229,27 +13347,44 @@ function addAuthHeader(containerId) {
     }
 
     const headerId = `auth-header-${++headerCounter}`;
+    const valueInputId = `${headerId}-value`;
 
     const headerRow = document.createElement("div");
     headerRow.className = "flex items-center space-x-2";
     headerRow.id = headerId;
+    if (options.existing) {
+        headerRow.dataset.existing = "true";
+    }
 
     headerRow.innerHTML = `
         <div class="flex-1">
             <input
                 type="text"
                 placeholder="Header Key (e.g., X-API-Key)"
-                class="auth-header-key block w-full rounded-md border border-gray-300 dark:border-gray-700 shadow-sm focus:border-indigo-500 focus:ring-indigo-500 dark:bg-gray-900 dark:placeholder-gray-300 dark:text-gray-300 text-sm"
+                class="auth-header-key block w-full px-1.5 rounded-md border border-gray-300 dark:border-gray-700 shadow-sm focus:border-indigo-500 focus:ring-indigo-500 dark:bg-gray-900 dark:placeholder-gray-300 dark:text-gray-300 text-sm"
                 oninput="updateAuthHeadersJSON('${containerId}')"
             />
         </div>
         <div class="flex-1">
-            <input
-                type="password"
-                placeholder="Header Value"
-                class="auth-header-value block w-full rounded-md border border-gray-300 dark:border-gray-700 shadow-sm focus:border-indigo-500 focus:ring-indigo-500 dark:bg-gray-900 dark:placeholder-gray-300 dark:text-gray-300 text-sm"
-                oninput="updateAuthHeadersJSON('${containerId}')"
-            />
+            <div class="relative">
+                <input
+                    type="password"
+                    id="${valueInputId}"
+                    placeholder="Header Value"
+                    data-sensitive-label="header value"
+                    class="auth-header-value block w-full px-1.5 rounded-md border border-gray-300 dark:border-gray-700 shadow-sm focus:border-indigo-500 focus:ring-indigo-500 dark:bg-gray-900 dark:placeholder-gray-300 dark:text-gray-300 text-sm pr-16"
+                    oninput="updateAuthHeadersJSON('${containerId}')"
+                />
+                <button
+                    type="button"
+                    class="absolute inset-y-0 right-0 flex items-center px-2 text-xs font-medium text-indigo-600 hover:text-indigo-800 focus:outline-none focus:ring-2 focus:ring-offset-2 focus:ring-indigo-500 dark:text-indigo-300"
+                    onclick="toggleInputMask('${valueInputId}', this)"
+                    aria-pressed="false"
+                    aria-label="Show header value"
+                >
+                    Show
+                </button>
+            </div>
         </div>
         <button
             type="button"
@@ -10264,11 +13399,31 @@ function addAuthHeader(containerId) {
     `;
 
     container.appendChild(headerRow);
+
+    const keyInput = headerRow.querySelector(".auth-header-key");
+    const valueInput = headerRow.querySelector(".auth-header-value");
+    if (keyInput) {
+        keyInput.value = options.key ?? "";
+    }
+    if (valueInput) {
+        if (options.isMasked) {
+            valueInput.value = MASKED_AUTH_VALUE;
+            valueInput.dataset.isMasked = "true";
+            valueInput.dataset.realValue = options.value ?? "";
+        } else {
+            valueInput.value = options.value ?? "";
+            if (valueInput.dataset) {
+                delete valueInput.dataset.isMasked;
+                delete valueInput.dataset.realValue;
+            }
+        }
+    }
+
     updateAuthHeadersJSON(containerId);
 
+    const shouldFocus = options.focus !== false;
     // Focus on the key input of the new header
-    const keyInput = headerRow.querySelector(".auth-header-key");
-    if (keyInput) {
+    if (shouldFocus && keyInput) {
         keyInput.focus();
     }
 }
@@ -10308,10 +13463,10 @@ function updateAuthHeadersJSON(containerId) {
 
         if (keyInput && valueInput) {
             const key = keyInput.value.trim();
-            const value = valueInput.value.trim();
+            const rawValue = valueInput.value;
 
             // Skip completely empty rows
-            if (!key && !value) {
+            if (!key && (!rawValue || !rawValue.trim())) {
                 return;
             }
 
@@ -10341,9 +13496,25 @@ function updateAuthHeadersJSON(containerId) {
             }
             seenKeys.add(key.toLowerCase());
 
+            if (valueInput.dataset.isMasked === "true") {
+                const storedValue = valueInput.dataset.realValue ?? "";
+                if (
+                    rawValue !== MASKED_AUTH_VALUE &&
+                    rawValue !== storedValue
+                ) {
+                    delete valueInput.dataset.isMasked;
+                    delete valueInput.dataset.realValue;
+                }
+            }
+
+            const finalValue =
+                valueInput.dataset.isMasked === "true"
+                    ? MASKED_AUTH_VALUE
+                    : rawValue.trim();
+
             headers.push({
                 key,
-                value, // Allow empty values
+                value: finalValue, // Allow empty values
             });
         }
     });
@@ -10354,10 +13525,14 @@ function updateAuthHeadersJSON(containerId) {
         jsonInput = document.getElementById("auth-headers-json");
     } else if (containerId === "auth-headers-container-gw") {
         jsonInput = document.getElementById("auth-headers-json-gw");
+    } else if (containerId === "auth-headers-container-a2a") {
+        jsonInput = document.getElementById("auth-headers-json-a2a");
     } else if (containerId === "edit-auth-headers-container") {
         jsonInput = document.getElementById("edit-auth-headers-json");
     } else if (containerId === "auth-headers-container-gw-edit") {
         jsonInput = document.getElementById("auth-headers-json-gw-edit");
+    } else if (containerId === "auth-headers-container-a2a-edit") {
+        jsonInput = document.getElementById("auth-headers-json-a2a-edit");
     }
 
     // Warn about duplicate keys in console
@@ -10384,33 +13559,57 @@ function updateAuthHeadersJSON(containerId) {
  * @param {string} containerId - ID of the container to populate
  * @param {Array} headers - Array of header objects with key and value properties
  */
-function loadAuthHeaders(containerId, headers) {
+function loadAuthHeaders(containerId, headers, options = {}) {
     const container = document.getElementById(containerId);
-    if (!container || !headers || !Array.isArray(headers)) {
+    if (!container) {
         return;
     }
 
-    // Clear existing headers
+    const jsonInput = (() => {
+        if (containerId === "auth-headers-container") {
+            return document.getElementById("auth-headers-json");
+        }
+        if (containerId === "auth-headers-container-gw") {
+            return document.getElementById("auth-headers-json-gw");
+        }
+        if (containerId === "auth-headers-container-a2a") {
+            return document.getElementById("auth-headers-json-a2a");
+        }
+        if (containerId === "edit-auth-headers-container") {
+            return document.getElementById("edit-auth-headers-json");
+        }
+        if (containerId === "auth-headers-container-gw-edit") {
+            return document.getElementById("auth-headers-json-gw-edit");
+        }
+        if (containerId === "auth-headers-container-a2a-edit") {
+            return document.getElementById("auth-headers-json-a2a-edit");
+        }
+        return null;
+    })();
+
     container.innerHTML = "";
 
-    // Add each header
-    headers.forEach((header) => {
-        if (header.key && header.value) {
-            addAuthHeader(containerId);
-            // Find the last added header row and populate it
-            const headerRows = container.querySelectorAll(
-                '[id^="auth-header-"]',
-            );
-            const lastRow = headerRows[headerRows.length - 1];
-            if (lastRow) {
-                const keyInput = lastRow.querySelector(".auth-header-key");
-                const valueInput = lastRow.querySelector(".auth-header-value");
-                if (keyInput && valueInput) {
-                    keyInput.value = header.key;
-                    valueInput.value = header.value;
-                }
-            }
+    if (!headers || !Array.isArray(headers) || headers.length === 0) {
+        if (jsonInput) {
+            jsonInput.value = "";
         }
+        return;
+    }
+
+    const shouldMaskValues = options.maskValues === true;
+
+    headers.forEach((header) => {
+        if (!header || !header.key) {
+            return;
+        }
+        const value = typeof header.value === "string" ? header.value : "";
+        addAuthHeader(containerId, {
+            key: header.key,
+            value,
+            existing: true,
+            isMasked: shouldMaskValues,
+            focus: false,
+        });
     });
 
     updateAuthHeadersJSON(containerId);
@@ -10442,9 +13641,7 @@ async function fetchToolsForGateway(gatewayId, gatewayName) {
     try {
         const response = await fetch(
             `${window.ROOT_PATH}/oauth/fetch-tools/${gatewayId}`,
-            {
-                method: "POST",
-            },
+            { method: "POST" },
         );
 
         const result = await response.json();
@@ -11575,6 +14772,9 @@ function displayTokensList(tokens) {
         const expiresText = token.expires_at
             ? new Date(token.expires_at).toLocaleDateString()
             : "Never";
+        const createdText = token.created_at
+            ? new Date(token.created_at).toLocaleDateString()
+            : "Never";
         const lastUsedText = token.last_used
             ? new Date(token.last_used).toLocaleDateString()
             : "Never";
@@ -11593,7 +14793,7 @@ function displayTokensList(tokens) {
                         ${token.description ? `<p class="text-sm text-gray-600 dark:text-gray-400 mt-1">${escapeHtml(token.description)}</p>` : ""}
                         <div class="grid grid-cols-1 md:grid-cols-3 gap-4 mt-3 text-sm text-gray-500 dark:text-gray-400">
                             <div>
-                                <span class="font-medium">Created:</span> ${new Date(token.createdAt).toLocaleDateString()}
+                                <span class="font-medium">Created:</span> ${createdText}
                             </div>
                             <div>
                                 <span class="font-medium">Expires:</span> ${expiresText}
@@ -12147,6 +15347,7 @@ async function getAuthToken() {
     if (!token) {
         token = localStorage.getItem("auth_token");
     }
+    console.log("MY TOKEN GENERATED:", token);
 
     return token || "";
 }
@@ -13967,6 +17168,65 @@ window.submitApiKeyForm = function (event) {
         });
 };
 
+// gRPC Services Functions
+
+/**
+ * Toggle visibility of TLS certificate/key fields based on TLS checkbox
+ */
+window.toggleGrpcTlsFields = function () {
+    const tlsEnabled =
+        document.getElementById("grpc-tls-enabled")?.checked || false;
+    const certField = document.getElementById("grpc-tls-cert-field");
+    const keyField = document.getElementById("grpc-tls-key-field");
+
+    if (tlsEnabled) {
+        certField?.classList.remove("hidden");
+        keyField?.classList.remove("hidden");
+    } else {
+        certField?.classList.add("hidden");
+        keyField?.classList.add("hidden");
+    }
+};
+
+/**
+ * View gRPC service methods in a modal or alert
+ * @param {string} serviceId - The gRPC service ID
+ */
+window.viewGrpcMethods = function (serviceId) {
+    const rootPath = window.ROOT_PATH || "";
+
+    fetch(`${rootPath}/grpc/${serviceId}/methods`, {
+        method: "GET",
+        headers: {
+            "Content-Type": "application/json",
+            Authorization: "Bearer " + (getCookie("jwt_token") || ""),
+        },
+    })
+        .then((response) => response.json())
+        .then((data) => {
+            if (data.methods && data.methods.length > 0) {
+                let methodsList = "gRPC Methods:\n\n";
+                data.methods.forEach((method) => {
+                    methodsList += `${method.full_name}\n`;
+                    methodsList += `  Input: ${method.input_type || "N/A"}\n`;
+                    methodsList += `  Output: ${method.output_type || "N/A"}\n`;
+                    if (method.client_streaming || method.server_streaming) {
+                        methodsList += `  Streaming: ${method.client_streaming ? "Client" : ""} ${method.server_streaming ? "Server" : ""}\n`;
+                    }
+                    methodsList += "\n";
+                });
+                alert(methodsList);
+            } else {
+                alert(
+                    "No methods discovered for this service. Try re-reflecting the service.",
+                );
+            }
+        })
+        .catch((error) => {
+            alert("Error fetching methods: " + error);
+        });
+};
+
 // Helper function to get cookie if not already defined
 if (typeof window.getCookie === "undefined") {
     window.getCookie = function (name) {
@@ -13978,3 +17238,2518 @@ if (typeof window.getCookie === "undefined") {
         return "";
     };
 }
+
+// ==================== LLM CHAT FUNCTIONALITY ====================
+
+// State management for LLM chat
+const llmChatState = {
+    selectedServerId: null,
+    selectedServerName: null,
+    isConnected: false,
+    userId: null,
+    messageHistory: [],
+    connectedTools: [],
+    toolCount: 0,
+    serverToken: "",
+};
+
+/**
+ * Initialize LLM Chat when tab is shown
+ */
+function initializeLLMChat() {
+    console.log("Initializing LLM Chat...");
+
+    // Generate or retrieve user ID
+    llmChatState.userId = generateUserId();
+
+    // Load servers if not already loaded
+    const serversList = document.getElementById("llm-chat-servers-list");
+    if (serversList && serversList.children.length <= 1) {
+        loadVirtualServersForChat();
+    }
+
+    // Initialize chat input resize behavior
+    initializeChatInputResize();
+}
+
+/**
+ * Generate a unique user ID for the session
+ */
+function generateUserId() {
+    // Check if user ID exists in session storage
+    let userId = sessionStorage.getItem("llm_chat_user_id");
+    if (!userId) {
+        // Generate a unique ID
+        userId = `user_${Date.now()}_${Math.random().toString(36).substr(2, 9)}`;
+        sessionStorage.setItem("llm_chat_user_id", userId);
+    }
+    return userId;
+}
+
+/**
+ * Load virtual servers for chat
+ */
+async function loadVirtualServersForChat() {
+    const serversList = document.getElementById("llm-chat-servers-list");
+    if (!serversList) {
+        return;
+    }
+
+    serversList.innerHTML =
+        '<div class="flex items-center justify-center py-8"><div class="animate-spin rounded-full h-8 w-8 border-b-2 border-indigo-600"></div></div>';
+
+    try {
+        const response = await fetchWithTimeout(
+            `${window.ROOT_PATH}/admin/servers`,
+            {
+                method: "GET",
+                credentials: "same-origin",
+            },
+        );
+
+        if (!response.ok) {
+            throw new Error(`HTTP ${response.status}: ${response.statusText}`);
+        }
+
+        const data = await response.json();
+        const servers = Array.isArray(data) ? data : data.servers || [];
+
+        if (servers.length === 0) {
+            serversList.innerHTML =
+                '<div class="text-center text-gray-500 dark:text-gray-400 text-sm py-4">No virtual servers available</div>';
+            return;
+        }
+
+        // Render server list with "Requires Token" pill and tooltip
+        serversList.innerHTML = servers
+            .map((server) => {
+                const toolCount = (server.associatedTools || []).length;
+                const isActive = server.isActive;
+                const visibility = server.visibility || "public";
+                const requiresToken =
+                    visibility === "team" || visibility === "private";
+
+                // Generate appropriate tooltip message
+                const tooltipMessage = requiresToken
+                    ? server.visibility === "team"
+                        ? "This is a team-level server. An access token will be required to connect."
+                        : "This is a private server. An access token will be required to connect."
+                    : "";
+
+                return `
+                <div class="server-item relative p-3 border rounded-lg cursor-pointer transition-colors
+                    ${llmChatState.selectedServerId === server.id ? "border-indigo-500 bg-indigo-50 dark:bg-indigo-900" : "border-gray-200 dark:border-gray-600 hover:border-indigo-300 dark:hover:border-indigo-600"}
+                    ${!isActive ? "opacity-50" : ""}"
+                    onclick="selectServerForChat('${server.id}', '${escapeHtml(server.name)}', ${isActive}, ${requiresToken}, '${visibility}')"
+                    style="position: relative;">
+
+                    ${
+                        requiresToken
+                            ? `
+                        <div class="tooltip"
+                        style="position: absolute; left: 50%; transform: translateX(-50%); bottom: 120%; margin-bottom: 8px;
+                                background-color: #6B7280; color: white; font-size: 10px; border-radius: 4px;
+                                padding: 4px 20px; /* More horizontal width */
+                                opacity: 0; visibility: hidden; transition: opacity 0.2s ease-in;
+                                z-index: 1000;"> <!-- Added higher z-index to ensure it's above other elements -->
+                        ${tooltipMessage}
+                        <div style="position: absolute; left: 50%; bottom: -5px; transform: translateX(-50%);
+                                    width: 0; height: 0; border-left: 5px solid transparent;
+                                    border-right: 5px solid transparent; border-top: 5px solid #6B7280;"></div>
+                        </div>`
+                            : ""
+                    }
+
+                    <div class="flex justify-between items-start">
+                        <div class="flex-1 min-w-0">
+                            <h4 class="text-sm font-medium text-gray-900 dark:text-white truncate">${escapeHtml(server.name)}</h4>
+                            <p class="text-xs text-gray-500 dark:text-gray-400 mt-1">${toolCount} tool${toolCount !== 1 ? "s" : ""}</p>
+                        </div>
+                        <div class="flex flex-col items-end gap-1">
+                            ${!isActive ? '<span class="inline-flex items-center px-1.5 py-0.5 rounded text-xs font-medium bg-red-100 text-red-800">Inactive</span>' : ""}
+                            ${requiresToken ? '<span class="inline-flex items-center px-1.5 py-0.5 rounded text-[10px] font-medium bg-yellow-100 text-yellow-800">Requires Token</span>' : ""}
+                        </div>
+                    </div>
+                    ${server.description ? `<p class="text-xs text-gray-600 dark:text-gray-400 mt-2 line-clamp-2">${escapeHtml(server.description)}</p>` : ""}
+                </div>
+            `;
+            })
+            .join("");
+
+        // Add hover event to show tooltip immediately on hover
+        const serverItems = document.querySelectorAll(".server-item");
+        serverItems.forEach((item) => {
+            const tooltip = item.querySelector(".tooltip");
+            item.addEventListener("mouseenter", () => {
+                if (tooltip) {
+                    tooltip.style.opacity = "1"; // Make tooltip visible
+                    tooltip.style.visibility = "visible"; // Show tooltip immediately
+                }
+            });
+            item.addEventListener("mouseleave", () => {
+                if (tooltip) {
+                    tooltip.style.opacity = "0"; // Hide tooltip
+                    tooltip.style.visibility = "hidden"; // Keep tooltip hidden when not hovering
+                }
+            });
+        });
+    } catch (error) {
+        console.error("Error loading servers for chat:", error);
+        serversList.innerHTML =
+            '<div class="text-center text-red-600 dark:text-red-400 text-sm py-4">Failed to load servers: ' +
+            escapeHtml(error.message) +
+            "</div>";
+    }
+}
+
+/**
+ * Select a server for chat
+ */
+// eslint-disable-next-line no-unused-vars
+async function selectServerForChat(
+    serverId,
+    serverName,
+    isActive,
+    requiresToken,
+    serverVisibility,
+) {
+    if (!isActive) {
+        showErrorMessage(
+            "This server is inactive. Please select an active server.",
+        );
+        return;
+    }
+
+    // If server requires token (team or private), prompt for it
+    if (requiresToken) {
+        // Create context-aware message based on visibility level
+        const visibilityMessage =
+            serverVisibility === "team"
+                ? "This is a team-level server that requires authentication for access."
+                : "This is a private server that requires authentication for access.";
+
+        const token = prompt(
+            `Authentication Required\n\n${visibilityMessage}\n\nPlease enter the access token for "${serverName}":`,
+        );
+
+        if (token === null) {
+            // User cancelled
+            return;
+        }
+
+        // Store the token temporarily for this server
+        llmChatState.serverToken = token || "";
+    } else {
+        // Public server - no token needed
+        llmChatState.serverToken = "";
+    }
+
+    // Update state
+    llmChatState.selectedServerId = serverId;
+    llmChatState.selectedServerName = serverName;
+
+    // Update UI to show selected server
+    const serverItems = document.querySelectorAll(".server-item");
+    serverItems.forEach((item) => {
+        if (item.onclick.toString().includes(serverId)) {
+            item.classList.add(
+                "border-indigo-500",
+                "bg-indigo-50",
+                "dark:bg-indigo-900",
+            );
+            item.classList.remove("border-gray-200", "dark:border-gray-600");
+        } else {
+            item.classList.remove(
+                "border-indigo-500",
+                "bg-indigo-50",
+                "dark:bg-indigo-900",
+            );
+            item.classList.add("border-gray-200", "dark:border-gray-600");
+        }
+    });
+
+    // Show and expand LLM configuration
+    const configForm = document.getElementById("llm-config-form");
+    if (configForm && configForm.classList.contains("hidden")) {
+        toggleLLMConfig();
+    }
+
+    // Enable connect button if provider is selected
+    updateConnectButtonState();
+
+    console.log(
+        `Selected server: ${serverName} (${serverId}), Visibility: ${serverVisibility}, Token: ${requiresToken ? "Required" : "Not required"}`,
+    );
+}
+
+/**
+ * Toggle LLM configuration visibility
+ */
+function toggleLLMConfig() {
+    const configForm = document.getElementById("llm-config-form");
+    const chevron = document.getElementById("llm-config-chevron");
+
+    if (configForm && chevron) {
+        configForm.classList.toggle("hidden");
+        chevron.classList.toggle("rotate-180");
+    }
+}
+
+/**
+ * Handle LLM provider selection change
+ */
+// eslint-disable-next-line no-unused-vars
+function handleLLMProviderChange() {
+    const provider = document.getElementById("llm-provider").value;
+    const azureFields = document.getElementById("azure-openai-fields");
+    const openaiFields = document.getElementById("openai-fields");
+    const anthropicFields = document.getElementById("anthropic-fields");
+    const awsBedrockFields = document.getElementById("aws-bedrock-fields");
+    const watsonxFields = document.getElementById("watsonx-fields");
+    const ollamaFields = document.getElementById("ollama-fields");
+
+    // Hide all fields first
+    azureFields.classList.add("hidden");
+    openaiFields.classList.add("hidden");
+    anthropicFields.classList.add("hidden");
+    awsBedrockFields.classList.add("hidden");
+    watsonxFields.classList.add("hidden");
+    ollamaFields.classList.add("hidden");
+
+    // Show relevant fields
+    if (provider === "azure_openai") {
+        azureFields.classList.remove("hidden");
+    } else if (provider === "openai") {
+        openaiFields.classList.remove("hidden");
+    } else if (provider === "anthropic") {
+        anthropicFields.classList.remove("hidden");
+    } else if (provider === "aws_bedrock") {
+        awsBedrockFields.classList.remove("hidden");
+    } else if (provider === "watsonx") {
+        watsonxFields.classList.remove("hidden");
+    } else if (provider === "ollama") {
+        ollamaFields.classList.remove("hidden");
+    }
+
+    // Update connect button state
+    updateConnectButtonState();
+}
+
+/**
+ * Update connect button state
+ */
+function updateConnectButtonState() {
+    const connectBtn = document.getElementById("llm-connect-btn");
+    const provider = document.getElementById("llm-provider").value;
+    const hasServer = llmChatState.selectedServerId !== null;
+
+    if (connectBtn) {
+        connectBtn.disabled = !hasServer || !provider;
+    }
+}
+
+/**
+ * Connect to LLM chat
+ */
+// eslint-disable-next-line no-unused-vars
+async function connectLLMChat() {
+    if (!llmChatState.selectedServerId) {
+        showErrorMessage("Please select a virtual server first");
+        return;
+    }
+
+    const provider = document.getElementById("llm-provider").value;
+    if (!provider) {
+        showErrorMessage("Please select an LLM provider");
+        return;
+    }
+
+    // Clear previous chat history before connecting
+    clearChatMessages();
+    llmChatState.messageHistory = [];
+
+    // Show loading state
+    const connectBtn = document.getElementById("llm-connect-btn");
+    const originalText = connectBtn.textContent;
+    connectBtn.textContent = "Connecting...";
+    connectBtn.disabled = true;
+
+    // Clear any previous error messages
+    const statusDiv = document.getElementById("llm-config-status");
+    if (statusDiv) {
+        statusDiv.classList.add("hidden");
+    }
+
+    try {
+        // Build LLM config
+        const llmConfig = buildLLMConfig(provider);
+
+        // Build server URL
+        const serverUrl = `${location.protocol}//${location.hostname}${![80, 443].includes(location.port) ? `:${location.port}` : ""}/servers/${llmChatState.selectedServerId}/mcp`;
+        console.log("Selected server URL:", serverUrl);
+
+        // Use the stored server token (empty string for public servers)
+        const jwtToken = llmChatState.serverToken || "";
+
+        const payload = {
+            user_id: llmChatState.userId,
+            server: {
+                url: serverUrl,
+                transport: "streamable_http",
+                auth_token: jwtToken,
+            },
+            llm: llmConfig,
+            streaming: true,
+        };
+
+        console.log("Connecting with payload:", {
+            ...payload,
+            server: { ...payload.server, auth_token: "REDACTED" },
+        });
+
+        // Make connection request with timeout handling
+        let response;
+        try {
+            response = await fetchWithTimeout(
+                `${window.ROOT_PATH}/llmchat/connect`,
+                {
+                    method: "POST",
+                    headers: {
+                        "Content-Type": "application/json",
+                        Authorization: `Bearer ${jwtToken}`,
+                    },
+                    body: JSON.stringify(payload),
+                    credentials: "same-origin",
+                },
+                30000,
+            );
+        } catch (fetchError) {
+            // Handle network/timeout errors
+            if (
+                fetchError.name === "AbortError" ||
+                fetchError.message.includes("timeout")
+            ) {
+                throw new Error(
+                    "Connection timed out. Please check if the server is responsive and try again.",
+                );
+            }
+            throw new Error(`Network error: ${fetchError.message}`);
+        }
+
+        // Handle HTTP errors - extract backend error message
+        if (!response.ok) {
+            let errorMessage = `Connection failed (HTTP ${response.status})`;
+
+            try {
+                const errorData = await response.json();
+                if (errorData.detail) {
+                    // Use the backend error message directly
+                    errorMessage = errorData.detail;
+                }
+            } catch (parseError) {
+                console.warn("Could not parse error response:", parseError);
+                // Keep generic error message
+            }
+
+            throw new Error(errorMessage);
+        }
+
+        // Parse successful response
+        let result;
+        try {
+            result = await response.json();
+        } catch (parseError) {
+            throw new Error(
+                "Failed to parse server response. Please try again.",
+            );
+        }
+
+        console.log("Connection successful:", result);
+
+        // Update state
+        llmChatState.isConnected = true;
+        llmChatState.connectedTools = result.tools || [];
+        llmChatState.toolCount = result.tool_count || 0;
+
+        // Update UI
+        showConnectionSuccess();
+
+        // Clear welcome message and show chat input
+        const welcomeMsg = document.getElementById("chat-welcome-message");
+        if (welcomeMsg) {
+            welcomeMsg.remove();
+        }
+
+        const chatInput = document.getElementById("chat-input-container");
+        if (chatInput) {
+            chatInput.classList.remove("hidden");
+            document.getElementById("chat-input").disabled = false;
+            document.getElementById("chat-send-btn").disabled = false;
+            document.getElementById("chat-input").focus();
+        }
+
+        // Hide connect button, show disconnect button
+        const disconnectBtn = document.getElementById("llm-disconnect-btn");
+        if (connectBtn) {
+            connectBtn.classList.add("hidden");
+        }
+        if (disconnectBtn) {
+            disconnectBtn.classList.remove("hidden");
+        }
+
+        // Auto-collapse configuration
+        const configForm = document.getElementById("llm-config-form");
+        const chevron = document.getElementById("llm-config-chevron");
+        if (configForm && !configForm.classList.contains("hidden")) {
+            configForm.classList.add("hidden");
+            chevron.classList.remove("rotate-180");
+        }
+
+        // Show success message
+        showNotification(
+            `Connected to ${llmChatState.selectedServerName}`,
+            "success",
+        );
+    } catch (error) {
+        console.error("Connection error:", error);
+        // Display the backend error message to the user
+        showConnectionError(error.message);
+    } finally {
+        connectBtn.textContent = originalText;
+        connectBtn.disabled = false;
+    }
+}
+
+/**
+ * Build LLM config object from form inputs
+ */
+function buildLLMConfig(provider) {
+    const config = {
+        provider,
+        config: {},
+    };
+
+    if (provider === "azure_openai") {
+        const apiKey = document.getElementById("azure-api-key").value.trim();
+        const endpoint = document.getElementById("azure-endpoint").value.trim();
+        const deployment = document
+            .getElementById("azure-deployment")
+            .value.trim();
+        const apiVersion = document
+            .getElementById("azure-api-version")
+            .value.trim();
+        const temperature = document
+            .getElementById("azure-temperature")
+            .value.trim();
+
+        // Only include non-empty values
+        if (apiKey) {
+            config.config.api_key = apiKey;
+        }
+        if (endpoint) {
+            config.config.azure_endpoint = endpoint;
+        }
+        if (deployment) {
+            config.config.azure_deployment = deployment;
+        }
+        if (apiVersion) {
+            config.config.api_version = apiVersion;
+        }
+        if (temperature) {
+            config.config.temperature = parseFloat(temperature);
+        }
+    } else if (provider === "openai") {
+        const apiKey = document.getElementById("openai-api-key").value.trim();
+        const model = document.getElementById("openai-model").value.trim();
+        const baseUrl = document.getElementById("openai-base-url").value.trim();
+        const temperature = document
+            .getElementById("openai-temperature")
+            .value.trim();
+
+        // Only include non-empty values
+        if (apiKey) {
+            config.config.api_key = apiKey;
+        }
+        if (model) {
+            config.config.model = model;
+        }
+        if (baseUrl) {
+            config.config.base_url = baseUrl;
+        }
+        if (temperature) {
+            config.config.temperature = parseFloat(temperature);
+        }
+    } else if (provider === "anthropic") {
+        const apiKey = document
+            .getElementById("anthropic-api-key")
+            .value.trim();
+        const model = document.getElementById("anthropic-model").value.trim();
+        const temperature = document
+            .getElementById("anthropic-temperature")
+            .value.trim();
+        const maxTokens = document
+            .getElementById("anthropic-max-tokens")
+            .value.trim();
+
+        // Only include non-empty values
+        if (apiKey) {
+            config.config.api_key = apiKey;
+        }
+        if (model) {
+            config.config.model = model;
+        }
+        if (temperature) {
+            config.config.temperature = parseFloat(temperature);
+        }
+        if (maxTokens) {
+            config.config.max_tokens = parseInt(maxTokens, 10);
+        }
+    } else if (provider === "aws_bedrock") {
+        const modelId = document
+            .getElementById("aws-bedrock-model-id")
+            .value.trim();
+        const region = document
+            .getElementById("aws-bedrock-region")
+            .value.trim();
+        const accessKeyId = document
+            .getElementById("aws-access-key-id")
+            .value.trim();
+        const secretAccessKey = document
+            .getElementById("aws-secret-access-key")
+            .value.trim();
+        const temperature = document
+            .getElementById("aws-bedrock-temperature")
+            .value.trim();
+        const maxTokens = document
+            .getElementById("aws-bedrock-max-tokens")
+            .value.trim();
+
+        // Only include non-empty values
+        if (modelId) {
+            config.config.model_id = modelId;
+        }
+        if (region) {
+            config.config.region_name = region;
+        }
+        if (accessKeyId) {
+            config.config.aws_access_key_id = accessKeyId;
+        }
+        if (secretAccessKey) {
+            config.config.aws_secret_access_key = secretAccessKey;
+        }
+        if (temperature) {
+            config.config.temperature = parseFloat(temperature);
+        }
+        if (maxTokens) {
+            config.config.max_tokens = parseInt(maxTokens, 10);
+        }
+    } else if (provider === "watsonx") {
+        const apiKey = document.getElementById("watsonx-api-key").value.trim();
+        const url = document.getElementById("watsonx-url").value.trim();
+        const projectId = document
+            .getElementById("watsonx-project-id")
+            .value.trim();
+        const modelId = document
+            .getElementById("watsonx-model-id")
+            .value.trim();
+        const temperature = document
+            .getElementById("watsonx-temperature")
+            .value.trim();
+        const maxNewTokens = document
+            .getElementById("watsonx-max-new-tokens")
+            .value.trim();
+        const decodingMethod = document
+            .getElementById("watsonx-decoding-method")
+            .value.trim();
+
+        // Only include non-empty values
+        if (apiKey) {
+            config.config.apikey = apiKey;
+        }
+        if (url) {
+            config.config.url = url;
+        }
+        if (projectId) {
+            config.config.projectid = projectId;
+        }
+        if (modelId) {
+            config.config.modelid = modelId;
+        }
+        if (temperature) {
+            config.config.temperature = parseFloat(temperature);
+        }
+        if (maxNewTokens) {
+            config.config.maxnewtokens = parseInt(maxNewTokens, 10);
+        }
+        if (decodingMethod) {
+            config.config.decodingmethod = decodingMethod;
+        }
+    } else if (provider === "ollama") {
+        const model = document.getElementById("ollama-model").value.trim();
+        const baseUrl = document.getElementById("ollama-base-url").value.trim();
+        const temperature = document
+            .getElementById("ollama-temperature")
+            .value.trim();
+
+        // Only include non-empty values
+        if (model) {
+            config.config.model = model;
+        }
+        if (baseUrl) {
+            config.config.base_url = baseUrl;
+        }
+        if (temperature) {
+            config.config.temperature = parseFloat(temperature);
+        }
+    }
+
+    return config;
+}
+
+/**
+ * Copy environment variables to clipboard for the specified provider
+ */
+// eslint-disable-next-line no-unused-vars
+async function copyEnvVariables(provider) {
+    const envVariables = {
+        azure: `AZURE_OPENAI_API_KEY=<api_key>
+AZURE_OPENAI_ENDPOINT=https://test-url.openai.azure.com
+AZURE_OPENAI_API_VERSION=2024-02-15-preview
+AZURE_OPENAI_DEPLOYMENT=gpt4o
+AZURE_OPENAI_MODEL=gpt4o`,
+
+        openai: `OPENAI_API_KEY=<api_key>
+OPENAI_MODEL=gpt-4o-mini
+OPENAI_BASE_URL=https://api.openai.com/v1`,
+
+        anthropic: `ANTHROPIC_API_KEY=<api_key>
+ANTHROPIC_MODEL=claude-3-5-sonnet-20241022
+ANTHROPIC_MAX_TOKENS=4096`,
+
+        aws_bedrock: `AWS_BEDROCK_MODEL_ID=anthropic.claude-v2
+AWS_BEDROCK_REGION=us-east-1
+AWS_ACCESS_KEY_ID=<optional>
+AWS_SECRET_ACCESS_KEY=<optional>`,
+
+        watsonx: `WATSONX_APIKEY=apikey
+WATSONX_URL=https://us-south.ml.cloud.ibm.com
+WATSONX_PROJECT_ID=project-id
+WATSONX_MODEL_ID=ibm/granite-13b-chat-v2
+WATSONX_TEMPERATURE=0.7`,
+
+        ollama: `OLLAMA_MODEL=llama3
+OLLAMA_BASE_URL=http://localhost:11434`,
+    };
+
+    const variables = envVariables[provider];
+
+    if (!variables) {
+        console.error("Unknown provider:", provider);
+        showErrorMessage("Unknown provider");
+        return;
+    }
+
+    try {
+        // Try modern clipboard API first
+        if (navigator.clipboard && navigator.clipboard.writeText) {
+            await navigator.clipboard.writeText(variables);
+            showCopySuccessNotification(provider);
+        } else {
+            // Fallback for older browsers
+            const textArea = document.createElement("textarea");
+            textArea.value = variables;
+            textArea.style.position = "fixed";
+            textArea.style.left = "-999999px";
+            textArea.style.top = "-999999px";
+            document.body.appendChild(textArea);
+            textArea.focus();
+            textArea.select();
+
+            try {
+                const successful = document.execCommand("copy");
+                if (successful) {
+                    showCopySuccessNotification(provider);
+                } else {
+                    throw new Error("Copy command failed");
+                }
+            } catch (err) {
+                console.error("Fallback copy failed:", err);
+                showErrorMessage("Failed to copy to clipboard");
+            } finally {
+                document.body.removeChild(textArea);
+            }
+        }
+    } catch (err) {
+        console.error("Failed to copy environment variables:", err);
+        showErrorMessage("Failed to copy to clipboard. Please copy manually.");
+    }
+}
+
+/**
+ * Show success notification when environment variables are copied
+ */
+function showCopySuccessNotification(provider) {
+    const providerNames = {
+        azure: "Azure OpenAI",
+        ollama: "Ollama",
+        openai: "OpenAI",
+    };
+
+    const displayName = providerNames[provider] || provider;
+
+    // Create notification element
+    const notification = document.createElement("div");
+    notification.className = "fixed top-4 right-4 z-50 animate-fade-in";
+    notification.innerHTML = `
+        <div class="bg-green-500 text-white px-4 py-3 rounded-lg shadow-lg flex items-center space-x-2">
+            <svg class="w-5 h-5" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M5 13l4 4L19 7"></path>
+            </svg>
+            <span class="font-medium">${displayName} variables copied!</span>
+        </div>
+    `;
+
+    document.body.appendChild(notification);
+
+    // Remove notification after 3 seconds
+    setTimeout(() => {
+        notification.style.opacity = "0";
+        notification.style.transition = "opacity 0.3s ease-out";
+        setTimeout(() => {
+            if (notification.parentNode) {
+                document.body.removeChild(notification);
+            }
+        }, 300);
+    }, 3000);
+}
+
+/**
+ * Show connection success
+ */
+function showConnectionSuccess() {
+    // Update connection status badge
+    const statusBadge = document.getElementById("llm-connection-status");
+    if (statusBadge) {
+        statusBadge.classList.remove("hidden");
+    }
+
+    // Show active tools badge using data from connection response
+    const toolsBadge = document.getElementById("llm-active-tools-badge");
+    const toolCountSpan = document.getElementById("llm-tool-count");
+    const toolListDiv = document.getElementById("llm-tool-list");
+
+    if (toolsBadge && toolCountSpan && toolListDiv) {
+        const tools = llmChatState.connectedTools || [];
+        const count = tools.length;
+
+        toolCountSpan.textContent = `${count} tool${count !== 1 ? "s" : ""}`;
+
+        // Clear and populate tool list with individual pills
+        toolListDiv.innerHTML = "";
+
+        if (count > 0) {
+            tools.forEach((toolName, index) => {
+                const pill = document.createElement("span");
+                pill.className =
+                    "inline-flex items-center gap-1.5 px-3 py-1.5 rounded-full text-xs font-medium bg-gradient-to-r from-blue-50 to-indigo-50 dark:from-blue-900/40 dark:to-indigo-900/40 text-blue-700 dark:text-blue-300 border border-blue-200 dark:border-blue-700 shadow-sm hover:shadow-md transition-all hover:scale-105";
+
+                // Tool icon
+                const icon = document.createElementNS(
+                    "http://www.w3.org/2000/svg",
+                    "svg",
+                );
+                icon.setAttribute("class", "w-3.5 h-3.5");
+                icon.setAttribute("fill", "none");
+                icon.setAttribute("stroke", "currentColor");
+                icon.setAttribute("viewBox", "0 0 24 24");
+                icon.innerHTML =
+                    '<path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M9 3v2m6-2v2M9 19v2m6-2v2M5 9H3m2 6H3m18-6h-2m2 6h-2M7 19h10a2 2 0 002-2V7a2 2 0 00-2-2H7a2 2 0 00-2 2v10a2 2 0 002 2zM9 9h6v6H9V9z"></path>';
+
+                const text = document.createElement("span");
+                text.textContent = toolName;
+
+                pill.appendChild(icon);
+                pill.appendChild(text);
+                toolListDiv.appendChild(pill);
+            });
+        } else {
+            const emptyMsg = document.createElement("div");
+            emptyMsg.className = "text-center py-4";
+            emptyMsg.innerHTML = `
+      <svg class="w-8 h-8 mx-auto text-gray-400 dark:text-gray-600 mb-2" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+        <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M20 13V6a2 2 0 00-2-2H6a2 2 0 00-2 2v7m16 0v5a2 2 0 01-2 2H6a2 2 0 01-2-2v-5m16 0h-2.586a1 1 0 00-.707.293l-2.414 2.414a1 1 0 01-.707.293h-3.172a1 1 0 01-.707-.293l-2.414-2.414A1 1 0 006.586 13H4"></path>
+      </svg>
+      <p class="text-xs text-gray-500 dark:text-gray-400">No tools available for this server</p>
+    `;
+            toolListDiv.appendChild(emptyMsg);
+        }
+
+        toolsBadge.classList.remove("hidden");
+    }
+
+    // Hide connect button, show disconnect button
+    const connectBtn = document.getElementById("llm-connect-btn");
+    const disconnectBtn = document.getElementById("llm-disconnect-btn");
+    if (connectBtn) {
+        connectBtn.classList.add("hidden");
+    }
+    if (disconnectBtn) {
+        disconnectBtn.classList.remove("hidden");
+    }
+
+    // Auto-collapse configuration
+    const configForm = document.getElementById("llm-config-form");
+    const chevron = document.getElementById("llm-config-chevron");
+    if (configForm && !configForm.classList.contains("hidden")) {
+        configForm.classList.add("hidden");
+        chevron.classList.remove("rotate-180");
+    }
+
+    // Show success message
+    showNotification(
+        `Connected to ${llmChatState.selectedServerName}`,
+        "success",
+    );
+}
+
+/**
+ * Show connection error
+ */
+/**
+ * Display connection error with proper formatting
+ */
+function showConnectionError(message) {
+    const statusDiv = document.getElementById("llm-config-status");
+    if (statusDiv) {
+        statusDiv.className =
+            "text-sm text-red-600 dark:text-red-400 p-3 bg-red-50 dark:bg-red-900/20 rounded border border-red-200 dark:border-red-700";
+        statusDiv.innerHTML = `
+            <div class="flex items-start gap-2">
+                <svg class="w-5 h-5 flex-shrink-0 mt-0.5" fill="currentColor" viewBox="0 0 20 20">
+                    <path fill-rule="evenodd" d="M10 18a8 8 0 100-16 8 8 0 000 16zM8.707 7.293a1 1 0 00-1.414 1.414L8.586 10l-1.293 1.293a1 1 0 101.414 1.414L10 11.414l1.293 1.293a1 1 0 001.414-1.414L11.414 10l1.293-1.293a1 1 0 00-1.414-1.414L10 8.586 8.707 7.293z" clip-rule="evenodd"/>
+                </svg>
+                <div class="flex-1">
+                    <strong class="font-semibold">Connection Failed</strong>
+                    <p class="mt-1">${escapeHtml(message)}</p>
+                </div>
+            </div>
+        `;
+        statusDiv.classList.remove("hidden");
+    }
+}
+
+/**
+ * Disconnect from LLM chat
+ */
+// eslint-disable-next-line no-unused-vars
+async function disconnectLLMChat() {
+    if (!llmChatState.isConnected) {
+        console.warn("No active connection to disconnect");
+        return;
+    }
+
+    const disconnectBtn = document.getElementById("llm-disconnect-btn");
+    const originalText = disconnectBtn.textContent;
+    disconnectBtn.textContent = "Disconnecting...";
+    disconnectBtn.disabled = true;
+
+    try {
+        const jwtToken = getCookie("jwt_token");
+
+        // Attempt graceful disconnection
+        let response;
+        let backendError = null;
+
+        try {
+            response = await fetchWithTimeout(
+                `${window.ROOT_PATH}/llmchat/disconnect`,
+                {
+                    method: "POST",
+                    headers: {
+                        "Content-Type": "application/json",
+                        Authorization: `Bearer ${jwtToken}`,
+                    },
+                    body: JSON.stringify({
+                        user_id: llmChatState.userId,
+                    }),
+                    credentials: "same-origin",
+                },
+                10000,
+            ); // Shorter timeout for disconnect
+        } catch (fetchError) {
+            console.warn(
+                "Disconnect request failed, cleaning up locally:",
+                fetchError,
+            );
+            backendError = fetchError.message;
+            // Continue with local cleanup even if server request fails
+        }
+
+        // Parse response if available
+        let disconnectStatus = "unknown";
+        if (response) {
+            if (response.ok) {
+                try {
+                    const result = await response.json();
+                    disconnectStatus = result.status || "disconnected";
+
+                    if (result.warning) {
+                        console.warn("Disconnect warning:", result.warning);
+                    }
+                } catch (parseError) {
+                    console.warn("Could not parse disconnect response");
+                }
+            } else {
+                // Extract backend error message
+                try {
+                    const errorData = await response.json();
+                    if (errorData.detail) {
+                        backendError = errorData.detail;
+                    }
+                } catch (parseError) {
+                    backendError = `HTTP ${response.status}`;
+                }
+                console.warn(
+                    `Disconnect returned error: ${backendError}, cleaning up locally`,
+                );
+            }
+        }
+
+        // Always update local state regardless of server response
+        llmChatState.isConnected = false;
+        llmChatState.messageHistory = [];
+        llmChatState.connectedTools = [];
+        llmChatState.toolCount = 0;
+        llmChatState.serverToken = "";
+
+        // Update UI
+        const statusBadge = document.getElementById("llm-connection-status");
+        if (statusBadge) {
+            statusBadge.classList.add("hidden");
+        }
+
+        const toolsBadge = document.getElementById("llm-active-tools-badge");
+        if (toolsBadge) {
+            toolsBadge.classList.add("hidden");
+        }
+
+        const connectBtn = document.getElementById("llm-connect-btn");
+        if (connectBtn) {
+            connectBtn.classList.remove("hidden");
+        }
+        if (disconnectBtn) {
+            disconnectBtn.classList.add("hidden");
+        }
+
+        // Hide chat input
+        const chatInput = document.getElementById("chat-input-container");
+        if (chatInput) {
+            chatInput.classList.add("hidden");
+            document.getElementById("chat-input").disabled = true;
+            document.getElementById("chat-send-btn").disabled = true;
+        }
+
+        // Clear messages
+        clearChatMessages();
+
+        // Show appropriate notification
+        if (backendError) {
+            showNotification(
+                `Disconnected (server error: ${backendError})`,
+                "warning",
+            );
+        } else if (disconnectStatus === "no_active_session") {
+            showNotification("Already disconnected", "info");
+        } else if (disconnectStatus === "disconnected_with_errors") {
+            showNotification("Disconnected (with cleanup warnings)", "warning");
+        } else {
+            showNotification("Disconnected successfully", "info");
+        }
+    } catch (error) {
+        console.error("Unexpected disconnection error:", error);
+
+        // Force cleanup even on error
+        llmChatState.isConnected = false;
+        llmChatState.messageHistory = [];
+        llmChatState.connectedTools = [];
+        llmChatState.toolCount = 0;
+
+        // Display backend error if available
+        showErrorMessage(
+            `Disconnection error: ${error.message}. Local session cleared.`,
+        );
+    } finally {
+        disconnectBtn.textContent = originalText;
+        disconnectBtn.disabled = false;
+    }
+}
+
+/**
+ * Send chat message
+ */
+async function sendChatMessage(event) {
+    event.preventDefault();
+
+    const input = document.getElementById("chat-input");
+    const message = input.value.trim();
+
+    if (!message) {
+        return;
+    }
+
+    if (!llmChatState.isConnected) {
+        showErrorMessage("Please connect to a server first");
+        return;
+    }
+
+    // Add user message to chat
+    appendChatMessage("user", message);
+
+    // Clear input
+    input.value = "";
+    input.style.height = "auto";
+
+    // Disable input while processing
+    input.disabled = true;
+    document.getElementById("chat-send-btn").disabled = true;
+
+    let assistantMsgId = null;
+    let reader = null;
+
+    try {
+        const jwtToken = getCookie("jwt_token");
+
+        // Create assistant message placeholder for streaming
+        assistantMsgId = appendChatMessage("assistant", "", true);
+
+        // Make request with timeout handling
+        let response;
+        try {
+            const controller = new AbortController();
+            const timeoutId = setTimeout(() => controller.abort(), 120000); // 2 minute timeout
+
+            response = await fetch(`${window.ROOT_PATH}/llmchat/chat`, {
+                method: "POST",
+                headers: {
+                    "Content-Type": "application/json",
+                    Authorization: `Bearer ${jwtToken}`,
+                },
+                body: JSON.stringify({
+                    user_id: llmChatState.userId,
+                    message,
+                    streaming: true,
+                }),
+                credentials: "same-origin",
+                signal: controller.signal,
+            });
+
+            clearTimeout(timeoutId);
+        } catch (fetchError) {
+            if (fetchError.name === "AbortError") {
+                throw new Error(
+                    "Request timed out. The response took too long.",
+                );
+            }
+            throw new Error(`Network error: ${fetchError.message}`);
+        }
+
+        // Handle HTTP errors - extract backend error message
+        if (!response.ok) {
+            let errorMessage = `Chat request failed (HTTP ${response.status})`;
+
+            try {
+                const errorData = await response.json();
+                if (errorData.detail) {
+                    // Use backend error message directly
+                    errorMessage = errorData.detail;
+                }
+            } catch (parseError) {
+                console.warn("Could not parse error response");
+            }
+
+            throw new Error(errorMessage);
+        }
+
+        // Validate response has body stream
+        if (!response.body) {
+            throw new Error("No response stream received from server");
+        }
+
+        // Handle streaming SSE response
+        reader = response.body.getReader();
+        const decoder = new TextDecoder();
+        let buffer = "";
+        let accumulatedText = "";
+        let hasReceivedData = false;
+
+        try {
+            while (true) {
+                const { done, value } = await reader.read();
+                if (done) {
+                    break;
+                }
+
+                hasReceivedData = true;
+                buffer += decoder.decode(value, { stream: true });
+
+                // Process complete SSE events (separated by blank line)
+                let boundary;
+                while ((boundary = buffer.indexOf("\n\n")) !== -1) {
+                    const rawEvent = buffer.slice(0, boundary).trim();
+                    buffer = buffer.slice(boundary + 2);
+
+                    if (!rawEvent) {
+                        continue;
+                    }
+
+                    let eventType = "message";
+                    const dataLines = [];
+
+                    for (const line of rawEvent.split("\n")) {
+                        if (line.startsWith("event:")) {
+                            eventType = line.slice(6).trim();
+                        } else if (line.startsWith("data:")) {
+                            dataLines.push(line.slice(5).trim());
+                        }
+                    }
+
+                    let payload = {};
+                    const dataStr = dataLines.join("");
+
+                    try {
+                        payload = dataStr ? JSON.parse(dataStr) : {};
+                    } catch (parseError) {
+                        console.warn(
+                            "Failed to parse SSE data:",
+                            dataStr,
+                            parseError,
+                        );
+                        continue;
+                    }
+
+                    // Handle different event types
+                    try {
+                        switch (eventType) {
+                            case "token": {
+                                const text = payload.content;
+                                if (text) {
+                                    accumulatedText += text;
+                                    // Process and render with think tags
+                                    updateChatMessageWithThinkTags(
+                                        assistantMsgId,
+                                        accumulatedText,
+                                    );
+                                }
+                                break;
+                            }
+                            case "tool_start":
+                            case "tool_end":
+                            case "tool_error":
+                                addToolEventToCard(
+                                    assistantMsgId,
+                                    eventType,
+                                    payload,
+                                );
+                                break;
+
+                            case "final":
+                                if (payload.tool_used) {
+                                    setToolUsedSummary(
+                                        assistantMsgId,
+                                        true,
+                                        payload.tools,
+                                    );
+                                }
+                                setTimeout(scrollChatToBottom, 50);
+                                break;
+
+                            case "error": {
+                                // Handle server-sent error events from backend
+                                const errorMsg =
+                                    payload.error ||
+                                    "An error occurred during processing";
+                                const isRecoverable =
+                                    payload.recoverable !== false;
+
+                                // Display error in the assistant message
+                                updateChatMessage(
+                                    assistantMsgId,
+                                    `❌ Error: ${errorMsg}`,
+                                );
+
+                                if (!isRecoverable) {
+                                    // For non-recoverable errors, suggest reconnection
+                                    appendChatMessage(
+                                        "system",
+                                        "⚠️ Connection lost. Please reconnect to continue.",
+                                    );
+                                    llmChatState.isConnected = false;
+
+                                    // Update UI to show disconnected state
+                                    const connectBtn =
+                                        document.getElementById(
+                                            "llm-connect-btn",
+                                        );
+                                    const disconnectBtn =
+                                        document.getElementById(
+                                            "llm-disconnect-btn",
+                                        );
+                                    if (connectBtn) {
+                                        connectBtn.classList.remove("hidden");
+                                    }
+                                    if (disconnectBtn) {
+                                        disconnectBtn.classList.add("hidden");
+                                    }
+                                }
+                                break;
+                            }
+                            default:
+                                console.warn("Unknown event type:", eventType);
+                                break;
+                        }
+                    } catch (eventError) {
+                        console.error(
+                            `Error handling event ${eventType}:`,
+                            eventError,
+                        );
+                        // Continue processing other events
+                    }
+                }
+
+                setTimeout(scrollChatToBottom, 100);
+            }
+        } catch (streamError) {
+            console.error("Stream reading error:", streamError);
+            throw new Error(`Stream error: ${streamError.message}`);
+        }
+
+        // Validate we received some data
+        if (!hasReceivedData) {
+            throw new Error("No data received from server");
+        }
+
+        // Mark streaming as complete
+        markMessageComplete(assistantMsgId);
+    } catch (error) {
+        console.error("Chat error:", error);
+
+        // Display backend error message to user
+        const errorMsg = error.message || "An unexpected error occurred";
+        appendChatMessage("system", `❌ ${errorMsg}`);
+
+        // If we have a partial assistant message, mark it as complete
+        if (assistantMsgId) {
+            markMessageComplete(assistantMsgId);
+        }
+    } finally {
+        // Clean up reader if it exists
+        if (reader) {
+            try {
+                await reader.cancel();
+            } catch (cancelError) {
+                console.warn("Error canceling reader:", cancelError);
+            }
+        }
+
+        // Re-enable input
+        input.disabled = false;
+        document.getElementById("chat-send-btn").disabled = false;
+        input.focus();
+    }
+}
+
+/**
+ * Parse content with <think> tags and separate thinking from final answer
+ * Returns: { thinkingSteps: [{content: string}], finalAnswer: string, rawContent: string }
+ */
+function parseThinkTags(content) {
+    const thinkingSteps = [];
+    let finalAnswer = "";
+    const rawContent = content;
+
+    // Extract all <think>...</think> blocks
+    const thinkRegex = /<think>([\s\S]*?)<\/think>/g;
+    let match;
+    // let lastIndex = 0;
+
+    while ((match = thinkRegex.exec(content)) !== null) {
+        const thinkContent = match[1].trim();
+        if (thinkContent) {
+            thinkingSteps.push({ content: thinkContent });
+        }
+        // lastIndex = match.index + match[0].length;
+    }
+
+    // Remove all <think> tags to get final answer
+    finalAnswer = content.replace(/<think>[\s\S]*?<\/think>/g, "").trim();
+
+    return { thinkingSteps, finalAnswer, rawContent };
+}
+
+/**
+ * Update chat message with think tags support
+ * Renders thinking steps in collapsible UI and final answer separately
+ */
+function updateChatMessageWithThinkTags(messageId, content) {
+    const messageDiv = document.getElementById(messageId);
+    if (!messageDiv) {
+        return;
+    }
+
+    const contentEl = messageDiv.querySelector(".message-content");
+    if (!contentEl) {
+        return;
+    }
+
+    // Parse content for think tags
+    const { thinkingSteps, finalAnswer } = parseThinkTags(content);
+
+    // Clear existing content
+    contentEl.innerHTML = "";
+
+    // Render thinking steps if present
+    if (thinkingSteps.length > 0) {
+        const thinkingContainer = createThinkingUI(thinkingSteps);
+        contentEl.appendChild(thinkingContainer);
+    }
+
+    // Render final answer
+    if (finalAnswer) {
+        const answerDiv = document.createElement("div");
+        answerDiv.className = "final-answer-content";
+        answerDiv.textContent = finalAnswer;
+        contentEl.appendChild(answerDiv);
+    }
+
+    // Throttle scroll during streaming
+    if (!scrollThrottle) {
+        scrollChatToBottom();
+        scrollThrottle = setTimeout(() => {
+            scrollThrottle = null;
+        }, 100);
+    }
+}
+
+/**
+ * Create the thinking UI component with collapsible steps
+ */
+function createThinkingUI(thinkingSteps) {
+    const container = document.createElement("div");
+    container.className = "thinking-container";
+
+    // Create header with icon and label
+    const header = document.createElement("div");
+    header.className = "thinking-header";
+    header.innerHTML = `
+        <div class="thinking-header-content">
+            <svg class="thinking-icon" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M9.663 17h4.673M12 3v1m6.364 1.636l-.707.707M21 12h-1M4 12H3m3.343-5.657l-.707-.707m2.828 9.9a5 5 0 117.072 0l-.548.547A3.374 3.374 0 0014 18.469V19a2 2 0 11-4 0v-.531c0-.895-.356-1.754-.988-2.386l-.548-.547z"></path>
+            </svg>
+            <span class="thinking-label">Thinking</span>
+            <span class="thinking-count">${thinkingSteps.length} step${thinkingSteps.length !== 1 ? "s" : ""}</span>
+        </div>
+        <button class="thinking-toggle" aria-label="Toggle thinking steps">
+            <svg class="thinking-chevron" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M19 9l-7 7-7-7"></path>
+            </svg>
+        </button>
+    `;
+
+    // Create collapsible content
+    const content = document.createElement("div");
+    content.className = "thinking-content collapsed";
+
+    // Add each thinking step
+    thinkingSteps.forEach((step, index) => {
+        const stepDiv = document.createElement("div");
+        stepDiv.className = "thinking-step";
+        stepDiv.innerHTML = `
+            <div class="thinking-step-number">
+                <span>${index + 1}</span>
+            </div>
+            <div class="thinking-step-text">${escapeHtml(step.content)}</div>
+        `;
+        content.appendChild(stepDiv);
+    });
+
+    // Toggle functionality
+    const toggleBtn = header.querySelector(".thinking-toggle");
+    const chevron = header.querySelector(".thinking-chevron");
+
+    toggleBtn.addEventListener("click", (e) => {
+        e.stopPropagation();
+        const isCollapsed = content.classList.contains("collapsed");
+
+        if (isCollapsed) {
+            content.classList.remove("collapsed");
+            chevron.style.transform = "rotate(180deg)";
+        } else {
+            content.classList.add("collapsed");
+            chevron.style.transform = "rotate(0deg)";
+        }
+
+        // Scroll after animation
+        setTimeout(scrollChatToBottom, 200);
+    });
+
+    container.appendChild(header);
+    container.appendChild(content);
+
+    return container;
+}
+
+/**
+ * Helper to escape HTML for safe rendering
+ */
+function escapeHtmlChat(text) {
+    const div = document.createElement("div");
+    div.textContent = text;
+    return div.innerHTML;
+}
+
+/**
+ * Append chat message to UI
+ */
+// Append chat message to UI
+// Append chat message to UI
+// Append chat message to UI
+// function appendChatMessage(role, content, isStreaming = false) {
+//     const container = document.getElementById('chat-messages-container');
+//     const messageId = `msg-${Date.now()}-${Math.random().toString(36).substr(2, 9)}`;
+
+//     const messageDiv = document.createElement('div');
+//     messageDiv.id = messageId;
+//     messageDiv.className = `chat-message ${role}-message`;
+
+//     if (role === 'user') {
+//         messageDiv.innerHTML = `
+//             <div class="flex justify-end" style="margin: 0;">
+//                 <div class="max-w-80 rounded-lg bg-indigo-600 text-white" style="padding: 6px 12px;">
+//                     <div class="text-sm whitespace-pre-wrap" style="margin: 0; padding: 0; line-height: 1.3;">${escapeHtml(content)}</div>
+//                 </div>
+//             </div>
+//         `;
+//     } else if (role === 'assistant') {
+//         messageDiv.innerHTML = `
+//             <div class="flex justify-start" style="margin: 0;">
+//                 <div class="max-w-80 rounded-lg bg-gray-200 dark:bg-gray-700 text-gray-900 dark:text-gray-100" style="padding: 6px 12px;">
+//                     <div class="text-sm whitespace-pre-wrap message-content" style="margin: 0; padding: 0; line-height: 1.3; display: inline-block;">${escapeHtml(content)}</div>
+//                     ${isStreaming ? '<span class="streaming-indicator inline-block ml-2"></span>' : ''}
+//                 </div>
+//             </div>
+//         `;
+//     } else if (role === 'system') {
+//         messageDiv.innerHTML = `
+//             <div class="flex justify-center">
+//                 <div class="rounded-lg bg-yellow-50 dark:bg-yellow-900 text-yellow-800 dark:text-yellow-200 text-xs" style="padding: 4px 10px; margin: 0;">
+//                     ${escapeHtml(content)}
+//                 </div>
+//             </div>
+//         `;
+//     }
+
+//     container.appendChild(messageDiv);
+//     scrollChatToBottom();
+//     return messageId;
+// }
+
+function appendChatMessage(role, content, isStreaming = false) {
+    const container = document.getElementById("chat-messages-container");
+    const messageId = `msg-${Date.now()}-${Math.random().toString(36).substr(2, 9)}`;
+
+    const messageDiv = document.createElement("div");
+    messageDiv.id = messageId;
+    messageDiv.className = `chat-message ${role}-message`;
+    messageDiv.style.marginBottom = "6px"; // compact spacing between messages
+
+    if (role === "user") {
+        messageDiv.innerHTML = `
+            <div class="flex justify-end px-2">
+                <div class="bg-gradient-to-r from-indigo-600 to-purple-600 text-white rounded-2xl px-4 py-2 max-w-xs shadow-sm text-sm whitespace-pre-wrap flex items-end gap-1">
+                    <div class="message-content">${escapeHtmlChat(content)}</div>
+                </div>
+            </div>
+        `;
+    } else if (role === "assistant") {
+        messageDiv.innerHTML = `
+            <div class="flex justify-start px-2">
+                <div class="bg-gray-100 dark:bg-gray-800 text-gray-900 dark:text-gray-100 rounded-2xl px-4 py-2 max-w-xs shadow-sm text-sm whitespace-pre-wrap flex items-end gap-1">
+                    <div class="message-content">${escapeHtmlChat(content)}</div>
+                    ${isStreaming ? '<span class="streaming-indicator w-2 h-2 rounded-full bg-green-500 animate-pulse"></span>' : ""}
+                </div>
+            </div>
+        `;
+    } else if (role === "system") {
+        messageDiv.innerHTML = `
+            <div class="flex justify-center px-2">
+                <div class="bg-yellow-100 dark:bg-yellow-900 text-yellow-800 dark:text-yellow-100 text-xs px-3 py-1 rounded-md shadow-sm">
+                    ${escapeHtmlChat(content)}
+                </div>
+            </div>
+        `;
+    }
+
+    container.appendChild(messageDiv);
+    scrollChatToBottom();
+    return messageId;
+}
+
+/**
+ * Update chat message content (for streaming)
+ */
+let scrollThrottle = null;
+function updateChatMessage(messageId, content) {
+    const messageDiv = document.getElementById(messageId);
+    if (messageDiv) {
+        const contentEl = messageDiv.querySelector(".message-content");
+        if (contentEl) {
+            // Store raw content for final processing
+            contentEl.setAttribute("data-raw-content", content);
+            contentEl.textContent = content;
+
+            // Throttle scroll during streaming
+            if (!scrollThrottle) {
+                scrollChatToBottom();
+                scrollThrottle = setTimeout(() => {
+                    scrollThrottle = null;
+                }, 100);
+            }
+        }
+    }
+}
+
+/**
+ * Mark message as complete (remove streaming indicator)
+ */
+function markMessageComplete(messageId) {
+    const messageDiv = document.getElementById(messageId);
+    if (messageDiv) {
+        const indicator = messageDiv.querySelector(".streaming-indicator");
+        if (indicator) {
+            indicator.remove();
+        }
+
+        // Ensure final render with think tags
+        const contentEl = messageDiv.querySelector(".message-content");
+        if (contentEl && contentEl.textContent) {
+            // Re-parse one final time to ensure complete rendering
+            const fullContent =
+                contentEl.getAttribute("data-raw-content") ||
+                contentEl.textContent;
+            if (fullContent.includes("<think>")) {
+                const { thinkingSteps, finalAnswer } =
+                    parseThinkTags(fullContent);
+                contentEl.innerHTML = "";
+
+                if (thinkingSteps.length > 0) {
+                    const thinkingContainer = createThinkingUI(thinkingSteps);
+                    contentEl.appendChild(thinkingContainer);
+                }
+
+                if (finalAnswer) {
+                    const answerDiv = document.createElement("div");
+                    answerDiv.className = "final-answer-content";
+                    answerDiv.textContent = finalAnswer;
+                    contentEl.appendChild(answerDiv);
+                }
+            }
+        }
+    }
+}
+
+/**
+ * Get or create a tool-events card positioned above the assistant message.
+ * The card is a sibling of the message div, not nested inside.
+ */
+function getOrCreateToolCard(messageId) {
+    const messageDiv = document.getElementById(messageId);
+    if (!messageDiv) {
+        return null;
+    }
+
+    // Check if card already exists as a sibling
+    let card = messageDiv.previousElementSibling;
+    if (card && card.classList.contains("tool-events-card")) {
+        return card;
+    }
+
+    // Create a new card
+    card = document.createElement("div");
+    card.className =
+        "tool-events-card mb-2 p-3 rounded-lg bg-blue-50 dark:bg-blue-900/20 border border-blue-200 dark:border-blue-700";
+
+    const header = document.createElement("div");
+    header.className = "flex items-center justify-between mb-2";
+
+    const title = document.createElement("div");
+    title.className =
+        "font-semibold text-sm text-blue-800 dark:text-blue-200 flex items-center gap-2";
+    title.innerHTML = `
+    <svg class="w-4 h-4" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+      <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M10.325 4.317c.426-1.756 2.924-1.756 3.35 0a1.724 1.724 0 002.573 1.066c1.543-.94 3.31.826 2.37 2.37a1.724 1.724 0 001.065 2.572c1.756.426 1.756 2.924 0 3.35a1.724 1.724 0 00-1.066 2.573c.94 1.543-.826 3.31-2.37 2.37a1.724 1.724 0 00-2.572 1.065c-.426 1.756-2.924 1.756-3.35 0a1.724 1.724 0 00-2.573-1.066c-1.543.94-3.31-.826-2.37-2.37a1.724 1.724 0 00-1.065-2.572c-1.756-.426-1.756-2.924 0-3.35a1.724 1.724 0 001.066-2.573c-.94-1.543.826-3.31 2.37-2.37.996.608 2.296.07 2.572-1.065z"></path>
+      <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M15 12a3 3 0 11-6 0 3 3 0 016 0z"></path>
+    </svg>
+    <span>Tool Invocations</span>
+  `;
+
+    const toggleBtn = document.createElement("button");
+    toggleBtn.className =
+        "text-xs text-blue-600 dark:text-blue-300 hover:underline";
+    toggleBtn.textContent = "Hide";
+    toggleBtn.onclick = () => {
+        const body = card.querySelector(".tool-events-body");
+        if (body.classList.contains("hidden")) {
+            body.classList.remove("hidden");
+            toggleBtn.textContent = "Hide";
+        } else {
+            body.classList.add("hidden");
+            toggleBtn.textContent = "Show";
+        }
+    };
+
+    header.appendChild(title);
+    header.appendChild(toggleBtn);
+    card.appendChild(header);
+
+    const body = document.createElement("div");
+    body.className = "tool-events-body space-y-2";
+    card.appendChild(body);
+
+    // Insert card before the message div
+    messageDiv.parentElement.insertBefore(card, messageDiv);
+
+    return card;
+}
+
+/**
+ * Add a tool event row to the tool card.
+ */
+function addToolEventToCard(messageId, eventType, payload) {
+    const card = getOrCreateToolCard(messageId);
+    if (!card) {
+        return;
+    }
+
+    const body = card.querySelector(".tool-events-body");
+
+    const row = document.createElement("div");
+    row.className =
+        "text-xs p-2 rounded bg-white dark:bg-gray-800 border border-gray-200 dark:border-gray-700";
+
+    let icon = "";
+    let text = "";
+    let colorClass = "";
+
+    if (eventType === "tool_start") {
+        icon =
+            '<svg class="w-3.5 h-3.5" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M14.752 11.168l-3.197-2.132A1 1 0 0010 9.87v4.263a1 1 0 001.555.832l3.197-2.132a1 1 0 000-1.664z"></path><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M21 12a9 9 0 11-18 0 9 9 0 0118 0z"></path></svg>';
+        colorClass = "text-green-700 dark:text-green-400";
+        text = `<strong>Started:</strong> ${escapeHtmlChat(payload.tool || payload.id || "unknown")}`;
+        if (payload.input) {
+            text += `<br><span class="text-gray-600 dark:text-gray-400">Input: ${escapeHtmlChat(JSON.stringify(payload.input))}</span>`;
+        }
+    } else if (eventType === "tool_end") {
+        icon =
+            '<svg class="w-3.5 h-3.5" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M9 12l2 2 4-4m6 2a9 9 0 11-18 0 9 9 0 0118 0z"></path></svg>';
+        colorClass = "text-blue-700 dark:text-blue-400";
+        text = `<strong>Completed:</strong> ${escapeHtmlChat(payload.tool || payload.id || "unknown")}`;
+        if (payload.output) {
+            const out =
+                typeof payload.output === "string"
+                    ? payload.output
+                    : JSON.stringify(payload.output);
+            text += `<br><span class="text-gray-600 dark:text-gray-400">Output: ${escapeHtmlChat(out)}</span>`;
+        }
+    } else if (eventType === "tool_error") {
+        icon =
+            '<svg class="w-3.5 h-3.5" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M12 8v4m0 4h.01M21 12a9 9 0 11-18 0 9 9 0 0118 0z"></path></svg>';
+        colorClass = "text-red-700 dark:text-red-400";
+        text = `<strong>Error:</strong> ${escapeHtmlChat(payload.error || payload.tool || payload.id || "unknown")}`;
+    }
+
+    row.innerHTML = `<div class="flex items-start gap-2 ${colorClass}">${icon}<div>${text}</div></div>`;
+    body.appendChild(row);
+}
+
+/**
+ * Update or create a "tools used" summary badge on the tool card when final event arrives.
+ */
+function setToolUsedSummary(messageId, used, toolsList) {
+    const card = getOrCreateToolCard(messageId);
+    if (!card) {
+        return;
+    }
+
+    let badge = card.querySelector(".tool-summary-badge");
+    if (!badge) {
+        badge = document.createElement("div");
+        badge.className =
+            "tool-summary-badge mt-2 pt-2 border-t border-blue-200 dark:border-blue-700 text-xs font-medium";
+        card.appendChild(badge);
+    }
+
+    if (used && toolsList && toolsList.length > 0) {
+        badge.className =
+            "tool-summary-badge mt-2 pt-2 border-t border-blue-200 dark:border-blue-700 text-xs font-medium text-green-700 dark:text-green-400";
+        badge.textContent = `✓ Tools used: ${toolsList.join(", ")}`;
+    } else {
+        badge.className =
+            "tool-summary-badge mt-2 pt-2 border-t border-blue-200 dark:border-blue-700 text-xs font-medium text-gray-600 dark:text-gray-400";
+        badge.textContent = "No tools invoked";
+    }
+}
+
+/**
+ * Clear all chat messages
+ */
+function clearChatMessages() {
+    const container = document.getElementById("chat-messages-container");
+    if (container) {
+        container.innerHTML = `
+      <div id="chat-welcome-message" class="flex items-center justify-center h-full">
+        <div class="text-center text-gray-500 dark:text-gray-400">
+          <svg class="mx-auto h-12 w-12 text-gray-400" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+            <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M8 12h.01M12 12h.01M16 12h.01M21 12c0 4.418-4.03 8-9 8a9.863 9.863 0 01-4.255-.949L3 20l1.395-3.72C3.512 15.042 3 13.574 3 12c0-4.418 4.03-8 9-8s9 3.582 9 8z"/>
+          </svg>
+          <p class="mt-4 text-lg font-medium">Select a server and connect to start chatting</p>
+          <p class="mt-2 text-sm">Choose a virtual server from the left and configure your LLM settings</p>
+        </div>
+      </div>
+    `;
+    }
+}
+
+/**
+ * Scroll chat to bottom
+ */
+function scrollChatToBottom() {
+    const container = document.getElementById("chat-messages-container");
+    if (container) {
+        requestAnimationFrame(() => {
+            // Use instant scroll during streaming for better UX
+            container.scrollTop = container.scrollHeight;
+        });
+    }
+}
+
+/**
+ * Handle Enter key in chat input (send on Enter, new line on Shift+Enter)
+ */
+// eslint-disable-next-line no-unused-vars
+function handleChatInputKeydown(event) {
+    if (event.key === "Enter" && !event.shiftKey) {
+        event.preventDefault();
+        sendChatMessage(event);
+    }
+}
+
+function initializeChatInputResize() {
+    const chatInput = document.getElementById("chat-input");
+    if (chatInput) {
+        chatInput.addEventListener("input", function () {
+            this.style.height = "auto";
+            this.style.height = Math.min(this.scrollHeight, 120) + "px";
+        });
+
+        // Reset height when message is sent
+        const form = document.getElementById("chat-input-form");
+        if (form) {
+            form.addEventListener("submit", () => {
+                setTimeout(() => {
+                    chatInput.style.height = "auto";
+                }, 0);
+            });
+        }
+    }
+}
+/**
+ * Perform server-side search for tools and update the tool list
+ */
+async function serverSideToolSearch(searchTerm) {
+    const container = document.getElementById("associatedTools");
+    const noResultsMessage = safeGetElement("noToolsMessage", true);
+    const searchQuerySpan = safeGetElement("searchQueryTools", true);
+
+    if (!container) {
+        console.error("associatedTools container not found");
+        return;
+    }
+
+    // Show loading state
+    container.innerHTML = `
+        <div class="text-center py-4">
+            <svg class="animate-spin h-5 w-5 text-indigo-600 mx-auto" xmlns="http://www.w3.org/2000/svg" fill="none" viewBox="0 0 24 24">
+                <circle class="opacity-25" cx="12" cy="12" r="10" stroke="currentColor" stroke-width="4"></circle>
+                <path class="opacity-75" fill="currentColor" d="M4 12a8 8 0 018-8V0C5.373 0 0 5.373 0 12h4zm2 5.291A7.962 7.962 0 014 12H0c0 3.042 1.135 5.824 3 7.938l3-2.647z"></path>
+            </svg>
+            <p class="mt-2 text-sm text-gray-500">Searching tools...</p>
+        </div>
+    `;
+
+    if (searchTerm.trim() === "") {
+        // If search term is empty, reload the default tool list
+        try {
+            const response = await fetch(
+                `${window.ROOT_PATH}/admin/tools/partial?page=1&per_page=50&render=selector`,
+            );
+            if (response.ok) {
+                const html = await response.text();
+                container.innerHTML = html;
+
+                // Hide no results message
+                if (noResultsMessage) {
+                    noResultsMessage.style.display = "none";
+                }
+
+                // Update tool mapping if needed
+                updateToolMapping(container);
+            } else {
+                container.innerHTML =
+                    '<div class="text-center py-4 text-red-600">Failed to load tools</div>';
+            }
+        } catch (error) {
+            console.error("Error loading tools:", error);
+            container.innerHTML =
+                '<div class="text-center py-4 text-red-600">Error loading tools</div>';
+        }
+        return;
+    }
+
+    try {
+        // Call the new search API
+        const response = await fetch(
+            `${window.ROOT_PATH}/admin/tools/search?q=${encodeURIComponent(searchTerm)}&limit=100`,
+        );
+
+        if (!response.ok) {
+            throw new Error(`HTTP ${response.status}: ${response.statusText}`);
+        }
+
+        const data = await response.json();
+
+        if (data.tools && data.tools.length > 0) {
+            // Create HTML for search results
+            let searchResultsHtml = "";
+            data.tools.forEach((tool) => {
+                // Create a label element similar to the ones in tools_selector_items.html
+                // Use the same name priority as the template: displayName or customName or original_name
+                const displayName =
+                    tool.display_name ||
+                    tool.custom_name ||
+                    tool.name ||
+                    tool.id;
+
+                searchResultsHtml += `
+                    <label
+                        class="flex items-center space-x-3 text-gray-700 dark:text-gray-300 mb-2 cursor-pointer hover:bg-indigo-50 dark:hover:bg-indigo-900 rounded-md p-1 tool-item"
+                        data-tool-id="${escapeHtml(tool.id)}"
+                    >
+                        <input
+                            type="checkbox"
+                            name="associatedTools"
+                            value="${escapeHtml(tool.id)}"
+                            data-tool-name="${escapeHtml(displayName)}"
+                            class="tool-checkbox form-checkbox h-5 w-5 text-indigo-600 dark:bg-gray-800 dark:border-gray-600"
+                        />
+                        <span class="select-none">${escapeHtml(displayName)}</span>
+                    </label>
+                `;
+            });
+
+            container.innerHTML = searchResultsHtml;
+
+            // Update tool mapping with search results
+            updateToolMapping(container);
+
+            // Hide no results message
+            if (noResultsMessage) {
+                noResultsMessage.style.display = "none";
+            }
+        } else {
+            // Show no results message
+            container.innerHTML = "";
+            if (noResultsMessage) {
+                if (searchQuerySpan) {
+                    searchQuerySpan.textContent = searchTerm;
+                }
+                noResultsMessage.style.display = "block";
+            }
+        }
+    } catch (error) {
+        console.error("Error searching tools:", error);
+        container.innerHTML =
+            '<div class="text-center py-4 text-red-600">Error searching tools</div>';
+
+        // Hide no results message in case of error
+        if (noResultsMessage) {
+            noResultsMessage.style.display = "none";
+        }
+    }
+}
+
+/**
+ * Update the tool mapping with tools in the given container
+ */
+function updateToolMapping(container) {
+    if (!window.toolMapping) {
+        window.toolMapping = {};
+    }
+
+    const checkboxes = container.querySelectorAll(
+        'input[name="associatedTools"]',
+    );
+    checkboxes.forEach((checkbox) => {
+        const toolId = checkbox.value;
+        const toolName = checkbox.getAttribute("data-tool-name");
+        if (toolId && toolName) {
+            window.toolMapping[toolId] = toolName;
+        }
+    });
+}
+
+/**
+ * Perform server-side search for prompts and update the prompt list
+ */
+async function serverSidePromptSearch(searchTerm) {
+    const container = document.getElementById("associatedPrompts");
+    const noResultsMessage = safeGetElement("noPromptsMessage", true);
+    const searchQuerySpan = safeGetElement("searchPromptsQuery", true);
+
+    if (!container) {
+        console.error("associatedPrompts container not found");
+        return;
+    }
+
+    // Show loading state
+    container.innerHTML = `
+        <div class="text-center py-4">
+            <svg class="animate-spin h-5 w-5 text-purple-600 mx-auto" xmlns="http://www.w3.org/2000/svg" fill="none" viewBox="0 0 24 24">
+                <circle class="opacity-25" cx="12" cy="12" r="10" stroke="currentColor" stroke-width="4"></circle>
+                <path class="opacity-75" fill="currentColor" d="M4 12a8 8 0 018-8V0C5.373 0 0 5.373 0 12h4zm2 5.291A7.962 7.962 0 014 12H0c0 3.042 1.135 5.824 3 7.938l3-2.647z"></path>
+            </svg>
+            <p class="mt-2 text-sm text-gray-500">Searching prompts...</p>
+        </div>
+    `;
+
+    if (searchTerm.trim() === "") {
+        // If search term is empty, reload the default prompt selector
+        try {
+            const response = await fetch(
+                `${window.ROOT_PATH}/admin/prompts/partial?page=1&per_page=50&render=selector`,
+            );
+            if (response.ok) {
+                const html = await response.text();
+                container.innerHTML = html;
+
+                // Hide no results message
+                if (noResultsMessage) {
+                    noResultsMessage.style.display = "none";
+                }
+
+                // Initialize prompt mapping if needed
+                initPromptSelect(
+                    "associatedPrompts",
+                    "selectedPromptsPills",
+                    "selectedPromptsWarning",
+                    6,
+                    "selectAllPromptsBtn",
+                    "clearAllPromptsBtn",
+                );
+            } else {
+                container.innerHTML =
+                    '<div class="text-center py-4 text-red-600">Failed to load prompts</div>';
+            }
+        } catch (error) {
+            console.error("Error loading prompts:", error);
+            container.innerHTML =
+                '<div class="text-center py-4 text-red-600">Error loading prompts</div>';
+        }
+        return;
+    }
+
+    try {
+        const response = await fetch(
+            `${window.ROOT_PATH}/admin/prompts/search?q=${encodeURIComponent(searchTerm)}&limit=100`,
+        );
+        if (!response.ok) {
+            throw new Error(`HTTP ${response.status}: ${response.statusText}`);
+        }
+
+        const data = await response.json();
+
+        if (data.prompts && data.prompts.length > 0) {
+            let searchResultsHtml = "";
+            data.prompts.forEach((prompt) => {
+                const displayName = prompt.name || prompt.id;
+                searchResultsHtml += `
+                    <label
+                        class="flex items-center space-x-3 text-gray-700 dark:text-gray-300 mb-2 cursor-pointer hover:bg-purple-50 dark:hover:bg-purple-900 rounded-md p-1 prompt-item"
+                        data-prompt-id="${escapeHtml(prompt.id)}"
+                    >
+                        <input
+                            type="checkbox"
+                            name="associatedPrompts"
+                            value="${escapeHtml(prompt.id)}"
+                            data-prompt-name="${escapeHtml(displayName)}"
+                            class="prompt-checkbox form-checkbox h-5 w-5 text-purple-600 dark:bg-gray-800 dark:border-gray-600"
+                        />
+                        <span class="select-none">${escapeHtml(displayName)}</span>
+                    </label>
+                `;
+            });
+
+            container.innerHTML = searchResultsHtml;
+
+            // Initialize prompt select mapping
+            initPromptSelect(
+                "associatedPrompts",
+                "selectedPromptsPills",
+                "selectedPromptsWarning",
+                6,
+                "selectAllPromptsBtn",
+                "clearAllPromptsBtn",
+            );
+
+            if (noResultsMessage) {
+                noResultsMessage.style.display = "none";
+            }
+        } else {
+            container.innerHTML = "";
+            if (noResultsMessage) {
+                if (searchQuerySpan) {
+                    searchQuerySpan.textContent = searchTerm;
+                }
+                noResultsMessage.style.display = "block";
+            }
+        }
+    } catch (error) {
+        console.error("Error searching prompts:", error);
+        container.innerHTML =
+            '<div class="text-center py-4 text-red-600">Error searching prompts</div>';
+        if (noResultsMessage) {
+            noResultsMessage.style.display = "none";
+        }
+    }
+}
+
+// Add CSS for streaming indicator animation
+const style = document.createElement("style");
+style.textContent = `
+  .streaming-indicator {
+    animation: blink 1s infinite;
+  }
+
+  @keyframes blink {
+    0%, 50% { opacity: 1; }
+    51%, 100% { opacity: 0; }
+  }
+
+  #chat-input {
+    max-height: 120px;
+    overflow-y: auto;
+  }
+`;
+document.head.appendChild(style);
+
+// ============================================================================
+// CA Certificate Validation Functions
+// ============================================================================
+
+/**
+ * Validate CA certificate file on upload (supports multiple files)
+ * @param {Event} event - The file input change event
+ */
+async function validateCACertFiles(event) {
+    const files = Array.from(event.target.files);
+    const feedbackEl = document.getElementById("ca-certificate-feedback");
+
+    if (!files.length) {
+        feedbackEl.textContent = "No files selected.";
+        return;
+    }
+
+    // Check file size (max 10MB for cert files)
+    const maxSize = 10 * 1024 * 1024; // 10MB
+    const oversizedFiles = files.filter((f) => f.size > maxSize);
+    if (oversizedFiles.length > 0) {
+        if (feedbackEl) {
+            feedbackEl.innerHTML = `
+                <div class="flex items-center text-red-600">
+                    <svg class="w-6 h-6 mr-2" fill="none" stroke="currentColor" viewBox="0 0 24 24" xmlns="http://www.w3.org/2000/svg"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M6 18L18 6M6 6l12 12"></path></svg>
+                    <span>Certificate file(s) too large. Maximum size is 10MB per file.</span>
+                </div>
+            `;
+            feedbackEl.className = "mt-2 text-sm";
+        }
+        event.target.value = "";
+        return;
+    }
+
+    // Check file extensions
+    const validExtensions = [".pem", ".crt", ".cer", ".cert"];
+    const invalidFiles = files.filter((file) => {
+        const fileName = file.name.toLowerCase();
+        return !validExtensions.some((ext) => fileName.endsWith(ext));
+    });
+
+    if (invalidFiles.length > 0) {
+        if (feedbackEl) {
+            feedbackEl.innerHTML = `
+                <div class="flex items-center text-red-600">
+                    <svg class="w-6 h-6 mr-2" fill="none" stroke="currentColor" viewBox="0 0 24 24" xmlns="http://www.w3.org/2000/svg"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M6 18L18 6M6 6l12 12"></path></svg>
+                    <span>Invalid file type. Please upload valid certificate files (.pem, .crt, .cer, .cert)</span>
+                </div>
+            `;
+            feedbackEl.className = "mt-2 text-sm";
+        }
+        event.target.value = "";
+        return;
+    }
+
+    // Read and validate all files
+    const certResults = [];
+    for (const file of files) {
+        try {
+            const content = await readFileAsync(file);
+            const isValid = isValidCertificate(content);
+            const certInfo = isValid ? parseCertificateInfo(content) : null;
+
+            certResults.push({
+                file,
+                content,
+                isValid,
+                certInfo,
+            });
+        } catch (error) {
+            certResults.push({
+                file,
+                content: null,
+                isValid: false,
+                certInfo: null,
+                error: error.message,
+            });
+        }
+    }
+
+    // Display per-file validation results
+    displayCertValidationResults(certResults, feedbackEl);
+
+    // If all valid, order and concatenate
+    const allValid = certResults.every((r) => r.isValid);
+    if (allValid) {
+        const orderedCerts = orderCertificateChain(certResults);
+        const concatenated = orderedCerts
+            .map((r) => r.content.trim())
+            .join("\n");
+
+        // Store concatenated result in a hidden field
+        let hiddenInput = document.getElementById(
+            "ca_certificate_concatenated",
+        );
+        if (!hiddenInput) {
+            hiddenInput = document.createElement("input");
+            hiddenInput.type = "hidden";
+            hiddenInput.id = "ca_certificate_concatenated";
+            hiddenInput.name = "ca_certificate";
+            event.target.form.appendChild(hiddenInput);
+        }
+        hiddenInput.value = concatenated;
+
+        // Update drop zone
+        updateDropZoneWithFiles(files);
+    } else {
+        event.target.value = "";
+    }
+}
+
+/**
+ * Helper function to read file as text asynchronously
+ * @param {File} file - The file to read
+ * @returns {Promise<string>} - Promise resolving to file content
+ */
+function readFileAsync(file) {
+    return new Promise((resolve, reject) => {
+        const reader = new FileReader();
+        reader.onload = (e) => resolve(e.target.result);
+        reader.onerror = () => reject(new Error("Error reading file"));
+        reader.readAsText(file);
+    });
+}
+
+/**
+ * Parse certificate information to determine if it's self-signed (root CA)
+ * @param {string} content - PEM certificate content
+ * @returns {Object} - Certificate info with isRoot flag
+ */
+function parseCertificateInfo(content) {
+    // Basic heuristic: check if Subject and Issuer appear the same
+    // In a real implementation, you'd parse the ASN.1 structure properly
+    const subjectMatch = content.match(/Subject:([^\n]+)/i);
+    const issuerMatch = content.match(/Issuer:([^\n]+)/i);
+
+    // If we can't parse, assume it's an intermediate
+    if (!subjectMatch || !issuerMatch) {
+        return { isRoot: false };
+    }
+
+    const subject = subjectMatch[1].trim();
+    const issuer = issuerMatch[1].trim();
+
+    return {
+        isRoot: subject === issuer,
+        subject,
+        issuer,
+    };
+}
+
+/**
+ * Order certificates in chain: root CA first, then intermediates, then leaf
+ * @param {Array} certResults - Array of certificate result objects
+ * @returns {Array} - Ordered array of certificate results
+ */
+function orderCertificateChain(certResults) {
+    const roots = certResults.filter((r) => r.certInfo && r.certInfo.isRoot);
+    const nonRoots = certResults.filter(
+        (r) => r.certInfo && !r.certInfo.isRoot,
+    );
+
+    // Simple ordering: roots first, then rest
+    // In production, you'd build a proper chain by matching issuer/subject
+    return [...roots, ...nonRoots];
+}
+
+/**
+ * Display validation results for each certificate file
+ * @param {Array} certResults - Array of validation result objects
+ * @param {HTMLElement} feedbackEl - Element to display feedback
+ */
+function displayCertValidationResults(certResults, feedbackEl) {
+    const allValid = certResults.every((r) => r.isValid);
+
+    let html = '<div class="space-y-2">';
+
+    // Overall status
+    if (allValid) {
+        html += `
+            <div class="flex items-center text-green-600 font-semibold text-lg">
+                <svg class="w-8 h-8 mr-2" fill="none" stroke="currentColor" viewBox="0 0 24 24" xmlns="http://www.w3.org/2000/svg"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M9 12l2 2 4-4m6 2a9 9 0 11-18 0 9 9 0 0118 0z"></path></svg>
+                <span>All certificates validated successfully!</span>
+            </div>
+        `;
+    } else {
+        html += `
+            <div class="flex items-center text-red-600 font-semibold text-lg">
+                <svg class="w-8 h-8 mr-2" fill="none" stroke="currentColor" viewBox="0 0 24 24" xmlns="http://www.w3.org/2000/svg"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M10 14l2-2m0 0l2-2m-2 2l-2-2m2 2l2 2m7-2a9 9 0 11-18 0 9 9 0 0118 0z"></path></svg>
+                <span>Some certificates failed validation</span>
+            </div>
+        `;
+    }
+
+    // Per-file results
+    html += '<div class="mt-3 space-y-1">';
+    for (const result of certResults) {
+        const icon = result.isValid
+            ? '<svg class="w-5 h-5 text-green-600" fill="none" stroke="currentColor" viewBox="0 0 24 24" xmlns="http://www.w3.org/2000/svg"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M5 13l4 4L19 7"></path></svg>'
+            : '<svg class="w-5 h-5 text-red-600" fill="none" stroke="currentColor" viewBox="0 0 24 24" xmlns="http://www.w3.org/2000/svg"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M6 18L18 6M6 6l12 12"></path></svg>';
+
+        const statusClass = result.isValid ? "text-gray-700" : "text-red-700";
+        const typeLabel =
+            result.certInfo && result.certInfo.isRoot ? " (Root CA)" : "";
+
+        html += `
+            <div class="flex items-center ${statusClass}">
+                ${icon}
+                <span class="ml-2">${escapeHtml(result.file.name)}${typeLabel} - ${formatFileSize(result.file.size)}</span>
+            </div>
+        `;
+    }
+    html += "</div></div>";
+
+    feedbackEl.innerHTML = html;
+    feedbackEl.className = "mt-2 text-sm";
+}
+
+/**
+ * Validate certificate content (PEM format)
+ * @param {string} content - The certificate file content
+ * @returns {boolean} - True if valid certificate
+ */
+function isValidCertificate(content) {
+    // Trim whitespace
+    content = content.trim();
+
+    // Check for PEM certificate markers
+    const beginCertPattern = /-----BEGIN CERTIFICATE-----/;
+    const endCertPattern = /-----END CERTIFICATE-----/;
+
+    if (!beginCertPattern.test(content) || !endCertPattern.test(content)) {
+        return false;
+    }
+
+    // Check for proper structure
+    const certPattern =
+        /-----BEGIN CERTIFICATE-----[\s\S]+?-----END CERTIFICATE-----/g;
+    const matches = content.match(certPattern);
+
+    if (!matches || matches.length === 0) {
+        return false;
+    }
+
+    // Validate base64 content between markers
+    for (const cert of matches) {
+        const base64Content = cert
+            .replace(/-----BEGIN CERTIFICATE-----/, "")
+            .replace(/-----END CERTIFICATE-----/, "")
+            .replace(/\s/g, "");
+
+        // Check if content is valid base64
+        if (!isValidBase64(base64Content)) {
+            return false;
+        }
+
+        // Basic length check (certificates are typically > 100 chars of base64)
+        if (base64Content.length < 100) {
+            return false;
+        }
+    }
+
+    return true;
+}
+
+/**
+ * Check if string is valid base64
+ * @param {string} str - The string to validate
+ * @returns {boolean} - True if valid base64
+ */
+function isValidBase64(str) {
+    if (str.length === 0) {
+        return false;
+    }
+
+    // Base64 regex pattern
+    const base64Pattern = /^[A-Za-z0-9+/]*={0,2}$/;
+    return base64Pattern.test(str);
+}
+
+/**
+ * Update drop zone UI with selected file info
+ * @param {File} file - The selected file
+ */
+function updateDropZoneWithFiles(files) {
+    const dropZone = document.getElementById("ca-certificate-upload-drop-zone");
+    if (!dropZone) {
+        return;
+    }
+
+    const fileListHTML = Array.from(files)
+        .map(
+            (file) =>
+                `<div>${escapeHtml(file.name)} • ${formatFileSize(file.size)}</div>`,
+        )
+        .join("");
+
+    dropZone.innerHTML = `
+        <div class="space-y-2">
+            <svg class="mx-auto h-12 w-12 text-green-500" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M9 12l2 2 4-4m6 2a9 9 0 11-18 0 9 9 0 0118 0z"></path>
+            </svg>
+            <div class="text-sm text-gray-700 dark:text-gray-300">
+                <span class="font-medium">Selected Certificates:</span>
+            </div>
+            <div class="text-xs text-gray-500 dark:text-gray-400">${fileListHTML}</div>
+        </div>
+    `;
+}
+
+/**
+ * Format file size for display
+ * @param {number} bytes - File size in bytes
+ * @returns {string} - Formatted file size
+ */
+function formatFileSize(bytes) {
+    if (bytes === 0) {
+        return "0 Bytes";
+    }
+    const k = 1024;
+    const sizes = ["Bytes", "KB", "MB", "GB"];
+    const i = Math.floor(Math.log(bytes) / Math.log(k));
+    return Math.round((bytes / Math.pow(k, i)) * 100) / 100 + " " + sizes[i];
+}
+
+/**
+ * Initialize drag and drop for CA cert upload
+ * Called on DOMContentLoaded
+ */
+function initializeCACertUpload() {
+    const dropZone = document.getElementById("ca-certificate-upload-drop-zone");
+    const fileInput = document.getElementById("upload-ca-certificate");
+
+    if (dropZone && fileInput) {
+        // Click to upload
+        dropZone.addEventListener("click", function (e) {
+            fileInput.click();
+        });
+
+        // Drag and drop handlers
+        dropZone.addEventListener("dragover", function (e) {
+            e.preventDefault();
+            e.stopPropagation();
+            dropZone.classList.add(
+                "border-indigo-500",
+                "bg-indigo-50",
+                "dark:bg-indigo-900/20",
+            );
+        });
+
+        dropZone.addEventListener("dragleave", function (e) {
+            e.preventDefault();
+            e.stopPropagation();
+            dropZone.classList.remove(
+                "border-indigo-500",
+                "bg-indigo-50",
+                "dark:bg-indigo-900/20",
+            );
+        });
+
+        dropZone.addEventListener("drop", function (e) {
+            e.preventDefault();
+            e.stopPropagation();
+            dropZone.classList.remove(
+                "border-indigo-500",
+                "bg-indigo-50",
+                "dark:bg-indigo-900/20",
+            );
+
+            const files = e.dataTransfer.files;
+            if (files.length > 0) {
+                fileInput.files = files;
+                // Trigger the validation
+                const event = new Event("change", { bubbles: true });
+                fileInput.dispatchEvent(event);
+            }
+        });
+    }
+}
+
+// Expose CA certificate upload/validation functions for usage in admin.html
+// This ensures ESLint recognizes them as used via global handlers.
+window.validateCACertFiles = validateCACertFiles;
+window.initializeCACertUpload = initializeCACertUpload;
+
+// Function to update body label based on content type selection
+function updateBodyLabel() {
+    const bodyLabel = document.getElementById("gateway-test-body-label");
+    const contentType = document.getElementById(
+        "gateway-test-content-type",
+    )?.value;
+
+    if (bodyLabel) {
+        bodyLabel.innerHTML =
+            contentType === "application/x-www-form-urlencoded"
+                ? 'Body (JSON)<br><small class="text-gray-500">Auto-converts to form data</small>'
+                : "Body (JSON)";
+    }
+}
+
+// Make it available globally for HTML onclick handlers
+window.updateBodyLabel = updateBodyLabel;

@@ -14,7 +14,8 @@ across different parts of the application without creating circular imports.
 from datetime import datetime, timezone
 import hashlib
 import logging
-from typing import Optional
+from typing import Any, Dict, Generator, Never, Optional
+import uuid
 
 # Third-Party
 from fastapi import Depends, HTTPException, status
@@ -24,13 +25,15 @@ from sqlalchemy.orm import Session
 # First-Party
 from mcpgateway.config import settings
 from mcpgateway.db import EmailUser, SessionLocal
+from mcpgateway.plugins.framework import get_plugin_manager, GlobalContext, HttpAuthResolveUserPayload, HttpHeaderPayload, HttpHookType, PluginViolationError
+from mcpgateway.services.team_management_service import TeamManagementService  # pylint: disable=import-outside-toplevel
 from mcpgateway.utils.verify_credentials import verify_jwt_token
 
 # Security scheme
 bearer_scheme = HTTPBearer(auto_error=False)
 
 
-def get_db():
+def get_db() -> Generator[Session, Never, None]:
     """Database dependency.
 
     Yields:
@@ -51,12 +54,80 @@ def get_db():
         db.close()
 
 
-async def get_current_user(credentials: Optional[HTTPAuthorizationCredentials] = Depends(bearer_scheme), db: Session = Depends(get_db)) -> EmailUser:
+async def get_team_from_token(payload: Dict[str, Any], db: Session) -> Optional[str]:
+    """
+    Extract the team ID from an authentication token payload. If the token does
+    not include a team, the user's personal team is retrieved from the database.
+
+    This function behaves as follows:
+
+    1. If `payload["teams"]` exists and is non-empty:
+       Returns the first team ID from that list.
+
+    2. If no teams are present in the payload:
+       Fetches the user's teams (using `payload["sub"]` as the user email) and
+       returns the ID of the personal team, if one exists.
+
+    Args:
+        payload (Dict[str, Any]):
+            The token payload. Expected fields:
+            - "sub" (str): The user's unique identifier (email).
+            - "teams" (List[str], optional): List containing team ID.
+        db (Session):
+            SQLAlchemy database session used to query team data.
+
+    Returns:
+        Optional[str]:
+            The resolved team ID. Returns `None` if no team can be determined
+            either from the payload or from the database.
+
+    Examples:
+        >>> import sys, asyncio
+        >>> from unittest.mock import AsyncMock, MagicMock
+        >>>
+        >>> # --- Mock setup for both tests ---
+        >>> mock_db = MagicMock()
+        >>>
+        >>> # Patch TeamManagementService import path dynamically
+        >>> mock_team_service = AsyncMock()
+        >>> mock_team = MagicMock(id="personal_team_123", is_personal=True)
+        >>> mock_team_service.get_user_teams.return_value = [mock_team]
+        >>>
+        >>> sys.modules['mcpgateway.services.team_management_service'] = type(sys)("dummy")
+        >>> sys.modules['mcpgateway.services.team_management_service'].TeamManagementService = lambda db: mock_team_service
+        >>>
+        >>> # --- Case 1: Token has team ---
+        >>> payload = {"sub": "user@example.com", "teams": ["team_456"]}
+        >>> asyncio.run(get_team_from_token(payload, mock_db))
+        'team_456'
+        >>> del sys.modules["mcpgateway.services.team_management_service"]
+    """
+    team_id = payload.get("teams")[0] if payload.get("teams") else None
+    user_email = payload.get("sub")
+    # If no team found in token, get user's personal team
+    if not team_id:
+
+        team_service = TeamManagementService(db)
+        user_teams = await team_service.get_user_teams(user_email, include_personal=True)
+        personal_team = next((team for team in user_teams if team.is_personal), None)
+        team_id = personal_team.id if personal_team else None
+
+    return team_id
+
+
+async def get_current_user(
+    credentials: Optional[HTTPAuthorizationCredentials] = Depends(bearer_scheme),
+    db: Session = Depends(get_db),
+    request: Optional[object] = None,
+) -> EmailUser:
     """Get current authenticated user from JWT token with revocation checking.
+
+    Supports plugin-based custom authentication via HTTP_AUTH_RESOLVE_USER hook.
 
     Args:
         credentials: HTTP authorization credentials
         db: Database session
+        request: Optional request object for plugin hooks
 
     Returns:
         EmailUser: Authenticated user
@@ -66,6 +137,106 @@ async def get_current_user(credentials: Optional[HTTPAuthorizationCredentials] =
     """
     logger = logging.getLogger(__name__)
 
+    # NEW: Custom authentication hook - allows plugins to provide alternative auth
+    # This hook is invoked BEFORE standard JWT/API token validation
+    try:
+        # Get plugin manager singleton
+        plugin_manager = get_plugin_manager()
+
+        if plugin_manager:
+            # Extract client information
+            client_host = None
+            client_port = None
+            if request and hasattr(request, "client") and request.client:
+                client_host = request.client.host
+                client_port = request.client.port
+
+            # Serialize credentials for plugin
+            credentials_dict = None
+            if credentials:
+                credentials_dict = {
+                    "scheme": credentials.scheme,
+                    "credentials": credentials.credentials,
+                }
+
+            # Extract headers from request
+            # Note: Middleware modifies request.scope["headers"], so request.headers
+            # will automatically reflect any modifications made by HTTP_PRE_REQUEST hooks
+            headers = {}
+            if request and hasattr(request, "headers"):
+                headers = dict(request.headers)
+
+            # Get request ID from request state (set by middleware) or generate new one
+            request_id = None
+            if request and hasattr(request, "state") and hasattr(request.state, "request_id"):
+                request_id = request.state.request_id
+            else:
+                request_id = uuid.uuid4().hex
+
+            # Create global context
+            global_context = GlobalContext(
+                request_id=request_id,
+                server_id=None,
+                tenant_id=None,
+            )
+
+            # Invoke custom auth resolution hook
+            # violations_as_exceptions=True so PluginViolationError is raised for explicit denials
+            auth_result, _ = await plugin_manager.invoke_hook(
+                HttpHookType.HTTP_AUTH_RESOLVE_USER,
+                payload=HttpAuthResolveUserPayload(
+                    credentials=credentials_dict,
+                    headers=HttpHeaderPayload(root=headers),
+                    client_host=client_host,
+                    client_port=client_port,
+                ),
+                global_context=global_context,
+                local_contexts=None,
+                violations_as_exceptions=True,  # Raise PluginViolationError for auth denials
+            )
+
+            # If plugin successfully authenticated user, return it
+            if auth_result.modified_payload and isinstance(auth_result.modified_payload, dict):
+                logger.info("User authenticated via plugin hook")
+                # Create EmailUser from dict returned by plugin
+                user_dict = auth_result.modified_payload
+                user = EmailUser(
+                    email=user_dict.get("email"),
+                    password_hash=user_dict.get("password_hash", ""),
+                    full_name=user_dict.get("full_name"),
+                    is_admin=user_dict.get("is_admin", False),
+                    is_active=user_dict.get("is_active", True),
+                    email_verified_at=user_dict.get("email_verified_at"),
+                    created_at=user_dict.get("created_at", datetime.now(timezone.utc)),
+                    updated_at=user_dict.get("updated_at", datetime.now(timezone.utc)),
+                )
+
+                # Store auth_method in request.state so it can be accessed by RBAC middleware
+                if request and hasattr(request, "state") and auth_result.metadata:
+                    auth_method = auth_result.metadata.get("auth_method")
+                    if auth_method:
+                        request.state.auth_method = auth_method
+                        logger.debug(f"Stored auth_method '{auth_method}' in request.state")
+
+                return user
+            # If continue_processing=True (no payload), fall through to standard auth
+
+    except PluginViolationError as e:
+        # Plugin explicitly denied authentication with custom message
+        logger.warning(f"Authentication denied by plugin: {e.message}")
+        raise HTTPException(
+            status_code=status.HTTP_401_UNAUTHORIZED,
+            detail=e.message,  # Use plugin's custom error message
+            headers={"WWW-Authenticate": "Bearer"},
+        )
+    except HTTPException:
+        # Re-raise HTTP exceptions
+        raise
+    except Exception as e:
+        # Log but don't fail on plugin errors - fall back to standard auth
+        logger.warning(f"HTTP_AUTH_RESOLVE_USER hook failed, falling back to standard auth: {e}")
+
+    # EXISTING: Standard authentication (JWT, API tokens)
     if not credentials:
         logger.warning("No credentials provided")
         raise HTTPException(
@@ -117,6 +288,11 @@ async def get_current_user(credentials: Optional[HTTPAuthorizationCredentials] =
             except Exception as revoke_check_error:
                 # Log the error but don't fail authentication for admin tokens
                 logger.warning(f"Token revocation check failed for JTI {jti}: {revoke_check_error}")
+
+        # Check team level token, if applicable. If public token, then will be defaulted to personal team.
+        team_id = await get_team_from_token(payload, db)
+        if request and hasattr(request, "state"):
+            request.state.team_id = team_id
 
     except HTTPException:
         # Re-raise HTTPException from verify_jwt_token (handles expired/invalid tokens)
@@ -211,7 +387,7 @@ async def get_current_user(credentials: Optional[HTTPAuthorizationCredentials] =
                 full_name=getattr(settings, "platform_admin_full_name", "Platform Administrator"),
                 is_admin=True,
                 is_active=True,
-                is_email_verified=True,
+                email_verified_at=datetime.now(timezone.utc),
                 created_at=datetime.now(timezone.utc),
                 updated_at=datetime.now(timezone.utc),
             )

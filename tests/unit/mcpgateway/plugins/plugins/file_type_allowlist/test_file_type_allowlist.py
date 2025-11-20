@@ -9,15 +9,15 @@ Tests for FileTypeAllowlistPlugin.
 
 import pytest
 
-from mcpgateway.plugins.framework.models import (
+from mcpgateway.plugins.framework import (
     GlobalContext,
-    HookType,
     PluginConfig,
     PluginContext,
+    ResourceHookType,
     ResourcePreFetchPayload,
     ResourcePostFetchPayload,
 )
-from mcpgateway.models import ResourceContent
+from mcpgateway.common.models import ResourceContent
 from plugins.file_type_allowlist.file_type_allowlist import FileTypeAllowlistPlugin
 
 
@@ -27,7 +27,7 @@ async def test_blocks_disallowed_extension_and_mime():
         PluginConfig(
             name="fta",
             kind="plugins.file_type_allowlist.file_type_allowlist.FileTypeAllowlistPlugin",
-            hooks=[HookType.RESOURCE_PRE_FETCH, HookType.RESOURCE_POST_FETCH],
+            hooks=[ResourceHookType.RESOURCE_PRE_FETCH, ResourceHookType.RESOURCE_POST_FETCH],
             config={"allowed_extensions": [".md"], "allowed_mime_types": ["text/markdown"]},
         )
     )
@@ -36,6 +36,6 @@ async def test_blocks_disallowed_extension_and_mime():
     pre = await plugin.resource_pre_fetch(ResourcePreFetchPayload(uri="https://ex.com/data.pdf"), ctx)
     assert pre.violation is not None
     # MIME blocked
-    content = ResourceContent(type="resource", uri="https://ex.com/file.md", mime_type="text/html", text="<p>x</p>")
+    content = ResourceContent(type="resource", id="345",uri="https://ex.com/file.md", mime_type="text/html", text="<p>x</p>")
     post = await plugin.resource_post_fetch(ResourcePostFetchPayload(uri=content.uri, content=content), ctx)
     assert post.violation is not None

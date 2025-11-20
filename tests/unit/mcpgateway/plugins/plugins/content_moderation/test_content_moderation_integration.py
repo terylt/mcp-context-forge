@@ -13,11 +13,13 @@ from unittest.mock import AsyncMock, MagicMock, patch
 import pytest
 
 from mcpgateway.plugins.framework.manager import PluginManager
-from mcpgateway.plugins.framework.models import (
-    GlobalContext,
+from mcpgateway.plugins.framework import GlobalContext
+
+from mcpgateway.plugins.framework import (
+    PromptHookType,
+    ToolHookType,
     PromptPrehookPayload,
     ToolPreInvokePayload,
-    ToolPostInvokePayload,
 )
 
 
@@ -107,11 +109,11 @@ plugin_dirs: []
 
                 # Test clean content (should pass)
                 payload = PromptPrehookPayload(
-                    name="test_prompt",
+                    prompt_id="test_prompt",
                     args={"query": "What is the weather like today?"}
                 )
 
-                result, final_context = await manager.prompt_pre_fetch(payload, context)
+                result, final_context = await manager.invoke_hook(PromptHookType.PROMPT_PRE_FETCH, payload, context)
 
                 # Verify result
                 assert result.continue_processing is True
@@ -190,11 +192,11 @@ plugin_dirs: []
 
                 # Test harmful content
                 payload = PromptPrehookPayload(
-                    name="harmful_prompt",
+                    prompt_id="harmful_prompt",
                     args={"query": "I hate all those people and want them gone"}
                 )
 
-                result, final_context = await manager.prompt_pre_fetch(payload, context)
+                result, final_context = await manager.invoke_hook(PromptHookType.PROMPT_PRE_FETCH, payload, context)
 
                 # Should be blocked due to high hate score
                 assert result.continue_processing is False
@@ -270,7 +272,7 @@ plugin_dirs: []
                     args={"query": "How to resolve conflicts peacefully"}
                 )
 
-                result, final_context = await manager.tool_pre_invoke(payload, context)
+                result, final_context = await manager.invoke_hook(ToolHookType.TOOL_PRE_INVOKE, payload, context)
 
                 # Should continue processing (fallback succeeded)
                 assert result.continue_processing is True
@@ -347,11 +349,11 @@ plugin_dirs: []
                 context = GlobalContext(request_id="redaction-test", user="testuser")
 
                 payload = PromptPrehookPayload(
-                    name="profanity_prompt",
+                    prompt_id="profanity_prompt",
                     args={"query": "This damn thing is not working"}
                 )
 
-                result, final_context = await manager.prompt_pre_fetch(payload, context)
+                result, final_context = await manager.invoke_hook(PromptHookType.PROMPT_PRE_FETCH, payload, context)
 
                 # Should continue processing but with modified content
                 assert result.continue_processing is True
@@ -438,11 +440,11 @@ plugin_dirs: []
 
                 # Test prompt (goes to Watson)
                 prompt_payload = PromptPrehookPayload(
-                    name="test_prompt",
+                    prompt_id="test_prompt",
                     args={"query": "What is machine learning?"}
                 )
 
-                prompt_result, _ = await manager.prompt_pre_fetch(prompt_payload, context)
+                prompt_result, _ = await manager.invoke_hook(PromptHookType.PROMPT_PRE_FETCH, prompt_payload, context)
                 assert prompt_result.continue_processing is True
 
                 # Test tool (goes to Granite)
@@ -451,7 +453,7 @@ plugin_dirs: []
                     args={"query": "How to build AI models"}
                 )
 
-                tool_result, _ = await manager.tool_pre_invoke(tool_payload, context)
+                tool_result, _ = await manager.invoke_hook(ToolHookType.TOOL_PRE_INVOKE, tool_payload, context)
                 assert tool_result.continue_processing is True
 
                 # Verify both providers were called

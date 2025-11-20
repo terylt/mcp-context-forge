@@ -25,7 +25,7 @@ from sqlalchemy.orm import Session
 # First-Party
 from mcpgateway.config import get_settings
 from mcpgateway.db import RegisteredOAuthClient
-from mcpgateway.utils.oauth_encryption import get_oauth_encryption
+from mcpgateway.services.encryption_service import get_encryption_service
 
 logger = logging.getLogger(__name__)
 
@@ -168,7 +168,7 @@ class DcrService:
             raise DcrError(f"Failed to register client with {issuer}: {e}")
 
         # Encrypt secrets
-        encryption = get_oauth_encryption(self.settings.auth_encryption_secret)
+        encryption = get_encryption_service(self.settings.auth_encryption_secret)
 
         client_secret = registration_response.get("client_secret")
         client_secret_encrypted = encryption.encrypt_secret(client_secret) if client_secret else None
@@ -233,7 +233,7 @@ class DcrService:
         # No existing client, check if auto-register is enabled
         if not self.settings.dcr_auto_register_on_missing_credentials:
             raise DcrError(
-                f"No registered client found for gateway {gateway_id} and issuer {issuer}. " "Auto-register is disabled. Set MCPGATEWAY_DCR_AUTO_REGISTER_ON_MISSING_CREDENTIALS=true to enable."
+                f"No registered client found for gateway {gateway_id} and issuer {issuer}. Auto-register is disabled. Set MCPGATEWAY_DCR_AUTO_REGISTER_ON_MISSING_CREDENTIALS=true to enable."
             )
 
         # Auto-register
@@ -260,7 +260,7 @@ class DcrService:
             raise DcrError("Cannot update client: no registration_access_token available")
 
         # Decrypt registration access token
-        encryption = get_oauth_encryption(self.settings.auth_encryption_secret)
+        encryption = get_encryption_service(self.settings.auth_encryption_secret)
         registration_access_token = encryption.decrypt_secret(client_record.registration_access_token_encrypted)
 
         # Build update request
@@ -313,7 +313,7 @@ class DcrService:
             return True  # Consider it deleted locally
 
         # Decrypt registration access token
-        encryption = get_oauth_encryption(self.settings.auth_encryption_secret)
+        encryption = get_encryption_service(self.settings.auth_encryption_secret)
         registration_access_token = encryption.decrypt_secret(client_record.registration_access_token_encrypted)
 
         # Send delete request
