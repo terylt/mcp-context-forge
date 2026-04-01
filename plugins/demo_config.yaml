@@ -1,0 +1,66 @@
+plugins:
+  - name: "JwtIdentityResolver"
+    kind: "plugins.apl_policy.identity_resolver.JwtIdentityResolverPlugin"
+    description: "JWT identity resolution via APL TokenIssuer"
+    version: "0.1.0"
+    author: "Teryl Taylor"
+    hooks: ["identity_resolve"]
+    mode: "sequential"
+    priority: 1
+    capabilities: ["read_headers"]
+    config:
+      secret: "demo-secret-key"
+      issuer: "apl-token-service"
+      audience: "contextforge-gateway"
+      log_resolutions: false
+
+  - name: "AplPolicy"
+    kind: "plugins.apl_policy.apl_policy.AplPolicyPlugin"
+    description: "APL attribute-based policy enforcement"
+    version: "0.1.0"
+    author: "Teryl Taylor"
+    hooks: ["cmf.tool_pre_invoke", "cmf.tool_post_invoke"]
+    mode: "sequential"
+    priority: 10
+    capabilities: ["read_subject", "read_roles", "read_permissions", "read_labels", "append_labels"]
+    config:
+      policy_path: "apl/demo/hr_policy.yaml"
+      log_decisions: true
+
+  - name: "TokenDelegator"
+    kind: "plugins.apl_policy.token_delegator.Rfc8693TokenDelegatorPlugin"
+    description: "RFC 8693 token exchange with RFC 9396 RAR narrowing"
+    version: "0.1.0"
+    author: "Teryl Taylor"
+    hooks: ["token_delegate"]
+    mode: "sequential"
+    priority: 5
+    capabilities: ["read_subject", "write_headers"]
+    conditions:
+      - tools:
+          - "demo-mcp-server-get-compensation"
+          - "demo-mcp-server-send-email"
+    config:
+      secret: "demo-secret-key"
+      issuer: "apl-token-service"
+      default_audience: "contextforge-gateway"
+      default_ttl: 300
+      audience_map:
+        demo-mcp-server-get-compensation: "https://hr-api.corp.com"
+        demo-mcp-server-send-email: "https://mail.corp.com"
+      log_delegations: true
+
+# Plugin directories to scan
+plugin_dirs:
+  - "plugins/native"      # Built-in plugins
+  - "plugins/custom"      # Custom organization plugins
+  - "/etc/mcpgateway/plugins"  # System-wide plugins
+
+# Global plugin settings
+plugin_settings:
+  parallel_execution_within_band: true
+  plugin_timeout: 120
+  fail_on_plugin_error: false
+  enable_plugin_api: true
+  plugin_health_check_interval: 120
+  include_user_info: false

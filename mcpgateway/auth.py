@@ -1012,7 +1012,7 @@ async def get_current_user(
                 if request and global_context:
                     request.state.plugin_global_context = global_context
 
-                if plugin_manager and plugin_manager.config.plugin_settings.include_user_info:
+                if plugin_manager and getattr(getattr(plugin_manager.config, "plugin_settings", None), "include_user_info", False):
                     _inject_userinfo_instate(request, user)
 
                 return user
@@ -1138,7 +1138,7 @@ async def get_current_user(
                                     headers={"WWW-Authenticate": "Bearer"},
                                 )
 
-                        if plugin_manager and plugin_manager.config.plugin_settings.include_user_info:
+                        if plugin_manager and getattr(getattr(plugin_manager.config, "plugin_settings", None), "include_user_info", False):
                             _inject_userinfo_instate(request, _user_from_cached_dict(cached_ctx.user))
 
                         return _user_from_cached_dict(cached_ctx.user)
@@ -1268,7 +1268,7 @@ async def get_current_user(
                             headers={"WWW-Authenticate": "Bearer"},
                         )
 
-                if plugin_manager and plugin_manager.config.plugin_settings.include_user_info:
+                if plugin_manager and getattr(getattr(plugin_manager.config, "plugin_settings", None), "include_user_info", False):
                     _inject_userinfo_instate(request, _batched_user)
 
                 return _batched_user
@@ -1443,7 +1443,7 @@ async def get_current_user(
             headers={"WWW-Authenticate": "Bearer"},
         )
 
-    if plugin_manager and plugin_manager.config.plugin_settings.include_user_info:
+    if plugin_manager and getattr(getattr(plugin_manager.config, "plugin_settings", None), "include_user_info", False):
         _inject_userinfo_instate(request, user)
 
     return user

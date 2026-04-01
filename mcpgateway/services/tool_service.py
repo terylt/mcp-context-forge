@@ -43,6 +43,7 @@ from cpex.framework import (
     ToolPreInvokePayload,
 )
 from cpex.framework.constants import GATEWAY_METADATA, TOOL_METADATA
+from mcpgateway.services.cmf_bridge import CmfBridge
 import httpx
 import jq
 import jsonschema
@@ -573,6 +574,7 @@ class ToolService(BaseService):
         self._event_service = EventService(channel_name="mcpgateway:tool_events")
         self._http_client = ResilientHttpClient(client_args={"timeout": settings.federation_timeout, "verify": not settings.skip_ssl_verify})
         self._plugin_manager: PluginManager | None = get_plugin_manager()
+        self._cmf_bridge: CmfBridge = CmfBridge(self._plugin_manager)
         self.oauth_manager = OAuthManager(
             request_timeout=int(settings.oauth_request_timeout if hasattr(settings, "oauth_request_timeout") else 30),
             max_retries=int(settings.oauth_max_retries if hasattr(settings, "oauth_max_retries") else 3),
@@ -3181,6 +3183,17 @@ class ToolService(BaseService):
                         if hk and hv:
                             runtime_headers[str(hk).lower()] = str(hv)
 
+            # CMF pre-invoke: attribute-based policy evaluation (APL)
+            cmf_result, _ = await self._cmf_bridge.pre_invoke(
+                tool_name=name, arguments=arguments,
+                request_headers=request_headers, user_email=app_user_email,
+                token_teams=token_teams, global_context=hook_global_context,
+                context_table=plugin_context_table, violations_as_exceptions=True,
+            )
+            cmf_modified_args = CmfBridge.extract_modified_args(cmf_result)
+            if cmf_modified_args is not None:
+                modified_args = cmf_modified_args
+
         plan: Dict[str, Any] = {
             "eligible": True,
             "transport": transport,
@@ -3740,6 +3753,27 @@ class ToolService(BaseService):
                             if payload.headers is not None:
                                 headers = payload.headers.model_dump()
 
+                    # CMF pre-invoke: attribute-based policy evaluation (APL)
+                    if not skip_pre_invoke:
+                        cmf_result, context_table = await self._cmf_bridge.pre_invoke(
+                            tool_name=name,
+                            arguments=arguments,
+                            request_headers=request_headers,
+                            user_email=app_user_email,
+                            token_teams=token_teams,
+                            global_context=global_context,
+                            context_table=context_table,
+                            violations_as_exceptions=True,
+                        )
+                        # Apply modified args from CMF plugins (e.g., APL pipeline transforms)
+                        cmf_modified_args = CmfBridge.extract_modified_args(cmf_result)
+                        if cmf_modified_args is not None:
+                            arguments = cmf_modified_args
+                        # Merge delegated headers from token delegation into outbound headers
+                        delegated_headers = CmfBridge.extract_delegated_headers(cmf_result)
+                        if delegated_headers:
+                            headers.update(delegated_headers)
+
                     # Build the payload based on integration type
                     payload = arguments.copy()
 
@@ -3994,6 +4028,7 @@ class ToolService(BaseService):
                             BaseException: On connection or communication errors
 
                         """
+                        nonlocal context_table
                         # Get correlation ID for distributed tracing
                         correlation_id = get_correlation_id()
 
@@ -4061,6 +4096,27 @@ class ToolService(BaseService):
                                 duration_ms=mcp_duration_ms,
                                 metadata={"event": "mcp_call_completed", "tool_name": tool_name_original, "tool_id": tool_id, "transport": "sse", "success": True},
                             )
+
+                            # CMF post-invoke: result pipeline for SSE transport
+                            cmf_post_result, context_table = await self._cmf_bridge.post_invoke(
+                                tool_name=name,
+                                result_data=tool_call_result.model_dump(by_alias=True) if hasattr(tool_call_result, "model_dump") else {},
+                                request_headers=request_headers,
+                                user_email=app_user_email,
+                                token_teams=token_teams,
+                                global_context=global_context,
+                                context_table=context_table,
+                            )
+                            cmf_modified_result = CmfBridge.extract_modified_result(cmf_post_result)
+                            if cmf_modified_result is not None:
+                                if isinstance(cmf_modified_result, dict) and "content" in cmf_modified_result:
+                                    structured = cmf_modified_result.get("structuredContent") if "structuredContent" in cmf_modified_result else cmf_modified_result.get("structured_content")
+                                    tool_call_result = ToolResult(content=cmf_modified_result["content"], structured_content=structured)
+                                else:
+                                    try:
+                                        tool_call_result = ToolResult(content=[TextContent(type="text", text=cmf_modified_result if isinstance(cmf_modified_result, str) else orjson.dumps(cmf_modified_result).decode())])
+                                    except Exception:
+                                        tool_call_result = ToolResult(content=[TextContent(type="text", text=str(cmf_modified_result))])
 
                             return tool_call_result
                         except (asyncio.TimeoutError, httpx.TimeoutException):
@@ -4142,6 +4198,7 @@ class ToolService(BaseService):
                             ToolTimeoutError: If the tool invocation times out.
                             BaseException: On connection or communication errors
                         """
+                        nonlocal context_table
                         # Get correlation ID for distributed tracing
                         correlation_id = get_correlation_id()
 
@@ -4212,6 +4269,27 @@ class ToolService(BaseService):
                                 duration_ms=mcp_duration_ms,
                                 metadata={"event": "mcp_call_completed", "tool_name": tool_name_original, "tool_id": tool_id, "transport": "streamablehttp", "success": True},
                             )
+
+                            # CMF post-invoke: result pipeline for StreamableHTTP transport
+                            cmf_post_result, context_table = await self._cmf_bridge.post_invoke(
+                                tool_name=name,
+                                result_data=tool_call_result.model_dump(by_alias=True) if hasattr(tool_call_result, "model_dump") else {},
+                                request_headers=request_headers,
+                                user_email=app_user_email,
+                                token_teams=token_teams,
+                                global_context=global_context,
+                                context_table=context_table,
+                            )
+                            cmf_modified_result = CmfBridge.extract_modified_result(cmf_post_result)
+                            if cmf_modified_result is not None:
+                                if isinstance(cmf_modified_result, dict) and "content" in cmf_modified_result:
+                                    structured = cmf_modified_result.get("structuredContent") if "structuredContent" in cmf_modified_result else cmf_modified_result.get("structured_content")
+                                    tool_call_result = ToolResult(content=cmf_modified_result["content"], structured_content=structured)
+                                else:
+                                    try:
+                                        tool_call_result = ToolResult(content=[TextContent(type="text", text=cmf_modified_result if isinstance(cmf_modified_result, str) else orjson.dumps(cmf_modified_result).decode())])
+                                    except Exception:
+                                        tool_call_result = ToolResult(content=[TextContent(type="text", text=str(cmf_modified_result))])
 
                             return tool_call_result
                         except (asyncio.TimeoutError, httpx.TimeoutException):
@@ -4301,6 +4379,22 @@ class ToolService(BaseService):
                             if payload.headers is not None:
                                 headers = payload.headers.model_dump()
 
+                    # CMF pre-invoke: identity → policy → token delegation
+                    if not skip_pre_invoke:
+                        cmf_result, context_table = await self._cmf_bridge.pre_invoke(
+                            tool_name=name, arguments=arguments,
+                            request_headers=request_headers, user_email=app_user_email,
+                            token_teams=token_teams, global_context=global_context,
+                            context_table=context_table, violations_as_exceptions=True,
+                        )
+                        cmf_modified_args = CmfBridge.extract_modified_args(cmf_result)
+                        if cmf_modified_args is not None:
+                            arguments = cmf_modified_args
+                        # Merge delegated headers from token delegation into outbound headers
+                        delegated_headers = CmfBridge.extract_delegated_headers(cmf_result)
+                        if delegated_headers:
+                            headers.update(delegated_headers)
+
                     tool_call_result = ToolResult(content=[TextContent(text="", type="text")])
                     if transport == "sse":
                         tool_call_result = await connect_to_sse_server(gateway_url, headers=headers)
@@ -4348,6 +4442,22 @@ class ToolService(BaseService):
                             arguments = payload.args
                             if payload.headers is not None:
                                 headers = payload.headers.model_dump()
+
+                    # CMF pre-invoke: attribute-based policy evaluation (APL)
+                    if not skip_pre_invoke:
+                        cmf_result, context_table = await self._cmf_bridge.pre_invoke(
+                            tool_name=name, arguments=arguments,
+                            request_headers=request_headers, user_email=app_user_email,
+                            token_teams=token_teams, global_context=global_context,
+                            context_table=context_table, violations_as_exceptions=True,
+                        )
+                        cmf_modified_args = CmfBridge.extract_modified_args(cmf_result)
+                        if cmf_modified_args is not None:
+                            arguments = cmf_modified_args
+                        # Merge delegated headers from token delegation into outbound headers
+                        delegated_headers = CmfBridge.extract_delegated_headers(cmf_result)
+                        if delegated_headers:
+                            headers.update(delegated_headers)
 
                     # Build request data based on agent type
                     endpoint_url = a2a_agent_endpoint_url
@@ -4476,6 +4586,28 @@ class ToolService(BaseService):
                                 tool_result = ToolResult(content=[TextContent(type="text", text=modified_result if isinstance(modified_result, str) else orjson.dumps(modified_result).decode())])
                             except Exception:
                                 tool_result = ToolResult(content=[TextContent(type="text", text=str(modified_result))])
+
+                # CMF post-invoke: result pipeline (transforms, session label accumulation)
+                cmf_post_result, context_table = await self._cmf_bridge.post_invoke(
+                    tool_name=name,
+                    result_data=tool_result.model_dump(by_alias=True),
+                    request_headers=request_headers,
+                    user_email=app_user_email,
+                    token_teams=token_teams,
+                    global_context=global_context,
+                    context_table=context_table,
+                )
+                # Apply modified result from CMF plugins (e.g., APL mask/redact/omit)
+                cmf_modified_result = CmfBridge.extract_modified_result(cmf_post_result)
+                if cmf_modified_result is not None:
+                    if isinstance(cmf_modified_result, dict) and "content" in cmf_modified_result:
+                        structured = cmf_modified_result.get("structuredContent") if "structuredContent" in cmf_modified_result else cmf_modified_result.get("structured_content")
+                        tool_result = ToolResult(content=cmf_modified_result["content"], structured_content=structured)
+                    else:
+                        try:
+                            tool_result = ToolResult(content=[TextContent(type="text", text=cmf_modified_result if isinstance(cmf_modified_result, str) else orjson.dumps(cmf_modified_result).decode())])
+                        except Exception:
+                            tool_result = ToolResult(content=[TextContent(type="text", text=str(cmf_modified_result))])
 
                 return tool_result
             except (PluginError, PluginViolationError):
